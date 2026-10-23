@@ -1,0 +1,9 @@
+[package]
+name = "anyplay-bridge-protocol"
+description = "Messages between the AnyPS5 network bridge and the AnyPlay net service"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
