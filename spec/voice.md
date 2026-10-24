@@ -10,6 +10,16 @@ One frame is exactly one datagram. A sender sends every frame to each other memb
 
 A frame is at most 1200 bytes, the smallest datagram QUIC promises to carry whole, so no frame is ever split.
 
+### Connections
+
+The net services of the members of a party hold a **voice connection** for each pair, while both take part. The rules:
+
+1. The party names each member's tunnel key (`endpoint`), relay and whether the member takes part (`voice`) in the cloud's `Party` ([cloud API](cloud-api.md#parties), `PUT /v1/party/endpoint`). That list is the only source of who may connect.
+2. Of each pair the endpoint with the smaller ID dials, the other accepts, as for game tunnels. It dials only a member whose `voice` is true, with the key and relay the party names. A dial that is refused, times out or whose connection ends is repeated after 0.5 s, doubling to at most 30 s; a connection that held for 10 s starts the pause over.
+3. A connection counts only when the remote endpoint, which the TLS handshake proves, is the `endpoint` of a current member other than the player, and, for a connection that arrives, is the smaller of the two. Anything else is closed at once with the application code 1 (`not in the party`) and never reaches the engine. A member's frames are given to the engine under that member's account; nothing in a frame names a sender.
+4. When the party's member list changes (a copy with a higher `revision` than the one held), connections to endpoints that are no longer a member's, or that belong to another account than before, are closed with the code 2 (`left the party`), and the engine forgets those members. A new connection from the same member replaces the old one (closed with the code 3).
+5. A net service that leaves the party, switches voice off, or whose tunnels restart closes its voice connections with the code 0 and says `voice: false` to the party.
+
 Frames are not mixed with game datagrams, whose first bytes are a virtual address. The tunnel to a member carries them on a QUIC connection of its own, with the ALPN `anyplay/voice/0`, between the same two endpoints. It then takes the same direct or relayed path as the game connection, and the relay-only setting applies to it without a line of its own.
 
 ## Frame

@@ -13,8 +13,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyplay_api::{
-    Activity, CodeAnswer, CreateSession, Device, ErrorCode, Event, FriendLists, Invitation,
-    JoinSession, MAX_DAY_MINUTES, MAX_PLAYTIME_UPLOAD, Me, Platform, PlaytimeEntry,
+    AccountId, Activity, CodeAnswer, CreateSession, Device, ErrorCode, Event, FriendLists,
+    Invitation, JoinSession, MAX_DAY_MINUTES, MAX_PLAYTIME_UPLOAD, Me, Platform, PlaytimeEntry,
     PresenceRequest, Report, Session, Visibility, check_handle, day_number, is_title_id,
 };
 use anyplay_bridge_protocol::{
@@ -25,6 +25,7 @@ use anyplay_control::{
     self as control, Accepted, Answer, CodeAccepted, CodeResult, Command, Done, EmailSent, Failure,
     FriendAdded, GameStarted, Hello, Invited, Opened, Output, Pending, SignedIn,
 };
+use anyplay_voice::Engine;
 use iroh::{EndpointId, RelayUrl, SecretKey};
 use tokio::io::AsyncReadExt as _;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
@@ -39,6 +40,7 @@ use crate::events::{self, EventInput};
 use crate::observe::{self, Observer};
 use crate::traffic::Traffic;
 use crate::tunnel::{self, Link, LinkChange, LinkTotals, RelayAccess, Tunnels};
+use crate::voice::{self, Audio, Hub};
 
 /// How the service is set up; the cloud comes later, with the launcher's hello.
 #[derive(Clone, Debug)]
@@ -55,6 +57,8 @@ pub struct Config {
     pub relay_only: bool,
     /// The name of this device in the account's device list.
     pub device_name: String,
+    /// The microphones and speakers party voice uses.
+    pub audio: Audio,
 }
 
 type Continuation = Box<dyn FnOnce(&mut Service) + Send>;
@@ -66,6 +70,8 @@ enum Input {
     Events(u64, EventInput),
     Bridge(BridgeInput),
     Link(LinkChange),
+    /// A report of the voice hub of that generation.
+    Voice(u64, voice::Report),
     Done(Continuation),
     Tick,
     Stop,
@@ -77,6 +83,8 @@ const OFFLINE_GRACE: Duration = Duration::from_secs(30);
 const FRIENDS_PACE: Duration = Duration::from_millis(250);
 /// How long a quitting service waits for its last requests to the cloud.
 const GOODBYE: Duration = Duration::from_secs(3);
+/// The most a member can be turned up to, in percent.
+const MAX_PEER_VOLUME_PERCENT: u16 = 200;
 /// The API group the network answers in its own format, for the fake game and for homebrew.
 pub const OWN_API_GROUP: &str = "anyplay";
 
@@ -90,6 +98,26 @@ struct GameRun {
     intent_sent: bool,
     /// Sessions this game run created or joined; it leaves them when the game ends.
     sessions: HashSet<String>,
+}
+
+/// Party voice as the player set it and as it runs.
+#[derive(Default)]
+struct VoiceSide {
+    /// The player switched voice on. The microphone opens only while this is true and the
+    /// player is in a party.
+    enabled: bool,
+    settings: voice::Settings,
+    /// The chosen devices by name; none is the system's default.
+    input: Option<String>,
+    output: Option<String>,
+    hub: Option<Hub>,
+    /// The devices are being opened.
+    opening: bool,
+    /// Counts openings and restarts, so that a report or an opening of an older one is dropped.
+    generation: u64,
+    report: Option<voice::Report>,
+    /// What this device last told the party about itself, with the party's ID.
+    announced: Option<(String, anyplay_api::PartyEndpoint)>,
 }
 
 struct BridgeLink {
@@ -138,6 +166,7 @@ pub struct Service {
     party: Option<anyplay_api::Party>,
     party_answers: Answers,
     party_invitations: HashMap<String, anyplay_api::PartyInvitation>,
+    voice: VoiceSide,
     conversation_answers: Answers,
     sessions: HashMap<String, Session>,
     /// Per session, so that a session read on going online never undoes a newer push.
@@ -226,6 +255,7 @@ impl Service {
             party: None,
             party_answers: Answers::default(),
             party_invitations: HashMap::new(),
+            voice: VoiceSide::default(),
             conversation_answers: Answers::default(),
             sessions: HashMap::new(),
             session_answers: HashMap::new(),
@@ -300,6 +330,12 @@ impl Service {
                     }
                 }
                 Input::Link(change) => self.link_change(change),
+                Input::Voice(generation, report) => {
+                    if generation == self.voice.generation && self.voice.hub.is_some() {
+                        self.voice.report = Some(report);
+                        self.voice_event();
+                    }
+                }
                 Input::Done(continuation) => continuation(&mut self),
                 Input::Tick => self.tick(),
                 Input::Stop => break,
@@ -909,6 +945,108 @@ impl Service {
                     },
                 );
             }
+            // Voice
+            Command::Voice { on } => {
+                self.voice.enabled = on;
+                self.voice_sync();
+                self.voice_event();
+                self.ok(id, Done {});
+            }
+            Command::PushToTalk { talking } => {
+                self.voice.settings.talking = talking;
+                if let Some(hub) = &self.voice.hub {
+                    hub.set_talking(talking);
+                }
+                self.ok(id, Done {});
+            }
+            Command::VoiceMode { mode } => {
+                let mode = match mode {
+                    control::VoiceMode::PushToTalk => anyplay_voice::TalkMode::PushToTalk,
+                    control::VoiceMode::VoiceActivity => anyplay_voice::TalkMode::VoiceActivity,
+                };
+                self.voice.settings.mode = mode;
+                if let Some(hub) = &self.voice.hub {
+                    hub.set_mode(mode);
+                }
+                self.voice_event();
+                self.ok(id, Done {});
+            }
+            Command::PeerVolume { account, percent } => {
+                if percent > MAX_PEER_VOLUME_PERCENT {
+                    self.fail(
+                        id,
+                        Failure::new(
+                            ErrorCode::BadRequest.as_str(),
+                            "A volume is 0 to 200 percent.",
+                        ),
+                    );
+                    return;
+                }
+                let volume = f32::from(percent) / 100.0;
+                self.voice.settings.volumes.insert(account.0, volume);
+                if let Some(hub) = &self.voice.hub {
+                    hub.set_volume(account.0, volume);
+                }
+                self.ok(id, Done {});
+            }
+            Command::PeerMute { account, muted } => {
+                if muted {
+                    self.voice.settings.muted.insert(account.0);
+                } else {
+                    self.voice.settings.muted.remove(&account.0);
+                }
+                if let Some(hub) = &self.voice.hub {
+                    hub.set_muted(account.0, muted);
+                }
+                self.ok(id, Done {});
+            }
+            Command::VoiceDevices => {
+                let audio = self.config.audio.clone();
+                self.spawn(
+                    async move { list_devices(audio).await },
+                    move |service, (input, output)| {
+                        service.ok(
+                            id,
+                            control::VoiceDevices {
+                                input,
+                                output,
+                                selected_input: service.voice.input.clone(),
+                                selected_output: service.voice.output.clone(),
+                            },
+                        );
+                    },
+                );
+            }
+            Command::SetVoiceDevice { kind, name } => {
+                let audio = self.config.audio.clone();
+                self.spawn(
+                    async move { list_devices(audio).await },
+                    move |service, (input, output)| {
+                        let known = match kind {
+                            control::DeviceKind::Input => input,
+                            control::DeviceKind::Output => output,
+                        };
+                        if let Some(name) = &name
+                            && !known.contains(name)
+                        {
+                            service.fail(
+                                id,
+                                Failure::new(
+                                    ErrorCode::NotFound.as_str(),
+                                    "No sound device has this name.",
+                                ),
+                            );
+                            return;
+                        }
+                        match kind {
+                            control::DeviceKind::Input => service.voice.input = name,
+                            control::DeviceKind::Output => service.voice.output = name,
+                        }
+                        service.voice_restart();
+                        service.ok(id, Done {});
+                    },
+                );
+            }
             // Parties and messages
             social @ (Command::Party
             | Command::PartyInvite { .. }
@@ -1364,7 +1502,9 @@ impl Service {
         };
         match command {
             Command::Party => self.request(id, async move { cloud.party().await }, |_, party| {
-                control::PartyState { party }
+                control::PartyState {
+                    party: party.map(launcher_party),
+                }
             }),
             Command::PartyInvite { accounts } => self.request(
                 id,
@@ -1386,7 +1526,9 @@ impl Service {
                         |service, party| {
                             service.party_invitations.retain(|_, i| i.party != party.id);
                             service.party_changed(party.clone());
-                            control::PartyState { party: Some(party) }
+                            control::PartyState {
+                                party: Some(launcher_party(party)),
+                            }
                         },
                     );
                 } else {
@@ -1588,13 +1730,18 @@ impl Service {
             return;
         }
         self.party = Some(party.clone());
-        self.event(control::Event::Party { party: Some(party) });
+        self.event(control::Event::Party {
+            party: Some(launcher_party(party)),
+        });
+        self.voice_sync();
     }
 
     fn party_cleared(&mut self) {
         if self.party.take().is_some() {
             self.event(control::Event::Party { party: None });
         }
+        self.voice.announced = None;
+        self.voice_sync();
     }
 
     fn drop_party_invitation(&mut self, id: &str) {
@@ -1611,6 +1758,7 @@ impl Service {
             return;
         };
         let question = self.party_answers.ask();
+        self.voice.announced = None;
         let party = cloud.clone();
         self.spawn(
             async move {
@@ -1672,6 +1820,202 @@ impl Service {
         self.party_cleared();
     }
 
+    // Voice
+
+    /// Whether voice should run now: the player switched it on, is signed in with tunnels up,
+    /// and is in a party.
+    fn voice_wanted(&self) -> bool {
+        self.voice.enabled && self.me.is_some() && self.tunnels.is_some() && self.party.is_some()
+    }
+
+    /// The other members of the party that voice may connect to, by tunnel key.
+    fn voice_members(&self) -> voice::Members {
+        match (&self.party, &self.me) {
+            (Some(party), Some(me)) => members_of(party, me.id, self.secret.public()),
+            _ => voice::Members::new(),
+        }
+    }
+
+    /// Brings voice in line with what is wanted: opens the devices and joins when the player is
+    /// in a party with voice on, follows the party's members, leaves otherwise.
+    fn voice_sync(&mut self) {
+        if !self.voice_wanted() {
+            let was_on = self.voice.hub.take().is_some() || self.voice.opening;
+            self.voice.opening = false;
+            self.voice.generation += 1;
+            self.voice.report = None;
+            if was_on {
+                self.voice_event();
+            }
+            self.party_announce();
+            return;
+        }
+        if let Some(hub) = &self.voice.hub {
+            hub.set_members(self.voice_members());
+        } else if !self.voice.opening {
+            self.voice_open();
+        }
+        self.party_announce();
+    }
+
+    /// Hangs up and joins again, with other devices.
+    fn voice_restart(&mut self) {
+        self.voice.hub = None;
+        self.voice.opening = false;
+        self.voice.generation += 1;
+        self.voice.report = None;
+        self.voice_sync();
+        self.voice_event();
+    }
+
+    /// Opens the sound devices off the loop; `voice_opened` takes the result.
+    fn voice_open(&mut self) {
+        self.voice.opening = true;
+        self.voice.generation += 1;
+        let generation = self.voice.generation;
+        let audio = self.config.audio.clone();
+        let (input, output) = (self.voice.input.clone(), self.voice.output.clone());
+        let mode = self.voice.settings.mode;
+        self.spawn(
+            async move {
+                tokio::task::spawn_blocking(move || {
+                    let device = audio.open(input.as_deref(), output.as_deref())?;
+                    let config = anyplay_voice::Config {
+                        mode,
+                        ..anyplay_voice::Config::default()
+                    };
+                    Engine::new(config, device).map_err(|e| e.to_string())
+                })
+                .await
+                .unwrap_or_else(|e| Err(e.to_string()))
+            },
+            move |service, result| service.voice_opened(generation, result),
+        );
+        self.voice_event();
+    }
+
+    fn voice_opened(&mut self, generation: u64, result: Result<Engine, String>) {
+        if generation != self.voice.generation {
+            return; // the engine drops, and the devices with it
+        }
+        self.voice.opening = false;
+        let engine = match result {
+            Ok(engine) if self.voice_wanted() => engine,
+            Ok(_) => return self.voice_event(),
+            Err(error) => {
+                tracing::warn!("voice: {error}");
+                self.voice.enabled = false;
+                self.event(control::Event::Notice {
+                    code: "voice_device".into(),
+                    message: format!("Voice could not start: {error}"),
+                });
+                self.voice_event();
+                self.party_announce();
+                return;
+            }
+        };
+        let Some(tunnels) = self.tunnels.clone() else {
+            return;
+        };
+        let (reports, mut rx) = mpsc::unbounded_channel();
+        let inbox = self.inbox.clone();
+        tokio::spawn(async move {
+            while let Some(report) = rx.recv().await {
+                if inbox.send(Input::Voice(generation, report)).is_err() {
+                    return;
+                }
+            }
+        });
+        self.voice.hub = Some(Hub::start(
+            &tunnels,
+            engine,
+            self.voice.settings.clone(),
+            self.voice_members(),
+            reports,
+        ));
+        self.party_announce();
+        self.voice_event();
+    }
+
+    /// The `voice` event: the state, and the levels of the last report while voice runs.
+    fn voice_event(&self) {
+        let report = self.voice.report.as_ref();
+        let state = if self.voice.hub.is_some() {
+            report.map_or(control::VoiceState::Connecting, |r| r.state)
+        } else if self.voice.opening {
+            control::VoiceState::Connecting
+        } else {
+            control::VoiceState::Off
+        };
+        let level = |level: anyplay_voice::Level| control::VoiceLevel {
+            level: (level.rms * 100.0).round().clamp(0.0, 100.0) as u8,
+            speaking: level.speaking,
+        };
+        self.event(control::Event::Voice {
+            state,
+            enabled: self.voice.enabled,
+            mode: match self.voice.settings.mode {
+                anyplay_voice::TalkMode::PushToTalk => control::VoiceMode::PushToTalk,
+                anyplay_voice::TalkMode::VoiceActivity => control::VoiceMode::VoiceActivity,
+            },
+            me: report.map(|r| level(r.me)).unwrap_or_default(),
+            peers: report
+                .map(|r| {
+                    r.peers
+                        .iter()
+                        .map(|p| control::VoicePeer {
+                            account: AccountId(p.account),
+                            level: level(p.level),
+                            link: p.link,
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+        });
+    }
+
+    /// Tells the party where this net service is and whether it takes part in voice, when that
+    /// differs from what the party holds and from what was told last.
+    fn party_announce(&mut self) {
+        let (Some(cloud), Some(party), Some(me), Some(_), Some((endpoint, relay))) = (
+            self.cloud.clone(),
+            self.party.as_ref(),
+            self.me.as_ref(),
+            self.tunnels.as_ref(),
+            self.endpoint(),
+        ) else {
+            return;
+        };
+        let body = anyplay_api::PartyEndpoint {
+            endpoint,
+            relay,
+            voice: self.voice.hub.is_some(),
+        };
+        let current = (party.id.clone(), body.clone());
+        if self.voice.announced.as_ref() == Some(&current) {
+            return;
+        }
+        let held = party.members.iter().find(|m| m.account.id == me.id);
+        let known = held.is_some_and(|m| {
+            m.endpoint == body.endpoint && m.relay == body.relay && m.voice == body.voice
+        });
+        let in_party = held.is_some();
+        self.voice.announced = Some(current);
+        if known || !in_party {
+            return;
+        }
+        self.spawn(
+            async move { cloud.party_endpoint(&body).await },
+            |service, result| match result {
+                Ok(party) => service.party_changed(party),
+                Err(error) => {
+                    tracing::info!("party endpoint: {error}");
+                    service.voice.announced = None;
+                }
+            },
+        );
+    }
+
     // Relays and tunnels
 
     fn ask_relays(&mut self) {
@@ -1721,6 +2065,8 @@ impl Service {
         if let Some(tunnels) = self.tunnels.take() {
             tokio::spawn(async move { tunnels.close().await });
         }
+        // Voice rides on the endpoint that just closed; it starts again with the new one.
+        self.voice_sync();
         self.relays_asked = None;
         self.ask_relays();
     }
@@ -1768,6 +2114,7 @@ impl Service {
                         service.tunnels = Some(tunnels);
                         service.update_peers();
                         service.update_endpoints();
+                        service.voice_sync();
                         service.bridge_state();
                     }
                     Ok(tunnels) => {
@@ -1803,6 +2150,7 @@ impl Service {
             return;
         };
         let me = me.id;
+        self.party_announce();
         for session in self.sessions.values() {
             let stale = session
                 .members
@@ -2740,6 +3088,56 @@ where
     }
 }
 
+/// The names of the microphones and speakers; listing may block, so it runs off the loop.
+async fn list_devices(audio: Audio) -> (Vec<String>, Vec<String>) {
+    tokio::task::spawn_blocking(move || (audio.input_names(), audio.output_names()))
+        .await
+        .unwrap_or_default()
+}
+
+/// The members of `party` other than the player (account `me`, tunnel key `mine`) that voice may
+/// connect to, by the tunnel key the party names for each. A member who has announced no readable
+/// key is not in it: nobody can be reached, and nobody may connect, without one. A key that two
+/// members name is in it for neither.
+fn members_of(party: &anyplay_api::Party, me: AccountId, mine: EndpointId) -> voice::Members {
+    let keys: Vec<Option<EndpointId>> = party
+        .members
+        .iter()
+        .map(|m| m.endpoint.parse::<EndpointId>().ok())
+        .collect();
+    party
+        .members
+        .iter()
+        .zip(&keys)
+        .filter(|(m, _)| m.account.id != me)
+        .filter_map(|(m, endpoint)| {
+            let endpoint = (*endpoint)?;
+            // A key two members name belongs to neither of them: whose voice it is cannot be told.
+            let claimed = keys.iter().filter(|k| **k == Some(endpoint)).count();
+            (endpoint != mine && claimed == 1).then(|| {
+                (
+                    endpoint,
+                    voice::Member {
+                        account: m.account.id.0,
+                        relay: m.relay.as_deref().and_then(|r| r.parse::<RelayUrl>().ok()),
+                        voice: m.voice,
+                    },
+                )
+            })
+        })
+        .collect()
+}
+
+/// A party as the launcher sees it: without the members' tunnel keys and relays, which are for
+/// the net services of the party alone.
+fn launcher_party(mut party: anyplay_api::Party) -> anyplay_api::Party {
+    for member in &mut party.members {
+        member.endpoint.clear();
+        member.relay = None;
+    }
+    party
+}
+
 fn bad_id() -> Failure {
     Failure::new(
         ErrorCode::BadRequest.as_str(),
@@ -2816,5 +3214,77 @@ mod profile_tests {
         assert!(playtime_problem(&[entry("../x", "2026-10-24", 5)]).is_some());
         let many = vec![entry("GAME00001", "2026-10-24", 1); MAX_PLAYTIME_UPLOAD + 1];
         assert!(playtime_problem(&many).is_some());
+    }
+}
+
+#[cfg(test)]
+mod party_voice_tests {
+    use super::*;
+    use anyplay_api::{Account, Party, PartyMember};
+
+    fn member(id: u64, endpoint: &str, relay: Option<&str>, voice: bool) -> PartyMember {
+        PartyMember {
+            account: Account {
+                id: AccountId(id),
+                handle: format!("p{id}"),
+            },
+            joined: 0,
+            endpoint: endpoint.into(),
+            relay: relay.map(str::to_owned),
+            voice,
+        }
+    }
+
+    fn party(members: Vec<PartyMember>) -> Party {
+        Party {
+            id: "p".into(),
+            leader: AccountId(1),
+            members,
+            max_members: 8,
+            conversation: "c".into(),
+            created: 0,
+            revision: 1,
+        }
+    }
+
+    #[test]
+    fn voice_may_reach_only_the_other_members_who_named_a_key() {
+        let mine = SecretKey::generate().public();
+        let a = SecretKey::generate().public();
+        let b = SecretKey::generate().public();
+        let twice = SecretKey::generate().public();
+        let party = party(vec![
+            member(1, &mine.to_string(), None, true),
+            member(2, &a.to_string(), Some("https://relay.example/"), true),
+            member(3, &b.to_string(), None, false),
+            member(4, "", None, true),
+            member(5, "not a key", None, true),
+            // another account claiming this device's key is not a peer either
+            member(6, &mine.to_string(), None, true),
+            // two accounts naming one key: whose voice it is cannot be told
+            member(7, &twice.to_string(), None, true),
+            member(8, &twice.to_string(), None, true),
+        ]);
+        let members = members_of(&party, AccountId(1), mine);
+        assert_eq!(members.len(), 2);
+        assert_eq!(members[&a].account, 2);
+        assert!(members[&a].voice);
+        assert!(members[&a].relay.is_some());
+        assert_eq!(members[&b].account, 3);
+        assert!(!members[&b].voice);
+    }
+
+    #[test]
+    fn the_launcher_never_sees_tunnel_keys() {
+        let key = SecretKey::generate().public().to_string();
+        let seen = launcher_party(party(vec![member(
+            2,
+            &key,
+            Some("https://r.example/"),
+            true,
+        )]));
+        assert_eq!(seen.members[0].endpoint, "");
+        assert_eq!(seen.members[0].relay, None);
+        assert!(seen.members[0].voice, "who takes part is for the launcher");
     }
 }

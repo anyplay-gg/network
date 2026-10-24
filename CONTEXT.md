@@ -136,6 +136,10 @@ _Avoid_: Group, squad, session
 The member of a party who invites, removes members and moves the party into a session. The longest-standing member leads when the leader leaves.
 _Avoid_: Host, owner
 
+**Voice connection**:
+The encrypted connection between the net services of two party members that carries their voice. It runs on the same endpoint as their tunnel and takes the same direct or relayed path, but is a connection of its own. Only members the party names can hold one.
+_Avoid_: Voice tunnel, call, voice channel (that is the party's one channel as the player sees it)
+
 **Conversation**:
 A chat between accounts: two of them (direct), up to 32 (group), or the members of a party (the party's chat). Everything in it is text.
 _Avoid_: Thread, channel, room

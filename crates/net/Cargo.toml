@@ -8,6 +8,12 @@ repository.workspace = true
 rust-version.workspace = true
 publish = false
 
+[features]
+# Real microphone and speakers for party voice, through cpal. Release builds enable it; it is off
+# by default because on Linux it needs the ALSA headers (libasound2-dev) to build. Without it the
+# service runs, and voice answers that this build has no sound devices.
+devices = ["anyplay-voice/devices"]
+
 [[bin]]
 name = "anyplay-net"
 path = "src/main.rs"
@@ -17,6 +23,7 @@ anyplay-api = { path = "../api" }
 anyplay-bridge-protocol = { path = "../bridge-protocol" }
 anyplay-control = { path = "../control" }
 anyplay-proof = { path = "../proof" }
+anyplay-voice = { path = "../voice" }
 bytes = "1"
 data-encoding = "2"
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }

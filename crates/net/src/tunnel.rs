@@ -17,6 +17,7 @@ use tokio::sync::mpsc::UnboundedSender;
 use tokio::task::JoinHandle;
 
 use crate::traffic::{LARGEST_STREAMED_DATAGRAM, Traffic};
+use crate::voice;
 
 /// The protocol inside every tunnel.
 pub const ALPN: &[u8] = b"anyplay/tunnel/0";
@@ -115,6 +116,8 @@ pub struct Tunnels {
     state: Arc<Mutex<State>>,
     traffic: Traffic,
     changes: UnboundedSender<LinkChange>,
+    /// Where connections with the voice ALPN go; none while no voice runs.
+    voice: Arc<Mutex<Option<voice::Sink>>>,
 }
 
 /// Settings of the endpoint.
@@ -139,7 +142,7 @@ impl Tunnels {
     ) -> Result<Self, String> {
         let mut builder = Endpoint::builder(presets::Minimal)
             .secret_key(options.secret)
-            .alpns(vec![ALPN.to_vec()])
+            .alpns(vec![ALPN.to_vec(), voice::ALPN.to_vec()])
             .relay_mode(RelayMode::Custom(relay_map(&options.relays)));
         if options.relay_only {
             builder = builder.clear_ip_transports();
@@ -162,6 +165,7 @@ impl Tunnels {
             })),
             traffic,
             changes,
+            voice: Arc::new(Mutex::new(None)),
         };
         tokio::spawn(tunnels.clone().accept());
         Ok(tunnels)
@@ -169,6 +173,17 @@ impl Tunnels {
 
     pub fn id(&self) -> EndpointId {
         self.endpoint.id()
+    }
+
+    /// The endpoint, for the voice connections that share it with the tunnels.
+    pub fn endpoint(&self) -> &Endpoint {
+        &self.endpoint
+    }
+
+    /// Sets who takes the connections that arrive with the voice ALPN. Without one they are
+    /// refused.
+    pub(crate) fn set_voice_sink(&self, sink: Option<voice::Sink>) {
+        *self.voice.lock().unwrap_or_else(|e| e.into_inner()) = sink;
     }
 
     /// The relay this endpoint is reachable through, once it has one.
@@ -348,6 +363,18 @@ impl Tunnels {
                 let Ok(connection) = accepting.await else {
                     return;
                 };
+                if connection.alpn() == voice::ALPN {
+                    let sink = tunnels
+                        .voice
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .clone();
+                    match sink {
+                        Some(sink) => sink(connection),
+                        None => connection.close(1u8.into(), b"no voice here"),
+                    }
+                    return;
+                }
                 let id = connection.remote_id();
                 let wanted = {
                     let state = tunnels.lock();

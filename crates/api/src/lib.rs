@@ -1017,6 +1017,28 @@ pub fn is_virtual(address: std::net::Ipv4Addr) -> bool {
 pub struct PartyMember {
     pub account: Account,
     pub joined: u64,
+    /// The tunnel key of the member's net service, an iroh endpoint ID in lowercase hex, once it
+    /// has announced one (`PUT /v1/party/endpoint`). Empty before that. Only members of the party
+    /// ever see it.
+    #[serde(default)]
+    pub endpoint: String,
+    /// The relay that net service is reachable through, when it has one.
+    #[serde(default)]
+    pub relay: Option<String>,
+    /// The member has party voice switched on: their net service accepts voice connections from
+    /// the other members.
+    #[serde(default)]
+    pub voice: bool,
+}
+
+/// What a member's net service tells the party about itself, so the others can dial it for voice.
+/// Sent again whenever one of the fields changes.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PartyEndpoint {
+    pub endpoint: String,
+    #[serde(default)]
+    pub relay: Option<String>,
+    pub voice: bool,
 }
 
 /// A group of up to [`MAX_PARTY_MEMBERS`] friends that stays together across games. It belongs

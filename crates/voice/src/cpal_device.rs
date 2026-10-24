@@ -37,6 +37,14 @@ pub struct CpalDevice {
 impl CpalDevice {
     /// Open the default microphone and the default speakers and start them.
     pub fn open() -> Result<CpalDevice, Error> {
+        CpalDevice::open_named(None, None)
+    }
+
+    /// Open the microphone and the speakers with these names, as [`input_names`] and
+    /// [`output_names`] list them. `None` is the system's default. A name that no device has
+    /// anymore is an error, not a fallback: the player chose that device.
+    pub fn open_named(input: Option<&str>, output: Option<&str>) -> Result<CpalDevice, Error> {
+        let (input, output) = (input.map(str::to_owned), output.map(str::to_owned));
         let capture: Ring = Ring::default();
         let playback: Ring = Ring::default();
         let (ready_tx, ready_rx) = mpsc::channel::<Result<(u32, u32), Error>>();
@@ -44,16 +52,18 @@ impl CpalDevice {
         let (c, p) = (capture.clone(), playback.clone());
         let thread = std::thread::Builder::new()
             .name("voice-devices".into())
-            .spawn(move || match start(&c, &p) {
-                Ok((rates, _streams)) => {
-                    let _ = ready_tx.send(Ok(rates));
-                    // The streams stop when they are dropped, after this returns.
-                    let _ = stop_rx.recv();
-                }
-                Err(e) => {
-                    let _ = ready_tx.send(Err(e));
-                }
-            })
+            .spawn(
+                move || match start(&c, &p, input.as_deref(), output.as_deref()) {
+                    Ok((rates, _streams)) => {
+                        let _ = ready_tx.send(Ok(rates));
+                        // The streams stop when they are dropped, after this returns.
+                        let _ = stop_rx.recv();
+                    }
+                    Err(e) => {
+                        let _ = ready_tx.send(Err(e));
+                    }
+                },
+            )
             .map_err(|e| Error::Device(e.to_string()))?;
         let (capture_rate, playback_rate) = ready_rx
             .recv()
@@ -110,14 +120,51 @@ fn device_error(what: &str, e: impl std::fmt::Display) -> Error {
 
 type Streams = (cpal::Stream, cpal::Stream);
 
-fn start(capture: &Ring, playback: &Ring) -> Result<((u32, u32), Streams), Error> {
+fn device_name(device: &cpal::Device) -> Option<String> {
+    device.description().ok().map(|d| d.name().to_owned())
+}
+
+/// The names of the microphones the system has, in the system's order.
+pub fn input_names() -> Vec<String> {
     let host = cpal::default_host();
-    let input = host
-        .default_input_device()
-        .ok_or_else(|| Error::Device("no microphone".into()))?;
-    let output = host
-        .default_output_device()
-        .ok_or_else(|| Error::Device("no speakers".into()))?;
+    let Ok(devices) = host.input_devices() else {
+        return Vec::new();
+    };
+    devices.filter_map(|d| device_name(&d)).collect()
+}
+
+/// The names of the speakers the system has, in the system's order.
+pub fn output_names() -> Vec<String> {
+    let host = cpal::default_host();
+    let Ok(devices) = host.output_devices() else {
+        return Vec::new();
+    };
+    devices.filter_map(|d| device_name(&d)).collect()
+}
+
+fn start(
+    capture: &Ring,
+    playback: &Ring,
+    input_name: Option<&str>,
+    output_name: Option<&str>,
+) -> Result<((u32, u32), Streams), Error> {
+    let host = cpal::default_host();
+    let input = match input_name {
+        None => host.default_input_device(),
+        Some(name) => host
+            .input_devices()
+            .map_err(|e| device_error("microphones", e))?
+            .find(|d| device_name(d).as_deref() == Some(name)),
+    }
+    .ok_or_else(|| Error::Device("no microphone".into()))?;
+    let output = match output_name {
+        None => host.default_output_device(),
+        Some(name) => host
+            .output_devices()
+            .map_err(|e| device_error("speakers", e))?
+            .find(|d| device_name(d).as_deref() == Some(name)),
+    }
+    .ok_or_else(|| Error::Device("no speakers".into()))?;
     let in_config = input
         .default_input_config()
         .map_err(|e| device_error("microphone", e))?;

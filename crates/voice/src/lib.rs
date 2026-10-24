@@ -26,18 +26,22 @@
 //!
 //! # How the net service uses it
 //!
-//! The net service owns one `Engine` per party the player is in. For every other member it
-//! already holds a tunnel; voice rides on that tunnel as a datagram stream of its own, next to
-//! the game traffic (the framing is in `spec/voice.md`). The relay-only setting needs no code
-//! here: a tunnel that goes through a relay carries the datagrams like any other.
+//! The net service owns one `Engine` per party the player is in, only while voice is switched on
+//! (`crates/net/src/voice.rs`). For every other member who takes part it holds a QUIC connection
+//! of its own with the ALPN `anyplay/voice/0`, on the same iroh endpoint as the game tunnels,
+//! because game datagrams carry no tag byte to tell them from voice (the framing and the rules
+//! about who may connect are in `spec/voice.md`). The relay-only setting needs no code here: the
+//! endpoint has no direct addresses then, so the connection goes through the relay.
 //!
 //! * a task calls [`Engine::pump`] every 5 to 10 ms, then sends each of [`Engine::outgoing`] to
 //!   every member's tunnel;
 //! * a datagram from a member's tunnel goes to [`Engine::incoming`] with that member's
 //!   [`PeerId`];
-//! * the launcher sends push-to-talk, volume and mute over the control protocol, and the net
-//!   service calls the matching setters; [`Engine::levels`] flows back as speaking indicators;
-//! * a member who leaves the party is dropped with [`Engine::remove_peer`].
+//! * the launcher sends push-to-talk, mode, volume and mute over the control protocol, and the
+//!   net service calls the matching setters; [`Engine::levels`] flows back as speaking indicators;
+//! * a member who leaves the party is dropped with [`Engine::remove_peer`];
+//! * the microphone and speakers come from an [`AudioIo`]: with the feature `devices`,
+//!   `CpalDevice::open_named` with the names `input_names` and `output_names` list.
 //!
 //! # Echo
 //!
@@ -66,7 +70,7 @@ pub use gate::VadConfig;
 pub use jitter::PeerStats;
 
 #[cfg(feature = "devices")]
-pub use cpal_device::CpalDevice;
+pub use cpal_device::{CpalDevice, input_names, output_names};
 
 use jitter::FRAME_SAMPLES;
 use mix::Mixer;

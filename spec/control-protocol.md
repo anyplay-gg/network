@@ -79,6 +79,13 @@ Error codes are those of the [cloud API](cloud-api.md), plus `unknown_command`, 
 | `party_kick` | `account` | `{}` (leader) |
 | `party_leader` | `account` | `{}` (leader) |
 | `party_move` | `session` | `{sent}`: invites the other members into the leader's session (leader) |
+| `voice` | `on` | `{}` |
+| `push_to_talk` | `talking` | `{}` |
+| `voice_mode` | `mode`: `push_to_talk` or `voice_activity` | `{}` |
+| `peer_volume` | `account`, `percent` (0 to 200) | `{}`; `bad_request` above 200 |
+| `peer_mute` | `account`, `muted` | `{}` |
+| `voice_devices` | | `{input, output, selected_input, selected_output}`: names; a selected name is null for the system's default |
+| `set_voice_device` | `kind`: `input` or `output`, `name` (null: the system's default) | `{}`; `not_found` when no device has the name |
 | `conversations` | | `{conversations, requests}` |
 | `open_conversation` | `accounts`, `name` | the `Conversation`: with one account the direct one, with more a new group |
 | `messages` | `conversation`, `after`, `before`, `limit` | `{messages, last}`; all but `conversation` may be left out |
@@ -97,6 +104,9 @@ Error codes are those of the [cloud API](cloud-api.md), plus `unknown_command`, 
 - `invite` invites friends to the session the player is in.
 - `profile` only reads. A player edits their profile, avatar and visibility on the cloud's web site, which uses the HTTP API directly ([cloud API](cloud-api.md#profiles-avatars-and-playtime)); the launcher shows what `profile` and `cards` answer. `upload_playtime` can be sent again with the same entries; the cloud keeps the highest minutes per title and day.
 - The party and message commands are the [cloud API](cloud-api.md#parties) one to one, with the errors of its requests. `party_answer` and `party_leave` update the held party before the answer.
+- The voice commands work on [party voice](voice.md). `voice` with `on` true switches it on: from then on, whenever the player is in a party and signed in with tunnels up, the net service opens the microphone and speakers, joins the party's voice and tells the party it takes part. Switched off, or without a party, the devices are closed: the microphone is never open otherwise. The setting lasts until `voice` is sent again or the service ends; a new service starts with voice off, so the launcher sends `voice` after `hello` if the player wants it. The answer does not wait for the devices: if they cannot be opened, the net service switches voice off again, sends a `notice` `voice_device` with the reason and a `voice` event with `enabled` false.
+- `push_to_talk` is the key being down (`talking` true) or up. In `voice_activity` mode it has no effect. `voice_mode`, `peer_volume` and `peer_mute` are remembered by account for as long as the service runs, also while voice is off or the member is away, and apply when voice starts. Volume is in percent of what was sent, 100 normally.
+- `voice_devices` lists the names the system has and which are chosen. `set_voice_device` chooses by one of those names (or null for the default) and, while voice runs, closes the devices and opens them again, so the connections to the members are made again too. A service built without sound devices lists none and fails to open any; release builds have them.
 - `relay_only` keeps every tunnel on a relay, so other players never learn the PC's addresses, or lets them go direct again. Running tunnels start again and the peers reconnect, so the launcher sends it while no game runs. `anyplay-net --relay-only` starts with it on.
 
 ## Events
@@ -111,6 +121,7 @@ Error codes are those of the [cloud API](cloud-api.md), plus `unknown_command`, 
 | `invite_dialog` | `id`, `title`, `max` | the game opened its invitation dialog; answer with `dialog` |
 | `notice` | `code`, `message` | something failed that no command waits for |
 | `party` | `party` or null | the party the player is in changed, began or ended; a copy with an older revision is dropped before it gets here |
+| `voice` | `state`, `enabled`, `mode`, `me`, `peers` | the voice state changed, or while voice runs a level or a link changed (at most ten a second) |
 | `party_invitation` | `invitation` | the leader of a party invited the player |
 | `party_invitation_gone` | `id` | an invitation expired, was answered or used up |
 | `conversations` | `conversations`, `requests` | after sign-in and after every reconnect |
@@ -123,4 +134,6 @@ Error codes are those of the [cloud API](cloud-api.md), plus `unknown_command`, 
 - `cloud` is `offline`, `connecting` or `online`. `account` is `{id, handle, email}` or null. `pending` is `code` (an e-mail is out), `handle` (the account needs a handle), `browser` (the system browser has the sign-in) or null.
 - `friends` carries the whole lists each time, with each friend's presence as in the cloud API. The net service sends at most four of them per second.
 - `message` carries no text: the launcher keeps the highest number it has for each conversation and calls `messages` with `after`. The `conversations` event after a reconnect carries every conversation's newest number (`last`), so what arrived while the connection was down is fetched the same way.
+- `voice.state` is `off` (switched off, no party, or the devices could not be opened), `connecting` (switched on in a party: the devices are opening, or members who take part are not reached yet) or `on` (the devices run and at least one member who takes part is reached, or none takes part). `enabled` is whether the player switched voice on, which stays true across parties. `mode` is `push_to_talk` or `voice_activity`. `me` is `{level, speaking}` for the player's own microphone after the gate. `peers` has one entry for each other member of the party: `{account, level, speaking, link}`, with `link` `connecting`, `direct` or `relay` for the voice connection to that member and null when there is none (they have voice off, or have not been reached). `level` is the recent loudness in percent (0 to 100) before the player's volume setting; `speaking` is what a speaking indicator should show. While voice is off, `me` is silent and `peers` is empty. While voice runs, the net service reports levels and links only when they changed.
+- The `party` event and the party answers leave out the members' tunnel keys and relays (`endpoint` is `""`, `relay` null), as `session` does; each member's `voice` says who takes part in voice.
 - `session` is the cloud's `Session` without `build`, `properties` and the members' `endpoint`, and with one more field per member: `link`, which is `connecting`, `direct` or `relay` for the other players and null for the player.

@@ -15,6 +15,7 @@ pub mod observe;
 pub mod service;
 pub mod traffic;
 pub mod tunnel;
+pub mod voice;
 
 pub use service::{Config, run};
 

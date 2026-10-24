@@ -56,7 +56,7 @@ Profile   { account, about, favourites, avatar, playtime }    each part null whe
 PlaytimeEntry { title_id, day, minutes }           day: "YYYY-MM-DD" (UTC)
 TitlePlaytime { title_id, minutes }
 Party     { id, leader, members, max_members, conversation, created, revision }
-PartyMember { account, joined }
+PartyMember { account, joined, endpoint, relay, voice }   endpoint: "" until announced; relay: URL or null; voice: bool
 PartyInvitation { id, from, party, members, expires }
 Conversation { id, kind, name, members, last, read, marks, updated, request, party }   kind: "direct" | "group" | "party"
 ReadMark  { account, seq }
@@ -335,12 +335,14 @@ A **party** is up to 8 friends who stay together across games, with one chat. It
 | `POST /v1/party/leave` | | 204 |
 | `DELETE /v1/party/members/{account}` | | 204 (leader only) |
 | `PATCH /v1/party` | `{leader}` | `Party` (leader only; the new leader is a member) |
+| `PUT /v1/party/endpoint` | `{endpoint, relay, voice}` | `Party`: tells the party where the caller's net service is |
 | `POST /v1/party/session` | `{session}` | `{sent: [id]}` (leader only) |
 
 - Only friends of the leader receive an invitation, and not those who are in the party, who blocked a member or whom a member blocked. An invitation lives 15 minutes, or until its recipient joins any party.
 - Accepting answers `limit` when the caller is in a party already, `full` when the party has 8 members, and `forbidden` when a block lies between the caller and a member.
 - When the leader leaves, the longest-standing member leads. The last member to leave ends the party, its invitations and its chat. A member whose net service stays disconnected for 15 minutes leaves.
 - `POST /v1/party/session` moves the party into one of the leader's sessions: every other member who is not in the session gets an ordinary session invitation (see Invitations), which lets them in even when the session is for invited players only. The leader must be a member of the session, and the session must not be closed. Nothing else about the party changes; it goes on after the game.
+- `PUT /v1/party/endpoint` is how the members of a party find each other for voice ([voice](voice.md)). `endpoint` and `relay` are the caller's tunnel key and relay, as for a session `Member`, and `voice` says that the caller's net service takes part in the party's voice and accepts voice connections from the other members. The net service sends it when it joins a party, when its relay changes and when `voice` changes, and again after every reconnect. The cloud stores the three on the caller's `PartyMember`, raises the party's `revision` only when one of them changed, and answers `not_found` when the caller is in no party and `bad_request` for an `endpoint` that is not 64 lowercase hex characters or a `relay` that is not an `https` URL. Two members of one party may not name the same `endpoint`: the second request is answered `limit`. A member who has announced nothing has `endpoint` `""`, `relay` null and `voice` false. Only members of the party ever receive `endpoint` and `relay`: the invitation (`PartyInvitation`) carries neither. A net service dials only members whose `voice` is true, and accepts voice connections from every member the party lists.
 - The party's chat is a conversation of kind `party` (`Party.conversation`). A member sees what is written after it joined.
 
 ## Conversations and messages

@@ -36,6 +36,32 @@ jobs:
       - name: Test
         run: cargo test --workspace
 
+  # The net service as released: with the real microphone and speakers (feature `devices`, cpal).
+  # On Linux that needs the ALSA headers, so only this job installs them; the jobs above build
+  # without the feature and need no audio headers.
+  devices:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: stable
+          components: clippy
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - name: ALSA headers
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+      - name: Clippy with sound devices
+        run: cargo clippy -p anyplay-voice -p anyplay-net --all-targets --features anyplay-voice/devices,anyplay-net/devices -- -D warnings
+      - name: Build the release binary
+        run: cargo build --release -p anyplay-net --features devices
+
   # Links, title IDs in code, licences and advisories: the rules every AnyPlay repository shares.
   rules:
     uses: anyplay-gg/.github/.github/workflows/rules.yml@main
