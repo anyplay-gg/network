@@ -6,9 +6,9 @@ use std::time::Duration;
 use anyplay_api::{
     AccountId, AccountTrophies, ApiError, Cards, CodeAnswer, CodeRequest, CreateSession, Device,
     EmailAnswer, EmailRequest, ErrorCode, FriendLists, FriendRequest, FriendRequestAnswer, Info,
-    Invite, Invited, JoinSession, Me, PresenceRequest, Privacy, Rarity, RefreshRequest, Relays,
-    Report, Session, SignedIn, SignupRequest, TicketRequest, Tokens, TrophiesAdded, Trophy,
-    TrophyUpload, UpdateSession, path,
+    Invite, Invited, JoinSession, Me, PlaytimeAdded, PlaytimeEntry, PlaytimeUpload,
+    PresenceRequest, Privacy, Profile, Rarity, RefreshRequest, Relays, Report, Session, SignedIn,
+    SignupRequest, TicketRequest, Tokens, TrophiesAdded, Trophy, TrophyUpload, UpdateSession, path,
 };
 use reqwest::{Method, StatusCode};
 use serde::Serialize;
@@ -432,6 +432,30 @@ impl Cloud {
 
     pub async fn set_privacy(&self, privacy: &Privacy) -> Result<Privacy, CloudError> {
         self.call(Method::PUT, path::PRIVACY, Some(privacy)).await
+    }
+
+    /// The profile of an account, with the parts the caller may see.
+    pub async fn profile(&self, account: AccountId) -> Result<Profile, CloudError> {
+        self.call::<(), _>(
+            Method::GET,
+            &path::fill(path::ACCOUNT_PROFILE, account),
+            None,
+        )
+        .await
+    }
+
+    /// Sends minutes played per title and day. The cloud keeps the highest number it has seen for
+    /// a day, so sending the same entries again is safe.
+    pub async fn upload_playtime(
+        &self,
+        entries: Vec<PlaytimeEntry>,
+    ) -> Result<PlaytimeAdded, CloudError> {
+        self.call(
+            Method::PUT,
+            path::MY_PLAYTIME,
+            Some(&PlaytimeUpload { entries }),
+        )
+        .await
     }
 
     pub async fn invite(&self, id: &str, to: Vec<AccountId>) -> Result<Invited, CloudError> {

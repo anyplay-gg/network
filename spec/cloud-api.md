@@ -49,8 +49,11 @@ Relay     { url, token, expires }
 Trophy    { number, grade, earned }                grade: "bronze" | "silver" | "gold" | "platinum"
 TitleTrophies { title_id, trophies: [Trophy] }
 Count     { bronze, silver, gold, platinum }
-Card      { account, trophies }                    trophies: Count, or null when hidden
-Privacy   { trophies }                             "friends" | "everyone" | "nobody"
+Card      { account, trophies, avatar }            trophies: Count, or null when hidden; avatar: hash, or absent
+Privacy   { trophies, about, favourites, avatar, playtime }   each "friends" | "everyone" | "nobody"
+Profile   { account, about, favourites, avatar, playtime }    each part null when unset or hidden from the caller
+PlaytimeEntry { title_id, day, minutes }           day: "YYYY-MM-DD" (UTC)
+TitlePlaytime { title_id, minutes }
 ```
 
 - A **handle** has 3 to 16 characters from `A-Z a-z 0-9 _ -` and starts with a letter. Handles are unique without regard to case; the spelling of the owner is kept. Some handles are reserved (names of the network, of staff roles, and of platforms).
@@ -82,8 +85,8 @@ Accounts have no password. A device signs in with a code sent to the account's e
 | Request | Answer |
 |---|---|
 | `GET /v1/me` | `Me` |
-| `DELETE /v1/me` | 204. Deletes the account with its devices, friends, requests, blocks and reports. |
-| `GET /v1/me/export` | Everything the cloud stores about the account, as JSON, trophy records and privacy settings included. |
+| `DELETE /v1/me` | 204. Deletes the account with its devices, friends, requests, blocks, reports, trophy records, profile, avatar and playtime. |
+| `GET /v1/me/export` | Everything the cloud stores about the account, as JSON, trophy records, privacy settings, profile, avatar and playtime included. |
 | `GET /v1/accounts/{id}` | `Account` |
 | `GET /v1/accounts?handle=<handle>` | `Account`; the lookup is exact apart from case. There is no search. |
 
@@ -149,12 +152,30 @@ The cloud keeps a **trophy record** per trophy a player earned: the title, the t
 | `GET /v1/titles/{title_id}/rarity` | | `{title_id, players, trophies: [{number, earned_by}]}` |
 | `GET /v1/cards?accounts=1,2,3` | | `{cards: [Card]}` for the accounts the caller may see, at most 100 |
 | `GET /v1/me/privacy` | | `Privacy` |
-| `PUT /v1/me/privacy` | `Privacy` | `Privacy` |
+| `PUT /v1/me/privacy` | `Privacy` | `Privacy`; a part left out takes the default, `friends` |
 
 - `number` is 0 to 2047 and `earned` is in Unix seconds. One upload carries at most 512 trophies. A trophy recorded already keeps its first `earned` and grade.
 - Who sees an account's trophies: the account itself always; its friends unless `trophies` is `nobody`; everyone else only with `everyone`. A block in either direction hides them.
 - `players` counts the accounts with at least one record for the title. Rarity is only given once 10 players have the title; below that `players` is 0 and `trophies` empty, so it cannot tell which trophies one person earned.
-- A gamer card's `trophies` counts the account's records by grade, or is null when its trophies are hidden from the caller.
+- A gamer card's `trophies` counts the account's records by grade, or is null when its trophies are hidden from the caller. Its `avatar` is the hash of the account's avatar, absent when there is none or the caller may not see it. Nothing else is on a card.
+
+## Profiles, avatars and playtime
+
+A profile has a short text, up to 3 favourite titles, an avatar and the playtime per title. Each part has its own visibility in `Privacy` (`about`, `favourites`, `avatar`, `playtime`), and all start at `friends`. The rule is the one of the trophies: the account itself always; its friends unless the part is `nobody`; everyone else only with `everyone`; a block in either direction hides it.
+
+| Request | Body | Answer |
+|---|---|---|
+| `GET /v1/accounts/{id}/profile` | | `Profile` with the parts the caller may see; the others are null |
+| `PATCH /v1/me/profile` | `{about?, favourites?}` | the caller's `Profile`. A part that is left out stays; `""` or `[]` clears it |
+| `PUT /v1/me/avatar` | the picture, `Content-Type: image/png` or `image/jpeg` | `{avatar}`: the new hash |
+| `DELETE /v1/me/avatar` | | 204 |
+| `GET /v1/avatars/{hash}` | | the picture, `image/png`, no token needed |
+| `PUT /v1/me/playtime` | `{entries: [PlaytimeEntry]}` | `{changed}`: how many entries were new or raised their day |
+
+- `about` has at most 160 characters of plain text: no control characters and no links (a scheme such as `https:`, `www.`, or a word such as `example.com`). Surrounding whitespace is cut. `favourites` has at most 3 distinct title IDs.
+- A part is null both when the account has not set it and when the caller may not see it, so a null tells a stranger nothing.
+- **Avatars.** The body is at most 1 MB (the one exception to the 64 KiB body limit) and must really be a PNG or JPEG, whatever it claims; a picture over 4,096 pixels on a side or that needs more than 64 MiB to decode is refused. The cloud decodes it, turns it upright by its EXIF orientation, crops it to a centred square, scales it to 256 by 256 pixels and encodes it again as PNG, so no metadata of the original survives. It is stored under the SHA-256 of the result (64 lowercase hex digits), which is the `avatar` in profiles and cards. The picture at `/v1/avatars/{hash}` never changes, so it is served with `Cache-Control: public, max-age=31536000, immutable` and an `ETag`. The hash is the only address; it is given out only to those who may see the avatar. A new avatar replaces the old one, which stops existing. Avatars are the player's own pictures, never taken from games.
+- **Playtime.** `day` is a real UTC date from 2000-01-01 to tomorrow, `minutes` is 0 to 1,440, one upload carries at most 512 entries, and an account keeps at most 20,000 days of titles. For each title and day the cloud keeps the highest `minutes` it has seen, so an upload can be sent again and never adds twice. `Profile.playtime` lists the total minutes per title, most played first.
 
 ## Reports
 
@@ -193,4 +214,5 @@ The cloud keeps a **trophy record** per trophy a player earned: the title, the t
 | `auth/code`, `auth/signup` | 20 per IP address per 15 minutes |
 | `auth/refresh` | 30 per device per hour |
 | `relays/tickets` | 20 per account per hour |
+| `PUT /v1/me/avatar` | 5 per account per hour, besides the limit below |
 | everything else | 120 per account per minute |

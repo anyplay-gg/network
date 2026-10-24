@@ -109,6 +109,12 @@ pub enum Command {
     SetPrivacy {
         privacy: anyplay_api::Privacy,
     },
+    Profile {
+        account: AccountId,
+    },
+    UploadPlaytime {
+        entries: Vec<anyplay_api::PlaytimeEntry>,
+    },
 }
 
 /// The game a player is playing, as the launcher knows it.
@@ -454,6 +460,7 @@ mod tests {
                 Command::SetPrivacy {
                     privacy: anyplay_api::Privacy {
                         trophies: anyplay_api::Audience::Everyone,
+                        ..Default::default()
                     },
                 }
             ))
@@ -461,6 +468,31 @@ mod tests {
         assert_eq!(
             parse_command(r#"{"id":6,"do":"privacy"}"#),
             Ok((6, Command::Privacy))
+        );
+        assert_eq!(
+            parse_command(r#"{"id":9,"do":"profile","account":42}"#),
+            Ok((
+                9,
+                Command::Profile {
+                    account: AccountId(42)
+                }
+            ))
+        );
+        assert_eq!(
+            parse_command(
+                r#"{"id":12,"do":"upload_playtime",
+                    "entries":[{"title_id":"GAME00001","day":"2026-10-24","minutes":95}]}"#
+            ),
+            Ok((
+                12,
+                Command::UploadPlaytime {
+                    entries: vec![anyplay_api::PlaytimeEntry {
+                        title_id: "GAME00001".into(),
+                        day: "2026-10-24".into(),
+                        minutes: 95,
+                    }],
+                }
+            ))
         );
     }
 

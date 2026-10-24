@@ -16,11 +16,11 @@ The social layer runs in the same three places as the rest of the network. The c
 
 ### Profile
 
-A handle, an avatar, a short text, favourite games and a visibility for each part: friends, everyone, or nobody. The gamer card is the short form that friends see in their list: avatar, handle, what they play, their trophy count. Avatars are pictures the player uploads, scaled and checked by the cloud; they are not taken from games.
+A handle, an avatar, a short text (160 characters, no links), up to three favourite games, playtime and a visibility for each part: friends, everyone, or nobody. The gamer card is the short form that friends see in their list: avatar, handle, what they play, their trophy count. Avatars are pictures the player uploads (PNG or JPEG, 1 MB), which the cloud decodes, crops square, scales to 256 by 256 pixels and stores without metadata; they are not taken from games. The details are in [the API](../spec/cloud-api.md#profiles-avatars-and-playtime).
 
 ### Trophies and playtime
 
-The launcher already reads a game's trophy list from the dump and the trophies the player earned from the records AnyPS5 writes while the game runs. It sends the cloud a **trophy record** for each earned trophy: title ID, trophy number, grade (bronze, silver, gold, platinum) and the time. Playtime goes the same way: title ID and minutes per day.
+The launcher already reads a game's trophy list from the dump and the trophies the player earned from the records AnyPS5 writes while the game runs. It sends the cloud a **trophy record** for each earned trophy: title ID, trophy number, grade (bronze, silver, gold, platinum) and the time. Playtime goes the same way: title ID, day and minutes. The cloud keeps the highest number it has seen for each day, so the launcher can send its whole history again without counting twice.
 
 From the records of all players the cloud counts each trophy's **rarity**: the share of players with the title who earned it. A friend who owns the game sees names and pictures from their own copy; one who does not sees grades, counts and rarity.
 

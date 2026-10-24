@@ -32,6 +32,11 @@ pub const ACCOUNT_TROPHIES: &str = "/v1/accounts/{id}/trophies";
 pub const RARITY: &str = "/v1/titles/{id}/rarity";
 pub const CARDS: &str = "/v1/cards";
 pub const PRIVACY: &str = "/v1/me/privacy";
+pub const MY_PROFILE: &str = "/v1/me/profile";
+pub const ACCOUNT_PROFILE: &str = "/v1/accounts/{id}/profile";
+pub const MY_AVATAR: &str = "/v1/me/avatar";
+pub const AVATAR: &str = "/v1/avatars/{id}";
+pub const MY_PLAYTIME: &str = "/v1/me/playtime";
 pub const EVENTS: &str = "/v1/events";
 
 /// The path with `{id}` replaced by `id`. IDs are numbers or URL-safe tokens, so nothing needs
