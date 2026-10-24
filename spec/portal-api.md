@@ -130,7 +130,18 @@ The steps are the state machine of the HTML pages ([`flow.rs`](https://github.co
 
 ### Hand-off to the app
 
-When the launcher starts a sign-in it opens `/web/authorize` (checked as before: `client=net`, a loopback `redirect_uri`, an S256 challenge, a `state`) in the player's browser. The cloud keeps the request in a new browser session and redirects to the portal route `/sign-in` (`/create` for `intent=create`), or to the HTML page when the cloud serves no portal. `/web/authorize` and `/web/link` stay server routes.
+When the launcher starts a sign-in it opens `/web/authorize` (checked as before: `client=net`, a loopback `redirect_uri`, an S256 challenge, a `state`) in the player's browser. The cloud keeps the request in a new browser session and redirects to the portal route `/sign-in` (`/create` for `intent=create`), or to the HTML page when the cloud serves no portal. `/web/authorize` stays a server route.
+
+### The link of the account button
+
+The launcher's account button gets a one-time link from `POST /v1/auth/browser/link` ([Cloud API](cloud-api.md)). When another service serves the account web (`portal_external`), the link is `{public_url}/link?c=<code>`, a page of the portal; `GET /web/link?c=<code>` answers `303` to it, so links from older launchers keep working. A cloud without that setting keeps the link `{public_url}/web/link?c=<code>` and its own page.
+
+The page asks before it signs in. Fetching the address, as a preview or a scanner does, must never sign anybody in, so the two steps are two requests:
+
+1. `GET /link/{code}` names the account. It changes nothing and can be repeated until the code runs out.
+2. The player presses the button, and the page sends `POST /link/{code}`. That uses the code up.
+
+Before `POST` the page needs a browser session and its token: `GET /session`.
 
 When the player has signed in, the step is `handoff` and `flow.redirect` is the loopback address of the app with its one-time code and the `state`: `http://127.0.0.1:<port>/callback?code=...&state=...`. The page goes there with `location.assign(redirect)`; a form post would be held back by the policy's `form-action`. The app trades the code at `POST /v1/auth/browser/token`. The answer that carries `redirect` ends the browser session and clears the cookie (`csrf` is `null`): nothing of the sign-in stays in the browser. `GET /session` never ends anything. If a hand-off is waiting there (the player finished on the HTML pages), it shows `step: "handoff"` with the same `redirect`.
 
@@ -149,6 +160,8 @@ When the player has signed in, the step is `handoff` and `flow.redirect` is the 
 | `POST /passkey/sign-in/finish` | `{id, credential}` | `SessionView`, like `sign-in/code`. `credential` is the browser's answer, as webauthn-rs reads it. A ceremony is used once. A passkey that does not work is `unauthorized`. |
 | `GET /ban` | | The statement of the ban the session proved to be its own: `{until, rule, reason, decided, appeal}`. `appeal` is `{state: "none"}`, `{state: "open", deadline}`, `{state: "filed", status, answer}` (`status`: `open`, `upheld`, `reversed`) or `{state: "over"}`. `not_found` when the session has no ban to show. |
 | `POST /ban/appeal` | `{text}` | `{filed}`. One appeal per action, 1 to 1,000 characters. |
+| `GET /link/{code}` | | `{handle}`: the account the link opens. Needs no session. `not_found` when the code is unknown, used or older than 60 seconds. Counted per client address, as `passkey/*`. |
+| `POST /link/{code}` | `{}` | `SessionView` of a new session signed in as that account (`flow.step` is `done`; the answer sets the cookie, and the browser's earlier session ends). Uses the code up, whatever comes of it. The browser's session and CSRF token are checked first, and a request that fails there leaves the code alone. `not_found` when the code is unknown, used or expired, or when the device that asked is no longer signed in to the account. `banned` when the account is banned: nobody is signed in, the session learns of the ban (`flow.step` is `banned`) and the page shows the statement (`GET /ban`) and the appeal. |
 
 ## Account
 
