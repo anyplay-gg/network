@@ -10,7 +10,7 @@ Share play sends the host's game to one friend in their party as video and sound
 
 **The guest's input is a pad, never the host's operating system.** The guest sends pad states from a fixed list of buttons, sticks and triggers. The host's net service checks and rate-limits them; the engine's pad layer receives them as a pad. Nothing is injected into the operating system, so a guest can never reach the desktop, a keyboard or another program. A pad chord on the host's own pad, a key and a button in the launcher end or reduce the share at once.
 
-**Both sides agree every time, and only inside a party.** The host invites one party member, the member accepts, the host picks a mode, and the host alone can change it. Nothing is remembered between shares. Until a legal review is done, the cloud reports share play as off ([ADR 0008](0008-the-online-permission-check-waits.md) waits the same way), because a guest without the game plays through the host's copy, which the [clean line](0003-the-clean-line.md) asks us to look at with care.
+**Both sides agree every time, and only inside a party.** The host invites one party member, the member accepts, the host picks a mode, and the host alone can change it. Nothing is remembered between shares. Until a legal review is done, the cloud reports share play as off (revival servers and the online-permission answer wait for the same review, [ADR 0021](0021-the-line-is-drawn-at-the-law.md)), because a guest without the game plays through the host's copy, which the rule about owned games asks us to look at with care.
 
 ## Considered options
 

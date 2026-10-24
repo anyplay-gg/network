@@ -100,7 +100,7 @@ _Avoid_: Launch argument, deep link
 The check that two players run the same game version and a compatible AnyPS5 build before one joins the other.
 
 **Virtual address**:
-The address a game sees for another player in its session. It leads into the tunnel and exists only on the players' PCs.
+The address a game sees for a player in a session. It belongs to the player's place in that session, is different for every member of it, and leads into the tunnel; it exists only on the players' PCs. Another session may give it to someone else.
 _Avoid_: Peer IP, fake IP
 
 ### Games
@@ -110,8 +110,12 @@ How much of a game's online part can work on the network. A: platform services o
 _Avoid_: Compatibility rating, badge
 
 **Publisher backend**:
-Servers that a game's publisher runs, such as its own accounts, matchmaking or game servers. The network never stands in for them.
+Servers that a game's publisher runs, such as its own accounts, matchmaking or game servers. The network never stands in for one that still runs.
 _Avoid_: Third-party server, game server
+
+**Revival server**:
+A server the network writes for a game whose publisher has shut its online service down. It is written from observation of the game the player owns, never from the publisher's code or keys, and it stops if the publisher brings the service back ([ADR 0021](docs/adr/0021-the-line-is-drawn-at-the-law.md)).
+_Avoid_: Private server, emulator
 
 **Observation log**:
 The local record of every network library call a game made and what the bridge answered. The network's own specifications are written from it.

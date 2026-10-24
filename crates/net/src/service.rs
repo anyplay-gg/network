@@ -31,6 +31,7 @@ use tokio::io::AsyncReadExt as _;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::task::JoinHandle;
 
+use crate::addresses::PeerAddresses;
 use crate::answers::{Answers, is_older};
 use crate::bridge::BridgeInput;
 use crate::browser::{self, Callback};
@@ -158,7 +159,10 @@ pub struct Service {
     offline_since: Option<Instant>,
     events: Option<(u64, JoinHandle<()>)>,
     next_events: u64,
+    /// The address the cloud named in `welcome`: the player's own before it is in a session.
     address: Option<Ipv4Addr>,
+    /// What the game calls each peer, over all sessions.
+    peer_addresses: PeerAddresses,
     friends: FriendLists,
     friends_dirty: bool,
     friends_sent: Instant,
@@ -251,6 +255,7 @@ impl Service {
             events: None,
             next_events: 1,
             address: None,
+            peer_addresses: PeerAddresses::default(),
             friends: FriendLists::default(),
             friends_dirty: false,
             friends_sent: Instant::now() - FRIENDS_PACE,
@@ -1330,6 +1335,7 @@ impl Service {
         self.link = control::Cloud::Offline;
         self.offline_since = None;
         self.address = None;
+        self.peer_addresses = PeerAddresses::default();
         self.friends = FriendLists::default();
         self.friends_answers.ignore_pending();
         self.friends_dirty = true;
@@ -2259,19 +2265,20 @@ impl Service {
     }
 
     fn update_peers(&mut self) {
+        let me = self.me.as_ref().map(|m| m.id);
+        self.peer_addresses.refresh(me.map(|m| m.0), &self.sessions);
         let Some(tunnels) = &self.tunnels else {
             return;
         };
-        let me = self.me.as_ref().map(|m| m.id);
         let mut peers = HashMap::new();
         for session in self.sessions.values() {
             for member in &session.members {
                 if Some(member.account.id) == me {
                     continue;
                 }
-                let (Ok(endpoint), Ok(address)) = (
+                let (Ok(endpoint), Some(address)) = (
                     member.endpoint.parse::<EndpointId>(),
-                    member.address.parse::<Ipv4Addr>(),
+                    self.peer_addresses.of(member.account.id.0),
                 ) else {
                     continue;
                 };
@@ -2340,7 +2347,7 @@ impl Service {
                     session: session.id.clone(),
                     account_id: member.account.id.0,
                     handle: member.account.handle.clone(),
-                    address: member.address.parse().unwrap_or(Ipv4Addr::UNSPECIFIED),
+                    address: self.peer_address(member),
                     peer_state: state,
                 }));
             }
@@ -2375,11 +2382,14 @@ impl Service {
                     .is_none_or(|b| !b.members.iter().any(|m| m.account.id == a.account.id))
             });
             self.peers_left(&id, &left);
+            self.update_peers();
             if joined {
                 self.announce_peers(&id);
             }
+        } else {
+            self.update_peers();
         }
-        self.update_peers();
+        self.bridge_state();
         self.update_endpoints();
         self.session_view();
     }
@@ -2398,7 +2408,30 @@ impl Service {
             bridge.activated.remove(id);
         }
         self.update_peers();
+        self.bridge_state();
         self.session_view();
+    }
+
+    /// What the game calls this peer: the address this PC holds for the account, else the one
+    /// the cloud named.
+    fn peer_address(&self, member: &anyplay_api::Member) -> Ipv4Addr {
+        self.peer_addresses
+            .of(member.account.id.0)
+            .or_else(|| member.address.parse().ok())
+            .unwrap_or(Ipv4Addr::UNSPECIFIED)
+    }
+
+    /// The player's own address: the one the session the launcher shows gives it, else the one
+    /// `welcome` named, which is what the cloud gives it in any session where it is free.
+    fn own_address(&self) -> Ipv4Addr {
+        let me = self.me.as_ref().map(|m| m.id);
+        self.current_session()
+            .and_then(|id| self.sessions.get(&id))
+            .and_then(|session| session.members.iter().find(|m| Some(m.account.id) == me))
+            .and_then(|member| member.address.parse().ok())
+            .filter(|address| anyplay_api::is_assignable(*address))
+            .or(self.address)
+            .unwrap_or(Ipv4Addr::UNSPECIFIED)
     }
 
     fn is_activated(&self, session: &str) -> bool {
@@ -2415,7 +2448,7 @@ impl Service {
                 session: session.to_owned(),
                 account_id: member.account.id.0,
                 handle: member.account.handle.clone(),
-                address: member.address.parse().unwrap_or(Ipv4Addr::UNSPECIFIED),
+                address: self.peer_address(member),
                 peer_state: PeerState::Disconnected,
             }));
         }
@@ -2452,7 +2485,11 @@ impl Service {
                     .iter()
                     .map(|member| control::Member {
                         account: member.account.clone(),
-                        address: member.address.clone(),
+                        address: if Some(member.account.id) == me {
+                            member.address.clone()
+                        } else {
+                            self.peer_address(member).to_string()
+                        },
                         joined: member.joined,
                         link: (Some(member.account.id) != me).then(|| {
                             match self.links.get(&member.account.id.0) {
@@ -2676,7 +2713,7 @@ impl Service {
                 account_id: me.id.0,
                 handle: me.handle.clone(),
                 nat_type: if self.tunnels.is_some() { 2 } else { 0 },
-                address: self.address.unwrap_or(Ipv4Addr::UNSPECIFIED),
+                address: self.own_address(),
             },
             _ => bridge::State::signed_out(),
         }
@@ -2874,7 +2911,7 @@ impl Service {
                 session: session.id.clone(),
                 account_id: member.account.id.0,
                 handle: member.account.handle.clone(),
-                address: member.address.parse().unwrap_or(Ipv4Addr::UNSPECIFIED),
+                address: self.peer_address(member),
                 peer_state,
             }));
         }

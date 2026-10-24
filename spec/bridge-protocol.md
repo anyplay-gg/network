@@ -69,10 +69,10 @@ A payload may be longer than the fields its receiver knows; the receiver ignores
 | `0x0102` | feature | bridge → service | `user_id: i32`, `feature: u32` |
 
 - **state** comes right after welcome and again whenever a field changes. The bridge keeps the last one and answers the game's questions about sign-in, identity and NAT from it without waiting.
-  - `signed_in` is 1 while the player is signed in to the network and not banned, else 0. The online-permission check does not follow it for now ([ADR 0008](../docs/adr/0008-the-online-permission-check-waits.md)).
+  - `signed_in` is 1 while the player is signed in to the network and not banned, else 0. The online-permission check does not follow it yet. [ADR 0021](../docs/adr/0021-the-line-is-drawn-at-the-law.md) makes it follow: signed in and not banned, for the AnyPlay network only.
   - `account_id` and `handle` are 0 and empty while signed out. A handle has at most 16 ASCII characters.
   - `nat_type` is 1, 2 or 3 as the platform counts NAT types, or 0 while unknown. Because a relay is always reachable, the net service reports at most 2.
-  - `address` is the player's own virtual address, 0 when it has none.
+  - `address` is the player's own virtual address, 0 when it has none. It is the address the player has in the session the launcher shows, else the one the cloud names for the account. It can change when the player enters a session, and `state` is sent again then.
 - **feature** reports that the game used an online feature it must announce, such as through the platform's feature notification. The net service only writes it to its observation log.
 
 ### Web API (`0x02xx`)

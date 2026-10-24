@@ -67,7 +67,7 @@ Message   { conversation, seq, sender, text, created }
 - `visibility` is `friends` (friends of a member may join), `invite` (only invited accounts) or `closed`.
 - `properties` is opaque data for the game, as standard base64, at most 8 KiB once decoded.
 - `endpoint` is the net service's tunnel key (an iroh endpoint ID) as lowercase hex, and `relay` the URL of the relay it is reachable through, or null. Other members dial it with both; the cloud publishes neither anywhere else.
-- `address` is the member's virtual address (see Events).
+- `address` is the member's virtual address in this session (see Events).
 - `build` names the AnyPS5 build. Two players may only play together when `title_id`, `version` and `build` all match.
 - `revision` rises with every change to a session, and with every change of an account's presence its friends are told about. Several nodes of one cloud may send news, so a copy can arrive after a newer one: a client keeps the highest revision it has seen and drops a copy with a lower one. A cloud that does not count sends 0, which a client always takes.
 
@@ -384,7 +384,7 @@ Every message has a number `seq` that counts up by one in its conversation, star
 
 | Type | Fields | Meaning |
 |---|---|---|
-| `welcome` | `address, server_time` | Sent first, once the cloud pushes to this connection. A client counts as online from here and fetches its lists after it, so no change falls between the two. `address` is this account's virtual address while it is online. |
+| `welcome` | `address, server_time` | Sent first, once the cloud pushes to this connection. A client counts as online from here and fetches its lists after it, so no change falls between the two. `address` is the account's preferred virtual address (see Virtual addresses). |
 | `friends` | | The friend lists changed; fetch `GET /v1/friends`. |
 | `presence` | `account, presence` | A friend's presence changed. |
 | `invitation` | `invitation` | A friend invited this account. |
@@ -408,7 +408,10 @@ Every message has a number `seq` that counts up by one in its conversation, star
 - The cloud pings every 20 seconds and closes a connection that does not answer.
 - One device holds one event connection; a new one replaces the old.
 - Close codes: 4001 the access token expired (refresh, then reconnect), 4003 banned, 4004 signed out. 1001 and 1012 mean the cloud's node is going away or restarting: reconnect at a random moment within the next 10 seconds, so that the clients of one node do not all come back at once. After any other break, a client waits half its pause plus a random part of up to the whole pause, starting at 1 second and doubling to at most 30.
-- **Virtual addresses** come from `198.18.0.0/15`. The cloud leases one to every online account, the same for the account each time when it is free, so every member of a session sees the same address for the same player.
+- **Virtual addresses** come from `198.18.0.0/15` and belong to the members of a session, not to accounts ([ADR 0020](../docs/adr/0020-virtual-addresses-belong-to-sessions.md)). The cloud gives a joining account an address no other member of that session holds: the account's preferred address when it is free, else the next free one, never one ending in .0 or .255. The address stays with the member until it leaves, so every member of a session sees the same address for the same player for as long as the player is in it. A session never runs out of addresses (at most 64 members); a cloud's players online are not limited by addresses.
+  - The **preferred address** of an account is the same every time, from any session, and is not reserved: another member of a session may hold it, and another session may give it to another player. `welcome.address` is the preferred address. A client takes its address in a session from the session's `members`, and uses `welcome.address` only for the time before it is in a session.
+  - One address can name two players in two different sessions. A client in several sessions at once keeps a single address per peer across them (the net service does).
+  - Clients from before session addresses keep working: they read `welcome.address` and `members[].address` and nothing else.
 
 ## Information
 

@@ -7,10 +7,11 @@ What the network does not do yet, part by part. Each line says what is missing a
 - **Sign-in, identity, NAT and web API forwarding**: drafted on `feat/net-bridge`, under review (board task T2).
 - **Push event delivery**: missing. The signature of the game's push callback is not known. Closes with an observation of a game that registers one.
 - **Session signaling, peer-to-peer sockets, join intents and the invitation dialog**: missing in the bridge. The net service already serves them ([bridge protocol](../spec/bridge-protocol.md) groups `0x03xx` and `0x04xx`).
-- **Online permission**: waits for phase 4 ([ADR 0008](adr/0008-the-online-permission-check-waits.md)).
+- **Online permission**: the bridge still leaves the check as AnyPS5 answers it today. The target is the network's own rule, signed in and not banned, for the AnyPlay network only ([ADR 0021](adr/0021-the-line-is-drawn-at-the-law.md)). Closes with the bridge change and a lawyer's review before the public launch.
 
 ## Net service (this repository)
 
+- **Revival servers**: none built. [ADR 0021](adr/0021-the-line-is-drawn-at-the-law.md) allows them for games whose publisher has shut the service down. Each one needs observation of a game the player owns, and a lawyer's review before the public launch.
 - **Web API groups**: none of the platform's is offered yet; every request is answered "not offered" and written to the observation log. Only the network's own group `anyplay` is answered ([spec](../spec/own-api-group.md)). Closes group by group, from observations of class A titles; what each group sends is written down in [spec/web-api](../spec/web-api/README.md), starting with `userProfile`.
 - **Push events to the game**: not sent until the bridge can deliver them.
 - **NAT type**: reported as 2 while a relay is reachable, 0 otherwise; no finer measurement.
