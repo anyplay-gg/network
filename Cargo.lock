@@ -182,6 +182,7 @@ dependencies = [
  "anyplay-bridge-protocol",
  "anyplay-control",
  "anyplay-proof",
+ "anyplay-voice",
  "axum",
  "bytes",
  "data-encoding",

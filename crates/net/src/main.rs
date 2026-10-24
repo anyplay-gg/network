@@ -65,6 +65,7 @@ fn main() -> std::process::ExitCode {
         bind: None,
         relay_only,
         device_name: device_name(),
+        audio: anyplay_net::voice::Audio::system(),
     };
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)

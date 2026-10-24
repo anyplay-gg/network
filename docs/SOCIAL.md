@@ -44,7 +44,7 @@ A group of friends, up to 8, that stays together across games and game sessions:
 
 ### Voice
 
-Party members talk over the tunnels the net service already opens: Opus frames, one tunnel to each other member, no media server. Push-to-talk or open microphone, mute per member, and a volume per member. In-game voice of games that use the platform's voice libraries can come later through the bridge.
+Party members talk over the tunnels' own iroh endpoint: Opus frames, one voice connection to each other member next to the game tunnel ([ADR 0017](adr/0017-voice-has-a-connection-of-its-own.md)), no media server. Only members the party names can connect. Push-to-talk or open microphone, mute per member, and a volume per member. In-game voice of games that use the platform's voice libraries can come later through the bridge.
 
 ### Share play
 

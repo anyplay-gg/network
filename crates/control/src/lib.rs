@@ -140,6 +140,35 @@ pub enum Command {
     PartyMove {
         session: String,
     },
+    // Voice
+    /// Switches party voice on or off. The microphone is only opened while it is on and the
+    /// player is in a party.
+    Voice {
+        on: bool,
+    },
+    /// Push-to-talk: whether the key is down.
+    PushToTalk {
+        talking: bool,
+    },
+    VoiceMode {
+        mode: VoiceMode,
+    },
+    /// How loud one member is heard, in percent: 100 is as sent, 0 to 200.
+    PeerVolume {
+        account: AccountId,
+        percent: u16,
+    },
+    PeerMute {
+        account: AccountId,
+        muted: bool,
+    },
+    /// The names of the microphones and speakers, and which are chosen.
+    VoiceDevices,
+    /// Chooses a microphone or speakers by name; null is the system's default.
+    SetVoiceDevice {
+        kind: DeviceKind,
+        name: Option<String>,
+    },
     Conversations,
     /// Opens the conversation with one account, or a group with several.
     OpenConversation {
@@ -184,6 +213,25 @@ pub enum Command {
     CancelSignIn,
     /// Answers a short-lived link that opens the account web, signed in as this account.
     AccountPage,
+}
+
+/// When the microphone is open.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VoiceMode {
+    /// While the push-to-talk key is down. The default.
+    #[default]
+    PushToTalk,
+    /// Whenever speech is heard. Without headphones the others hear their own voices back.
+    VoiceActivity,
+}
+
+/// Which sound device a command means.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeviceKind {
+    Input,
+    Output,
 }
 
 /// The game a player is playing, as the launcher knows it.
@@ -392,7 +440,49 @@ pub struct PartyState {
     pub party: Option<anyplay_api::Party>,
 }
 
+/// The answer to `voice_devices`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VoiceDevices {
+    pub input: Vec<String>,
+    pub output: Vec<String>,
+    /// The chosen microphone; null is the system's default.
+    pub selected_input: Option<String>,
+    pub selected_output: Option<String>,
+}
+
 // Events
+
+/// Where party voice is.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VoiceState {
+    /// Switched off, or the player is in no party, or no sound device could be opened.
+    #[default]
+    Off,
+    /// Switched on in a party; the devices are opening, or members who take part are not
+    /// reached yet.
+    Connecting,
+    /// The devices run and the members who take part are reached (or there are none).
+    On,
+}
+
+/// How loud someone is and whether to light them up.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VoiceLevel {
+    /// Recent loudness in percent, 0 to 100, before the player's volume setting.
+    pub level: u8,
+    pub speaking: bool,
+}
+
+/// One other member in the `voice` event.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VoicePeer {
+    pub account: AccountId,
+    #[serde(flatten)]
+    pub level: VoiceLevel,
+    /// The voice connection to this member and the path it takes; null when there is none.
+    pub link: Option<Link>,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -491,6 +581,16 @@ pub enum Event {
     },
     PartyInvitationGone {
         id: String,
+    },
+    /// Party voice: its state, and while it runs who is speaking. Sent when the state, `enabled`
+    /// or the mode changes, and at most ten times a second while a level changes.
+    Voice {
+        state: VoiceState,
+        /// The player switched voice on (with `voice`). It stays on across parties.
+        enabled: bool,
+        mode: VoiceMode,
+        me: VoiceLevel,
+        peers: Vec<VoicePeer>,
     },
     /// Every conversation and request with its newest number, after sign-in and after every
     /// reconnect. Compare each `last` with the number you hold and fetch the messages after it.
@@ -663,6 +763,155 @@ mod tests {
         assert_eq!(
             parse_command(&command_line(9, &send)),
             Ok((9, send.clone()))
+        );
+    }
+
+    #[test]
+    fn voice_commands_are_lines() {
+        assert_eq!(
+            parse_command(r#"{"id":1,"do":"voice","on":true}"#),
+            Ok((1, Command::Voice { on: true }))
+        );
+        assert_eq!(
+            parse_command(r#"{"id":2,"do":"push_to_talk","talking":false}"#),
+            Ok((2, Command::PushToTalk { talking: false }))
+        );
+        assert_eq!(
+            parse_command(r#"{"id":3,"do":"voice_mode","mode":"voice_activity"}"#),
+            Ok((
+                3,
+                Command::VoiceMode {
+                    mode: VoiceMode::VoiceActivity
+                }
+            ))
+        );
+        assert_eq!(
+            parse_command(r#"{"id":4,"do":"voice_mode","mode":"push_to_talk"}"#),
+            Ok((
+                4,
+                Command::VoiceMode {
+                    mode: VoiceMode::PushToTalk
+                }
+            ))
+        );
+        assert_eq!(
+            parse_command(r#"{"id":5,"do":"peer_volume","account":7,"percent":150}"#),
+            Ok((
+                5,
+                Command::PeerVolume {
+                    account: AccountId(7),
+                    percent: 150
+                }
+            ))
+        );
+        assert_eq!(
+            parse_command(r#"{"id":6,"do":"peer_mute","account":7,"muted":true}"#),
+            Ok((
+                6,
+                Command::PeerMute {
+                    account: AccountId(7),
+                    muted: true
+                }
+            ))
+        );
+        assert_eq!(
+            parse_command(r#"{"id":7,"do":"voice_devices"}"#),
+            Ok((7, Command::VoiceDevices))
+        );
+        assert_eq!(
+            parse_command(r#"{"id":8,"do":"set_voice_device","kind":"input","name":"Headset"}"#),
+            Ok((
+                8,
+                Command::SetVoiceDevice {
+                    kind: DeviceKind::Input,
+                    name: Some("Headset".into())
+                }
+            ))
+        );
+        assert_eq!(
+            parse_command(r#"{"id":9,"do":"set_voice_device","kind":"output","name":null}"#),
+            Ok((
+                9,
+                Command::SetVoiceDevice {
+                    kind: DeviceKind::Output,
+                    name: None
+                }
+            ))
+        );
+        // A volume above 65535 percent, or a mode that does not exist, is no command.
+        assert_eq!(
+            parse_command(r#"{"id":10,"do":"peer_volume","account":7,"percent":70000}"#),
+            Err(Some(10))
+        );
+        assert_eq!(
+            parse_command(r#"{"id":11,"do":"voice_mode","mode":"always"}"#),
+            Err(Some(11))
+        );
+        let set = Command::SetVoiceDevice {
+            kind: DeviceKind::Input,
+            name: Some("Mic ä".into()),
+        };
+        assert_eq!(
+            parse_command(&command_line(12, &set)),
+            Ok((12, set.clone()))
+        );
+    }
+
+    #[test]
+    fn the_voice_event_is_one_line_and_not_taken_for_an_answer() {
+        let event = Event::Voice {
+            state: VoiceState::On,
+            enabled: true,
+            mode: VoiceMode::PushToTalk,
+            me: VoiceLevel {
+                level: 25,
+                speaking: true,
+            },
+            peers: vec![
+                VoicePeer {
+                    account: AccountId(7),
+                    level: VoiceLevel {
+                        level: 0,
+                        speaking: false,
+                    },
+                    link: Some(Link::Relay),
+                },
+                VoicePeer {
+                    account: AccountId(8),
+                    level: VoiceLevel::default(),
+                    link: None,
+                },
+            ],
+        };
+        let output = Output::Event(event);
+        let text = output_line(&output);
+        assert_eq!(
+            text,
+            concat!(
+                "{\"event\":\"voice\",\"state\":\"on\",\"enabled\":true,\"mode\":\"push_to_talk\",",
+                "\"me\":{\"level\":25,\"speaking\":true},\"peers\":[",
+                "{\"account\":7,\"level\":0,\"speaking\":false,\"link\":\"relay\"},",
+                "{\"account\":8,\"level\":0,\"speaking\":false,\"link\":null}]}
+"
+            )
+        );
+        assert_eq!(parse_output(&text), Some(output));
+        let devices = Answer::ok(
+            3,
+            VoiceDevices {
+                input: vec!["Mic".into()],
+                output: vec!["Speakers".into()],
+                selected_input: None,
+                selected_output: Some("Speakers".into()),
+            },
+        );
+        assert_eq!(
+            output_line(&Output::Answer(devices)),
+            concat!(
+                "{\"id\":3,\"ok\":{\"input\":[\"Mic\"],\"output\":[\"Speakers\"],",
+                "\"selected_input\":null,\"selected_output\":\"Speakers\"}}
+"
+            )
         );
     }
 

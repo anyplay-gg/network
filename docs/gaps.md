@@ -14,7 +14,14 @@ What the network does not do yet, part by part. Each line says what is missing a
 - **Web API groups**: none of the platform's is offered yet; every request is answered "not offered" and written to the observation log. Only the network's own group `anyplay` is answered ([spec](../spec/own-api-group.md)). Closes group by group, from observations of class A titles; what each group sends is written down in [spec/web-api](../spec/web-api/README.md), starting with `userProfile`.
 - **Push events to the game**: not sent until the bridge can deliver them.
 - **NAT type**: reported as 2 while a relay is reachable, 0 otherwise; no finer measurement.
-- **Voice chat**: the engine is written and tested without hardware ([`crates/voice`](../crates/voice), [spec](../spec/voice.md), [ADR 0014](adr/0014-voice-is-an-engine-without-a-transport.md)); the net service does not use it yet, so no party can talk. It has no echo cancellation: push-to-talk is the default, and an open microphone needs headphones. Closes with phase S3 when parties exist.
+- **Voice chat**: the engine ([`crates/voice`](../crates/voice), [ADR 0014](adr/0014-voice-is-an-engine-without-a-transport.md)) is wired into the net service: voice connections between party members, membership checks, the control commands and events ([spec](../spec/voice.md), [DESIGN](DESIGN.md)). Tested without hardware, on memory devices and real iroh endpoints with a relay on loopback. Still missing:
+  - the cloud's side of `PUT /v1/party/endpoint` and the new `PartyMember` fields (the net service tolerates a cloud without them: nobody is dialed), and the launcher's party window;
+  - a run on real microphones and speakers, on Windows and on Linux, and measurements of delay and loss on real paths; the `devices` build is only compiled in CI;
+  - no echo cancellation: push-to-talk is the default, and an open microphone needs headphones;
+  - one account on two devices in the same party: the second device's announcement replaces the first's, and the first loses voice;
+  - the pump runs on a Tokio timer, which on Windows can tick only every 15 ms or so rather than every 5 ms; the engine's queue allows for that, but a thread of its own would be steadier;
+  - no gain or level meter before a talk, no per-device sample-rate choice (the device's default is used);
+  - phase S3 is done when a party of four talks with relay only switched on, which needs the cloud and a real run.
 - **Matchmaking, leaderboards, cloud saves**: not started (phase 5).
 - **Fuzzing beyond the parsers**: the parsers of both protocols are fuzzed every night ([fuzz](../fuzz/README.md)); what the net service does with the messages they read, and what it reads from the cloud, is tested with fixed cases only.
 

@@ -56,6 +56,7 @@ pub const MOD_MODERATOR: &str = "/v1/moderation/moderators/{id}";
 pub const EVENTS: &str = "/v1/events";
 pub const PARTY: &str = "/v1/party";
 pub const PARTY_LEAVE: &str = "/v1/party/leave";
+pub const PARTY_ENDPOINT: &str = "/v1/party/endpoint";
 pub const PARTY_SESSION: &str = "/v1/party/session";
 pub const PARTY_MEMBER: &str = "/v1/party/members/{id}";
 pub const PARTY_INVITATIONS: &str = "/v1/party/invitations";

@@ -8,10 +8,10 @@ use anyplay_api::{
     BrowserTokenRequest, Cards, CodeAnswer, CodeRequest, Conversation, Conversations,
     CreateConversation, CreateSession, Device, EmailAnswer, EmailRequest, ErrorCode, FriendLists,
     FriendRequest, FriendRequestAnswer, Info, Invite, Invited, JoinSession, MarkRead, Me, Message,
-    Messages, MoveParty, Party, PartyInvitations, PlaytimeAdded, PlaytimeEntry, PlaytimeUpload,
-    PresenceRequest, Privacy, Profile, Rarity, RefreshRequest, Relays, Report, SendMessage,
-    Session, SignedIn, SignupRequest, TicketRequest, Tokens, TrophiesAdded, Trophy, TrophyUpload,
-    UpdateParty, UpdateSession, path,
+    Messages, MoveParty, Party, PartyEndpoint, PartyInvitations, PlaytimeAdded, PlaytimeEntry,
+    PlaytimeUpload, PresenceRequest, Privacy, Profile, Rarity, RefreshRequest, Relays, Report,
+    SendMessage, Session, SignedIn, SignupRequest, TicketRequest, Tokens, TrophiesAdded, Trophy,
+    TrophyUpload, UpdateParty, UpdateSession, path,
 };
 use anyplay_proof::{DeviceKey, Subject};
 use reqwest::{Method, StatusCode};
@@ -669,6 +669,12 @@ impl Cloud {
 
     pub async fn update_party(&self, body: &UpdateParty) -> Result<Party, CloudError> {
         self.call(Method::PATCH, path::PARTY, Some(body)).await
+    }
+
+    /// Tells the party where this net service is and whether it takes part in voice.
+    pub async fn party_endpoint(&self, body: &PartyEndpoint) -> Result<Party, CloudError> {
+        self.call(Method::PUT, path::PARTY_ENDPOINT, Some(body))
+            .await
     }
 
     /// Invites the party into a session of the leader's.
