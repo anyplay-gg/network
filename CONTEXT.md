@@ -130,6 +130,10 @@ _Avoid_: Icon, profile picture (when the cloud's square is meant), game art
 **Playtime**:
 The minutes a player spent in a title, counted per title and per day by the launcher. The cloud keeps the highest number it has seen for a day, so a repeated upload does not count twice.
 
+**Connection** (also **Linked account**):
+The link between an AnyPlay account and an account of a provider such as Discord or Steam, made in the portal. It holds who the account is there (ID, display name, picture), never a token or anything the player has on the provider. At most one per provider, and an account of a provider belongs to one AnyPlay account. Each has its own visibility (friends, everyone or nobody). Making one needs a fresh session; removing one does not.
+_Avoid_: Integration, social login (a connection is not a way to sign in)
+
 **Gamer card**:
 The short form of a profile that friends see in their list: avatar, handle, what they play, trophy count. It holds nothing else, so it stays small.
 
