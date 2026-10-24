@@ -84,11 +84,15 @@ pub enum Command {
     Invite {
         accounts: Vec<AccountId>,
     },
+    // A command's own fields never take the name `id`: that is the command's number, and a second
+    // `id` on the line would replace it. These send the invitation or dialog under its own name.
     AnswerInvitation {
+        #[serde(rename = "invitation")]
         id: String,
         accept: bool,
     },
     Dialog {
+        #[serde(rename = "dialog")]
         id: u64,
         accounts: Option<Vec<AccountId>>,
     },
@@ -126,6 +130,7 @@ pub enum Command {
         accounts: Vec<AccountId>,
     },
     PartyAnswer {
+        #[serde(rename = "invitation")]
         id: String,
         accept: bool,
     },
@@ -1282,6 +1287,41 @@ mod tests {
                 Command::Appeal {
                     action: 12,
                     text: "Please look again.".into()
+                }
+            ))
+        );
+    }
+
+    // A command field named `id` once replaced the command's number on the line, so the net service
+    // could not read the command and never answered it.
+    #[test]
+    fn answers_keep_the_command_number() {
+        let commands = [
+            Command::PartyAnswer {
+                id: "p1".into(),
+                accept: true,
+            },
+            Command::AnswerInvitation {
+                id: "i1".into(),
+                accept: false,
+            },
+            Command::Dialog {
+                id: 3,
+                accounts: None,
+            },
+        ];
+        for command in commands {
+            let line = command_line(7, &command);
+            assert_eq!(line.matches("\"id\"").count(), 1, "{line}");
+            assert_eq!(parse_command(&line), Ok((7, command)));
+        }
+        assert_eq!(
+            parse_command(r#"{"id":9,"do":"party_answer","invitation":"p1","accept":true}"#),
+            Ok((
+                9,
+                Command::PartyAnswer {
+                    id: "p1".into(),
+                    accept: true
                 }
             ))
         );
