@@ -89,6 +89,9 @@ pub enum Command {
         id: u64,
         accounts: Option<Vec<AccountId>>,
     },
+    RelayOnly {
+        on: bool,
+    },
 }
 
 /// The game a player is playing, as the launcher knows it.
@@ -405,6 +408,10 @@ mod tests {
         assert_eq!(
             parse_command(&command_line(1, &Command::SignOut)),
             Ok((1, Command::SignOut))
+        );
+        assert_eq!(
+            parse_command(r#"{"id":2,"do":"relay_only","on":true}"#),
+            Ok((2, Command::RelayOnly { on: true }))
         );
     }
 

@@ -567,6 +567,13 @@ impl Service {
                     |_, ()| Done {},
                 );
             }
+            Command::RelayOnly { on } => {
+                if self.config.relay_only != on {
+                    self.config.relay_only = on;
+                    self.restart_tunnels();
+                }
+                self.ok(id, Done {});
+            }
             Command::Playing { game } => {
                 self.activity = game.map(|game| Activity {
                     title_id: game.title_id,
@@ -1084,6 +1091,16 @@ impl Service {
         );
     }
 
+    /// Closes the tunnels and starts them again with fresh tickets and the current settings.
+    /// The peers reconnect on their own.
+    fn restart_tunnels(&mut self) {
+        if let Some(tunnels) = self.tunnels.take() {
+            tokio::spawn(async move { tunnels.close().await });
+        }
+        self.relays_asked = None;
+        self.ask_relays();
+    }
+
     fn use_relays(&mut self, relays: Vec<RelayAccess>) {
         if let Some(tunnels) = self.tunnels.clone() {
             tokio::spawn(async move { tunnels.set_relays(&relays).await });
@@ -1102,12 +1119,13 @@ impl Service {
                 }
             }
         });
+        let relay_only = self.config.relay_only;
         let options = tunnel::Options {
             secret: self.secret.clone(),
             relays,
             relay_roots: self.config.relay_roots.clone(),
             bind: self.config.bind,
-            relay_only: self.config.relay_only,
+            relay_only,
         };
         let traffic = self.traffic.clone();
         self.spawn(
@@ -1116,10 +1134,12 @@ impl Service {
                 tunnels.online(Duration::from_secs(10)).await;
                 Ok::<_, String>(tunnels)
             },
-            |service, result| {
+            move |service, result| {
                 service.tunnels_starting = false;
                 match result {
-                    Ok(tunnels) if service.me.is_some() => {
+                    Ok(tunnels)
+                        if service.me.is_some() && service.config.relay_only == relay_only =>
+                    {
                         tracing::info!("tunnel endpoint {}", tunnels.id());
                         service.tunnels = Some(tunnels);
                         service.update_peers();
@@ -1128,6 +1148,10 @@ impl Service {
                     }
                     Ok(tunnels) => {
                         tokio::spawn(async move { tunnels.close().await });
+                        // Relay only changed while they started: start them again with it.
+                        if service.me.is_some() {
+                            service.restart_tunnels();
+                        }
                     }
                     Err(error) => tracing::warn!("tunnels could not start: {error}"),
                 }
