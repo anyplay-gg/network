@@ -35,7 +35,7 @@ Some actions give an attacker who holds a stolen session a lasting hold. They ne
 403 {"error": "step_up_required", "message": "Confirm that it is you to do this."}
 ```
 
-The actions that need it: starting or finishing a passkey registration, removing a passkey, signing out everywhere, asking for or confirming a new e-mail address, and starting the deletion of the account. Everything else needs only a session.
+The actions that need it: starting or finishing a passkey registration, removing a passkey, the export of the data, signing out a device or another browser (a browser may always sign itself out), signing out everywhere, asking for or confirming a new e-mail address, and starting the deletion of the account. A thief with an old copy of a session can then neither read everything the cloud stores nor end the owner's sessions and keep the only one. Everything else needs only a session.
 
 The page proves again who the player is in one of two ways, then repeats the action:
 
@@ -74,7 +74,8 @@ A request that the origin guard refuses (403 before the API sees it) has an HTML
 
 Counted by the cloud's settings (`docs/configuration.md` of the cloud), per window:
 
-- Asking for a code (`sign-in/email`, `sign-in/code/resend`, `step-up/email`, `account/email`): per address and per client address, as for `/v1/auth/email`. Typing a code, `passkey/*` and a new session: per client address, as for `/v1/auth/code`.
+- Asking for a code (`sign-in/email`, `sign-in/code/resend`, `step-up/email`, `account/email`): per address and per client address, as for `/v1/auth/email`. Typing a code and `passkey/*`: per client address, as for `/v1/auth/code`.
+- A new browser session (`GET /session` without a live cookie): 300 per 15 minutes per client address, a bucket of its own, so many page loads behind one address (a shared network) cannot lock out signing in. A request that has its session is not counted. Every new session is a row in the store, because the CSRF token lives in it; the row ends with the session's idle time.
 - Every other request of a signed-in session: per account, shared with `/v1` (120 per minute).
 - Public profiles (`users/{name}...`): 120 per minute per client address.
 - Avatar uploads: 5 per hour per account.
@@ -161,27 +162,27 @@ Browser  { id, current, created, last_used }       id: names the session to its 
 | `POST /account/passkeys/finish` | `{id, name, credential}` | 201 `{passkey}`. Step-up. `name` is up to 40 characters; without one the cloud names it "Passkey n". |
 | `PATCH /account/passkeys/{id}` | `{name}` | `{ok: true}`. |
 | `DELETE /account/passkeys/{id}` | `{}` | `{ok: true}`. Step-up. Removing the last passkey is allowed: the e-mail code stays as the way in. |
-| `DELETE /account/devices/{id}` | `{}` | `{ok: true}`. Signs the device out at once and closes its connection. |
-| `DELETE /account/sessions/{id}` | `{}` | `{ok: true, signed_out}`. `signed_out` is true when it was the browser's own session (the cookie is cleared). |
+| `DELETE /account/devices/{id}` | `{}` | `{ok: true}`. Step-up. Signs the device out at once and closes its connection. |
+| `DELETE /account/sessions/{id}` | `{}` | `{ok: true, signed_out}`. Step-up, unless it is the browser's own session (then the cookie is cleared and `signed_out` is true). |
 | `POST /account/sign-out-everywhere` | `{}` | `{signed_out: true}`. Step-up. Ends every device and every browser, this one too, and refuses every access token issued before. |
-| `GET /account/export` | | A JSON file (`Content-Disposition: attachment`) with everything the cloud stores about the account; the same document as `GET /v1/me/export`. |
+| `GET /account/export` | | Step-up. A JSON file (`Content-Disposition: attachment`) with everything the cloud stores about the account; the same document as `GET /v1/me/export`. |
 | `POST /account/email` | `{email}` | `{step: "code", email}`. Step-up. Sends a code to the new address. An address that is invalid, the account's own or banned is `bad_request`. |
-| `POST /account/email/confirm` | `{code}` | `{email}`. Step-up. The code makes the address the account's. If another account has it, `bad_request`, with the words of any other address that cannot be used: the answer does not say who has an address. The account's devices stay signed in. |
+| `POST /account/email/confirm` | `{code}` | `{email}`. Step-up. The code makes the address the account's. If another account has it, `bad_request`, with the words of any other address that cannot be used: the answer does not say who has an address. Every device and every other browser is signed out (the browser that confirmed stays), and the old address gets a notice (see Mail). |
 | `POST /account/deletion` | `{handle}` | `{deletion: {at}}`. Step-up. `handle` must be the account's own handle, any case (else `bad_request`, `field: "handle"`). |
-| `DELETE /account/deletion` | `{}` | `{deletion: null}`. Cancels a scheduled deletion; harmless when there is none. |
+| `DELETE /account/deletion` | `{}` | `{deletion: null}`. Cancels a scheduled deletion; harmless when there is none. From `at` on it is `forbidden` ("The grace period has ended"): the sweep is certain. |
 | `POST /step-up/email` | `{}` | `{step: "code", email_hint}`. Sends a code to the account's own address. `email_hint` is `a***@example.com`. |
 | `POST /step-up/code` | `{code}` | `{fresh_until}`. Without a code asked for, `bad_request`. |
 | `POST /step-up/passkey/finish` | `{id, credential}` | `{fresh_until}`. The answer to the ceremony of `POST /passkey/sign-in/start`. A passkey of another account is `unauthorized`. |
 
 ### Deleting the account
 
-The deletion waits for a **grace period** of 30 days, so a hijacked session or a slip does not lose the account. `POST /account/deletion` schedules it for `at`, signs out every device and every other browser, and keeps the browser that asked, so the player can cancel. The account is not hidden meanwhile: friends still see it. When `at` has passed, the sweep of every node deletes the account the way `DELETE /v1/me` does, with the same effects. Asking again keeps the first time. A player who signs in during the grace period (in the portal or for the launcher) sees `deletion` in `GET /account` and can cancel.
+The deletion waits for a **grace period** of 30 days, so a hijacked session, a stolen access token or a slip does not lose the account. **Every way to delete goes through it**: `POST /account/deletion`, `DELETE /v1/me` of the net service, and the HTML page `/web/account/delete`. Scheduling sets `at`, signs out every device, refuses the access tokens issued so far (the "not before" time moves) and ends every browser session but the one that asked; `DELETE /v1/me` is called by a device, so it ends them all. The account is not hidden meanwhile: friends still see it. The player cancels with `DELETE /account/deletion` until `at`. When `at` has passed, the sweep of every node deletes the account, whatever else happens; an account the sweep cannot delete is tried again ten minutes later, so a few failing rows do not hold up the others. Asking again keeps the first time. A player who signs in during the grace period (in the portal or for the launcher) sees `deletion` in `GET /account` and can cancel. The HTML pages cannot cancel; the portal can.
 
-`DELETE /v1/me` and the HTML page `/web/account/delete` delete at once, as before; they go when the portal covers every flow.
+`GET /v1/me` does not show a scheduled deletion yet: `Me` has no field for it (see Open questions).
 
-### What an e-mail never says
+### Mail
 
-The cloud sends mail with codes only. It does not yet send a notice to the old address when the address changes, when a passkey is added or removed, or when a deletion is scheduled. That is open (see Open questions).
+Besides codes the cloud sends one kind of notice: when the account's address changes, the **old** address gets a plain-text mail (same sender as the codes) that names the new address and says what to do if it was not the player. It does not yet send a notice when a passkey is added or removed, or when a deletion is scheduled or cancelled (see Open questions).
 
 ## Friends
 
@@ -222,7 +223,7 @@ The cloud keeps trophy records only: a title ID, the trophy's number, its grade 
 
 ## Other players
 
-These work without a session; with one, they know the viewer. **A part the viewer may not see is `null`**, as in `Profile`. The rule is one for the whole network ([ADR 0012](../docs/adr/0012-private-by-default.md)): the player always sees everything of themselves; friends see a part unless the player shows it to nobody; anyone else sees it only if the player shows it to everyone; a block in either direction hides every part. A visitor who is not signed in is a stranger.
+These work without a session; with one, they know the viewer. **A part the viewer may not see is `null`**, as in `Profile`. The rule is one for the whole network ([ADR 0012](../docs/adr/0012-private-by-default.md)): the player always sees everything of themselves; friends see a part unless the player shows it to nobody; anyone else sees it only if the player shows it to everyone; A visitor who is not signed in is a stranger. **A block does not show on a public page**: a viewer whom the player blocked, and a viewer who blocked the player, see exactly what a stranger sees, with `relation: "none"`. Hiding more from them than from a visitor who is not signed in would tell them about the block. A block still keeps them from friend-only parts, from friend requests and from messages.
 
 | Request | Answer |
 |---|---|
@@ -255,7 +256,8 @@ With it:
 
 ## Open questions
 
-- Mail notices for security changes (new address, passkey added or removed, deletion scheduled or cancelled). The mailer sends codes only.
+- Mail notices for the other security changes (passkey added or removed, deletion scheduled or cancelled).
+- `deletion_at` in `Me` (`GET /v1/me`), so the launcher can show a scheduled deletion. It needs a field in the API crate and a cloud that reads it.
 - A stricter dormant state during the grace period: the account stays visible to friends now.
 - Recovery codes, and a list of recent sign-ins with a rough place.
 - Renaming a device, and the choice of a visibility preset for the whole profile.
