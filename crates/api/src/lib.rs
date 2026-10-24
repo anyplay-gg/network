@@ -342,7 +342,10 @@ pub struct Member {
     /// The relay the member's net service is reachable through, when it has one.
     #[serde(default)]
     pub relay: Option<String>,
-    /// The member's virtual address, such as `198.18.4.20`.
+    /// The member's virtual address in this session, such as `198.18.4.20`. It differs from the
+    /// address of every other member of the session and stays the same for as long as the
+    /// account is a member. Another session may give the same account another address, and
+    /// another account the same one (ADR 0020).
     pub address: String,
     pub joined: u64,
 }
@@ -784,6 +787,11 @@ pub struct TitlePlaytime {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Event {
     Welcome {
+        /// The address this account gets in a session whenever the session has not given it to
+        /// another member: the same every time, from any session, and not leased. A client
+        /// takes its address in a session from the session's member list; this one is for
+        /// before it is in any, and for clients that predate session addresses (ADR 0020).
+        #[serde(default)]
         address: String,
         server_time: u64,
     },
@@ -1008,6 +1016,33 @@ pub fn is_virtual(address: std::net::Ipv4Addr) -> bool {
     let (base, bits) = VIRTUAL_NETWORK;
     let mask = u32::MAX << (32 - bits);
     u32::from(address) & mask == u32::from(base)
+}
+
+/// How many addresses the virtual range holds.
+pub const VIRTUAL_ADDRESSES: u32 = 1 << (32 - VIRTUAL_NETWORK.1 as u32);
+
+/// How many addresses of the range a session can hand out: all but those ending in .0 or .255.
+pub const ASSIGNABLE_ADDRESSES: u32 = VIRTUAL_ADDRESSES / 256 * 254;
+
+// A session can always give every member an address of its own.
+const _: () = assert!(MAX_MEMBERS as u32 <= ASSIGNABLE_ADDRESSES);
+
+/// True for an address a session may hand out: inside the range, and not ending in .0 or .255,
+/// which some games take for a network or broadcast address.
+pub fn is_assignable(address: std::net::Ipv4Addr) -> bool {
+    let last = address.octets()[3];
+    is_virtual(address) && last != 0 && last != 255
+}
+
+/// The address at `slot` in the range, counted from its first address. `None` past the end.
+pub fn virtual_address(slot: u32) -> Option<std::net::Ipv4Addr> {
+    (slot < VIRTUAL_ADDRESSES)
+        .then(|| std::net::Ipv4Addr::from(u32::from(VIRTUAL_NETWORK.0) + slot))
+}
+
+/// The place of an address in the range, counted from its first address.
+pub fn virtual_slot(address: std::net::Ipv4Addr) -> Option<u32> {
+    is_virtual(address).then(|| u32::from(address) - u32::from(VIRTUAL_NETWORK.0))
 }
 
 // Parties
@@ -1426,5 +1461,33 @@ mod tests {
         assert!(is_virtual("198.19.255.254".parse().unwrap()));
         assert!(!is_virtual("198.20.0.1".parse().unwrap()));
         assert!(!is_virtual("192.168.0.1".parse().unwrap()));
+    }
+
+    #[test]
+    fn slots_count_from_the_start_of_the_range() {
+        assert_eq!(virtual_address(0), Some("198.18.0.0".parse().unwrap()));
+        assert_eq!(virtual_address(257), Some("198.18.1.1".parse().unwrap()));
+        assert_eq!(
+            virtual_address(VIRTUAL_ADDRESSES - 1),
+            Some("198.19.255.255".parse().unwrap())
+        );
+        assert_eq!(virtual_address(VIRTUAL_ADDRESSES), None);
+        for slot in [0, 1, 255, 256, 70_000, VIRTUAL_ADDRESSES - 1] {
+            assert_eq!(virtual_slot(virtual_address(slot).unwrap()), Some(slot));
+        }
+        assert_eq!(virtual_slot("10.0.0.1".parse().unwrap()), None);
+    }
+
+    #[test]
+    fn the_ends_of_a_block_are_not_assignable() {
+        assert!(is_assignable("198.18.0.1".parse().unwrap()));
+        assert!(is_assignable("198.19.255.254".parse().unwrap()));
+        assert!(!is_assignable("198.18.0.0".parse().unwrap()));
+        assert!(!is_assignable("198.18.7.255".parse().unwrap()));
+        assert!(!is_assignable("10.0.0.1".parse().unwrap()));
+        let counted = (0..VIRTUAL_ADDRESSES)
+            .filter(|s| is_assignable(virtual_address(*s).unwrap()))
+            .count() as u32;
+        assert_eq!(counted, ASSIGNABLE_ADDRESSES);
     }
 }
