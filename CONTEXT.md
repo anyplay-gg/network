@@ -53,8 +53,24 @@ A credential of the player's phone, computer or security key that signs them in 
 _Avoid_: Biometric login, WebAuthn (the standard behind it)
 
 **Account web**:
-The pages of the cloud, in the player's browser, where they sign in, create an account and manage it. The launcher only starts the browser flow.
-_Avoid_: Portal (the later pages for profiles, trophies and friends), dashboard
+The server-rendered pages of the cloud, in the player's browser, where they sign in, create an account and manage it. The launcher only starts the browser flow. The portal replaces them.
+_Avoid_: Dashboard
+
+**Portal**:
+The web app the cloud serves from its own origin, where a player signs in, manages the account, and sees friends, trophies and profiles. It talks to the cloud through the portal API.
+_Avoid_: Dashboard, site, web client
+
+**Browser session**:
+A browser's own session on the cloud, with its cookie and CSRF token, apart from the tokens of devices. An account can have several, and ends each one by itself.
+_Avoid_: Login, device (a device is a PC with tokens)
+
+**Step-up**:
+Proving again, with an e-mail code or a passkey, who the player is before an action that would give a thief of the session a lasting hold. A session that signed in or stepped up in the last 15 minutes is fresh.
+_Avoid_: Re-login, reauthentication
+
+**Grace period**:
+The 30 days between the player asking to delete the account and the cloud deleting it. They can cancel until it ends.
+_Avoid_: Cooling-off, trash
 
 **Sign out everywhere**:
 Ending every device and every browser session of an account at once, and refusing every access token issued before.
@@ -140,6 +156,50 @@ _Avoid_: Host, owner
 The encrypted connection between the net services of two party members that carries their voice. It runs on the same endpoint as their tunnel and takes the same direct or relayed path, but is a connection of its own. Only members the party names can hold one.
 _Avoid_: Voice tunnel, call, voice channel (that is the party's one channel as the player sees it)
 
+**Share play**:
+A player streams their running game to one friend in their party, who watches, plays as them, or plays beside them. The friend needs neither the game nor its files.
+_Avoid_: Remote play (playing one's own console from afar), screen share, broadcast
+
+**Share**:
+One run of share play between a host and a guest, from the invitation to the stop.
+_Avoid_: Session (that is a group of players in a game), call
+
+**Host**:
+The player whose PC runs the game in a share. The host starts it, picks the mode, and can end it or take control back at any moment. A host is not necessarily the party leader.
+_Avoid_: Streamer (who broadcasts to many), owner
+
+**Guest**:
+The party member the host invited into a share. A guest sees and hears the game and, when the mode allows, plays with a pad. A guest never gets the game or its data.
+_Avoid_: Visitor, viewer (the viewer is the guest's window), spectator
+
+**Share mode**:
+What the guest may do in a share. Watch: see and hear only. Hand over: the guest plays as the host's pad, and the host's own pad is muted. Play together: the guest is a second player.
+_Avoid_: Permission level, role
+
+**Guest pad**:
+The pad that the host's game sees for the guest's input. It exists only while the share mode allows it, and it is never more than buttons, sticks and triggers.
+_Avoid_: Remote control, virtual keyboard
+
+**Override**:
+The host's way to take control back from the guest at once: a chord on their own pad, a key, or a button in the launcher. A second override ends the share.
+_Avoid_: Kill switch, pause
+
+**Stream**:
+The picture and the sound of the host's game as they go to the guest during a share.
+_Avoid_: Broadcast, recording, feed (that is the friends' activity list)
+
+**Stream delay**:
+The time from the host's game showing a picture to the guest's screen showing the same picture.
+_Avoid_: Lag, ping
+
+**Share connection**:
+The encrypted connection between the net services of host and guest that carries the stream and the guest's pad. It runs on the same endpoint as their tunnel and takes the same direct or relayed path, but is a connection of its own. Only the two accounts the share names can hold it.
+_Avoid_: Stream tunnel, call
+
+**Share worker**:
+The helper program on a player's PC that, for a host, turns the game's pictures and sound into the stream and, for a guest, shows it and reads the guest's pad. It is downloaded by the launcher the first time it is needed.
+_Avoid_: Encoder, plugin, viewer (that is only the guest's side)
+
 **Conversation**:
 A chat between accounts: two of them (direct), up to 32 (group), or the members of a party (the party's chat). Everything in it is text.
 _Avoid_: Thread, channel, room
@@ -197,7 +257,3 @@ _Avoid_: History, ban log
 **Restriction**:
 A limit on what an account may do at the moment: too new an account, or a mute.
 _Avoid_: Penalty
-
-**Share play**:
-A player streams their running game to a friend, who watches and may take over a pad. The friend needs neither the game nor its files.
-_Avoid_: Remote play (playing one's own console from afar), screen share
