@@ -19,6 +19,8 @@ The launcher sends **commands**; each has a number `id` and a name `do`:
 {"id": 7, "do": "add_friend", "handle": "Lumen"}
 ```
 
+No command has a field of its own named `id`, since it would take the place of the number. A command about an invitation or a dialog names it `invitation` or `dialog`.
+
 The net service answers every command once, with the same `id`, either `ok` or `error`:
 
 ```json
@@ -78,8 +80,8 @@ A **restriction** has a `kind` and, when they apply, `until`, `rule`, `reason`, 
 | `game_start` | `title_id`, `title`, `version`, `build`, `join` (a session ID or null) | `{env}` |
 | `game_end` | | `{}` |
 | `invite` | `accounts` | `{sent}` |
-| `answer_invitation` | `id`, `accept` | `{session, title_id}` when accepted, else `{}` |
-| `dialog` | `id`, `accounts` (null when the player closed the picker) | `{}` |
+| `answer_invitation` | `invitation` (its `id`), `accept` | `{session, title_id}` when accepted, else `{}` |
+| `dialog` | `dialog` (the `id` of the `invite_dialog` event), `accounts` (null when the player closed the picker) | `{}` |
 | `relay_only` | `on` | `{}` |
 | `upload_trophies` | `title_id`, `trophies` | `{added}` |
 | `trophies` | `account` | `{titles}`, or the error `not_found` when they are hidden |
@@ -91,7 +93,7 @@ A **restriction** has a `kind` and, when they apply, `until`, `rule`, `reason`, 
 | `upload_playtime` | `entries` | `{changed}` |
 | `party` | | `{party}`: the player's `Party`, or null |
 | `party_invite` | `accounts` | `{sent}`: friends are invited; a party is made when the player is in none |
-| `party_answer` | `id`, `accept` | `{party}` when accepted, else `{}` |
+| `party_answer` | `invitation` (its `id`), `accept` | `{party}` when accepted, else `{}` |
 | `party_leave` | | `{}` |
 | `party_kick` | `account` | `{}` (leader) |
 | `party_leader` | `account` | `{}` (leader) |
