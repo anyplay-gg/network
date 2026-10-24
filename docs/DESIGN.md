@@ -30,7 +30,7 @@ The bridge is small on purpose. It forwards; it does not translate.
 - **One connection** to the net service, speaking the [bridge protocol](../spec/bridge-protocol.md). Request bodies pass through as opaque bytes, so the engine needs no JSON, WebSocket or ICE code.
 - **What it forwards:**
   - sign-in state and its changes, reachability, the handle and account ID;
-  - the online-permission check, answered by the network's own rules: signed in and not banned;
+  - the online-permission check stays as AnyPS5 answers it today until phase 4 ([ADR 0008](adr/0008-the-online-permission-check-waits.md));
   - NAT information measured by the net service;
   - every web API request (user context, API group, path, method, headers, body) and its response, plus push events in the other direction;
   - session signaling: activation, connection state and connection info;
@@ -39,7 +39,7 @@ The bridge is small on purpose. It forwards; it does not translate.
 
 ### Net service (this repository)
 
-A separate process that the launcher starts and watches ([ADR 0004](adr/0004-net-service-runs-as-its-own-process.md)).
+A separate process that the launcher starts and watches ([ADR 0004](adr/0004-net-service-runs-as-its-own-process.md)), `anyplay-net` in `crates/net`. The launcher talks to it over its standard streams ([ADR 0006](adr/0006-the-launcher-talks-to-the-net-service-over-its-standard-streams.md), [control protocol](../spec/control-protocol.md)). One task owns its state and handles commands, cloud events, bridge frames and tunnel changes one at a time; requests to the cloud run beside it and report back. Game packets never pass that task: they go from the bridge's loopback socket straight into the tunnel.
 
 - **Account and device.** The refresh token is kept in the operating system's credential store.
 - **A lasting connection to the cloud** for presence, invitations, friend requests and session events.
@@ -75,7 +75,7 @@ A link such as `anyps5://v1/join/…` never starts a game by itself; it opens th
 |---|---|
 | Am I signed in? | Yes while the net service holds a valid session; changes arrive as callbacks. |
 | Who am I? | The handle as online ID (at most 16 characters, the size games reserve) and a 64-bit account ID from the cloud. |
-| May I use online features? | Yes when signed in and not banned. |
+| May I use online features? | As AnyPS5 answers today, until phase 4 decides it after a legal review ([ADR 0008](adr/0008-the-online-permission-check-waits.md)). |
 | Which NAT type? | Measured by the net service. Because a relay is always reachable, the game sees at least type 2. |
 | Authorization code or ID token for client X | Only for the network's own clients; an error for any publisher's client. |
 | Create, join or leave a session; set its properties | A cloud session. |
@@ -101,5 +101,7 @@ A link such as `anyps5://v1/join/…` never starts a game by itself; it opens th
 | 3 Tunnel | peer-to-peer sockets, virtual addresses, session signaling | two fake games exchange packets over the internet, direct and relayed, in CI |
 | 4 Sessions | sessions, invitations, join intents, invitation dialog, version guard | two players play a class A game together over the internet |
 | 5 More | matchmaking, voice chat with friends in any game, profiles, leaderboards, save backups | by choice |
+
+Where it stands (October 2026): the probe for phase 0 is ready to measure between two real networks; the cloud v0, the net service and the launcher's online area of phase 1 are built and tested together, and wait for a cloud that runs; the bridge of phase 2 is under review in the fork; the net service's side of phases 3 and 4 is in place and tested with fake games, the bridge's is not ([docs/gaps.md](gaps.md)).
 
 Until AnyPS5 decides otherwise, the bridge ships in an AnyPlay build of AnyPS5 that the launcher offers as a toolkit channel. Players who don't pick it stay offline as before. For AnyPS5 itself we will propose only the neutral part: one variable and an openly documented protocol between its network libraries and an outside service, with today's offline behaviour when the variable is unset.
