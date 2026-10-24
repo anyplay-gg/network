@@ -25,6 +25,18 @@ pub const MAX_TROPHY_UPLOAD: usize = 512;
 pub const MAX_CARDS: usize = 100;
 /// Rarity is given once this many players have a title, so it cannot reveal one player.
 pub const RARITY_MIN_PLAYERS: u32 = 10;
+/// The longest profile text, in characters.
+pub const MAX_ABOUT: usize = 160;
+/// The most favourite titles a profile lists.
+pub const MAX_FAVOURITES: usize = 3;
+/// The largest avatar picture an upload may carry, in bytes.
+pub const MAX_AVATAR_UPLOAD: usize = 1024 * 1024;
+/// Avatars are stored as squares of this many pixels on a side.
+pub const AVATAR_SIZE: u32 = 256;
+/// The most playtime entries one upload carries.
+pub const MAX_PLAYTIME_UPLOAD: usize = 512;
+/// A day has this many minutes, the most one title can have on one day.
+pub const MAX_DAY_MINUTES: u32 = 24 * 60;
 /// Account IDs stay below 2^53 so every JSON parser reads them exactly.
 pub const MAX_ACCOUNT_ID: u64 = (1 << 53) - 1;
 /// The shortest and longest handle, in characters.
@@ -483,6 +495,9 @@ pub struct Card {
     pub account: Account,
     /// `None` when the account's trophies are hidden from the caller.
     pub trophies: Option<Count>,
+    /// The hash of the avatar, `None` when there is none or it is hidden from the caller.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub avatar: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -501,10 +516,219 @@ pub enum Audience {
     Nobody,
 }
 
-/// What a player shows to whom.
+/// What a player shows to whom. A part left out of the JSON has the default, friends.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Privacy {
     pub trophies: Audience,
+    pub about: Audience,
+    pub favourites: Audience,
+    pub avatar: Audience,
+    pub playtime: Audience,
+}
+
+/// A part of a profile that has a visibility of its own.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Part {
+    Trophies,
+    About,
+    Favourites,
+    Avatar,
+    Playtime,
+}
+
+impl Privacy {
+    /// Who may see `part`.
+    pub fn audience(&self, part: Part) -> Audience {
+        match part {
+            Part::Trophies => self.trophies,
+            Part::About => self.about,
+            Part::Favourites => self.favourites,
+            Part::Avatar => self.avatar,
+            Part::Playtime => self.playtime,
+        }
+    }
+}
+
+// Profiles, avatars and playtime
+
+/// Why a profile text cannot be used.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AboutProblem {
+    TooLong,
+    /// A control or direction-changing character.
+    Character,
+    Link,
+}
+
+/// Checks a profile text: at most [`MAX_ABOUT`] characters of plain text, no control characters
+/// and no links.
+pub fn check_about(text: &str) -> Result<(), AboutProblem> {
+    if text.chars().count() > MAX_ABOUT {
+        return Err(AboutProblem::TooLong);
+    }
+    if text.chars().any(|c| {
+        c.is_control()
+            || matches!(
+                c,
+                '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2060}'..='\u{2069}' | '\u{FEFF}'
+            )
+    }) {
+        return Err(AboutProblem::Character);
+    }
+    if contains_link(text) {
+        return Err(AboutProblem::Link);
+    }
+    Ok(())
+}
+
+/// True for text that holds an address a reader could follow: a scheme with `:`, `www.`, or a
+/// word of letters and digits joined by dots that ends in letters, such as `example.com`.
+pub fn contains_link(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    if lower.contains("://") || lower.contains("www.") {
+        return true;
+    }
+    for scheme in ["mailto:", "javascript:", "data:", "file:", "tel:"] {
+        if lower.contains(scheme) {
+            return true;
+        }
+    }
+    // A dot between a letter or digit and a run of 2 to 24 letters is a domain.
+    let chars: Vec<char> = lower.chars().collect();
+    chars.iter().enumerate().any(|(n, &c)| {
+        if c != '.' || n == 0 || !chars[n - 1].is_alphanumeric() {
+            return false;
+        }
+        let run = chars[n + 1..]
+            .iter()
+            .take_while(|c| c.is_alphabetic())
+            .count();
+        (2..=24).contains(&run) && !chars.get(n + 1 + run).is_some_and(|c| c.is_alphanumeric())
+    })
+}
+
+/// Why a list of favourite titles cannot be used.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FavouritesProblem {
+    TooMany,
+    TitleId,
+    Duplicate,
+}
+
+/// Checks a list of favourite titles: at most [`MAX_FAVOURITES`], each passing [`is_title_id`],
+/// none twice.
+pub fn check_favourites(titles: &[String]) -> Result<(), FavouritesProblem> {
+    if titles.len() > MAX_FAVOURITES {
+        return Err(FavouritesProblem::TooMany);
+    }
+    for (n, title) in titles.iter().enumerate() {
+        if !is_title_id(title) {
+            return Err(FavouritesProblem::TitleId);
+        }
+        if titles[..n].contains(title) {
+            return Err(FavouritesProblem::Duplicate);
+        }
+    }
+    Ok(())
+}
+
+/// A UTC date written `YYYY-MM-DD` as the number of days since 1970-01-01, or `None` when the text
+/// is not a real date between the years 2000 and 2999.
+pub fn day_number(text: &str) -> Option<i64> {
+    let bytes = text.as_bytes();
+    if bytes.len() != 10 || bytes[4] != b'-' || bytes[7] != b'-' {
+        return None;
+    }
+    let number = |range: std::ops::Range<usize>| -> Option<i64> {
+        let part = text.get(range)?;
+        if part.bytes().all(|b| b.is_ascii_digit()) {
+            part.parse().ok()
+        } else {
+            None
+        }
+    };
+    let (year, month, day) = (number(0..4)?, number(5..7)?, number(8..10)?);
+    if !(2000..=2999).contains(&year) || !(1..=12).contains(&month) || day < 1 {
+        return None;
+    }
+    let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    let length = match month {
+        2 if leap => 29,
+        2 => 28,
+        4 | 6 | 9 | 11 => 30,
+        _ => 31,
+    };
+    if day > length {
+        return None;
+    }
+    // Days from civil, after Howard Hinnant.
+    let y = if month <= 2 { year - 1 } else { year };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let doy = (153 * (if month > 2 { month - 3 } else { month + 9 }) + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    Some(era * 146_097 + doe - 719_468)
+}
+
+/// What a profile shows. A part is `None` when it is not set or the caller may not see it; the two
+/// look the same on purpose.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Profile {
+    pub account: Account,
+    pub about: Option<String>,
+    pub favourites: Option<Vec<String>>,
+    /// The hash of the avatar picture; the picture is at `/v1/avatars/{hash}`.
+    pub avatar: Option<String>,
+    /// Total minutes per title.
+    pub playtime: Option<Vec<TitlePlaytime>>,
+}
+
+/// New values for the parts of a profile. A part left out stays as it is; an empty `about` or
+/// list clears it.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProfileUpdate {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub about: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub favourites: Option<Vec<String>>,
+}
+
+/// The answer to an avatar upload.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AvatarSet {
+    pub avatar: String,
+}
+
+/// True for the hash of an avatar: 64 lowercase hexadecimal digits.
+pub fn is_avatar_hash(text: &str) -> bool {
+    text.len() == 64 && text.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+}
+
+/// Minutes played of one title on one UTC day.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlaytimeEntry {
+    pub title_id: String,
+    /// `YYYY-MM-DD`, UTC.
+    pub day: String,
+    pub minutes: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlaytimeUpload {
+    pub entries: Vec<PlaytimeEntry>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlaytimeAdded {
+    /// How many entries were new or raised the minutes kept for their day.
+    pub changed: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TitlePlaytime {
+    pub title_id: String,
+    pub minutes: u64,
 }
 
 // Events
@@ -701,6 +925,93 @@ mod tests {
         assert_eq!(Privacy::default().trophies, Audience::Friends);
         let read: Privacy = serde_json::from_str(r#"{"trophies":"nobody"}"#).unwrap();
         assert_eq!(read.trophies, Audience::Nobody);
+    }
+
+    #[test]
+    fn privacy_written_before_profiles_still_reads() {
+        let read: Privacy = serde_json::from_str(r#"{"trophies":"everyone"}"#).unwrap();
+        assert_eq!(read.trophies, Audience::Everyone);
+        assert_eq!(read.about, Audience::Friends);
+        assert_eq!(read.playtime, Audience::Friends);
+        assert_eq!(read.audience(Part::Avatar), Audience::Friends);
+        let card: Card =
+            serde_json::from_str(r#"{"account":{"id":1,"handle":"Alec"},"trophies":null}"#)
+                .unwrap();
+        assert_eq!(card.avatar, None);
+    }
+
+    #[test]
+    fn about_texts_are_plain_and_short() {
+        assert_eq!(check_about(""), Ok(()));
+        assert_eq!(check_about("Speedruns on weekends, e.g. at night."), Ok(()));
+        assert_eq!(check_about("Version 1.5 is my favourite"), Ok(()));
+        assert_eq!(check_about(&"a".repeat(MAX_ABOUT)), Ok(()));
+        assert_eq!(check_about(&"\u{e4}".repeat(MAX_ABOUT)), Ok(()));
+        assert_eq!(
+            check_about(&"a".repeat(MAX_ABOUT + 1)),
+            Err(AboutProblem::TooLong)
+        );
+        assert_eq!(check_about("two\nlines"), Err(AboutProblem::Character));
+        assert_eq!(check_about("a\u{202E}b"), Err(AboutProblem::Character));
+        for link in [
+            "see https://example.com",
+            "HTTP://x",
+            "www.example",
+            "visit example.com now",
+            "mail me: a@example.org",
+            "discord.gg/abc",
+            "mailto:a@b.cd",
+            "(example.com)",
+            "foo.bar-baz.io!",
+        ] {
+            assert_eq!(check_about(link), Err(AboutProblem::Link), "{link}");
+        }
+    }
+
+    #[test]
+    fn favourites_are_few_distinct_title_ids() {
+        let list = |items: &[&str]| items.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(check_favourites(&[]), Ok(()));
+        assert_eq!(
+            check_favourites(&list(&["GAME00001", "GAME00002", "GAME00003"])),
+            Ok(())
+        );
+        assert_eq!(
+            check_favourites(&list(&["A", "B", "C", "D"])),
+            Err(FavouritesProblem::TooMany)
+        );
+        assert_eq!(
+            check_favourites(&list(&["../x"])),
+            Err(FavouritesProblem::TitleId)
+        );
+        assert_eq!(
+            check_favourites(&list(&["A", "A"])),
+            Err(FavouritesProblem::Duplicate)
+        );
+    }
+
+    #[test]
+    fn days_are_real_utc_dates() {
+        assert_eq!(day_number("2000-01-01"), Some(10_957));
+        assert_eq!(day_number("2026-10-24"), Some(20_750));
+        assert_eq!(day_number("2024-02-29"), Some(19_782));
+        assert_eq!(day_number("2025-02-29"), None);
+        assert_eq!(day_number("2026-13-01"), None);
+        assert_eq!(day_number("2026-00-10"), None);
+        assert_eq!(day_number("2026-04-31"), None);
+        assert_eq!(day_number("1999-12-31"), None);
+        assert_eq!(day_number("2026-1-1"), None);
+        assert_eq!(day_number("2026-10-24T00:00"), None);
+        assert_eq!(day_number("+026-10-24"), None);
+        assert_eq!(day_number("\u{ff12}026-10-24"), None);
+    }
+
+    #[test]
+    fn avatar_hashes_are_lowercase_hex() {
+        assert!(is_avatar_hash(&"a0".repeat(32)));
+        assert!(!is_avatar_hash(&"A0".repeat(32)));
+        assert!(!is_avatar_hash("abc"));
+        assert!(!is_avatar_hash(&format!("../{}", "a".repeat(61))));
     }
 
     #[test]

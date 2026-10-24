@@ -67,11 +67,14 @@ Error codes are those of the [cloud API](cloud-api.md), plus `unknown_command`, 
 | `cards` | `accounts` | `{cards}` |
 | `privacy` | | the player's `Privacy` |
 | `set_privacy` | `privacy` | the new `Privacy` |
+| `profile` | `account` | `Profile`: the parts the player may see of that account |
+| `upload_playtime` | `entries` | `{changed}` |
 
 - `hello` comes first. Until it is answered every other command gets `bad_state`. The net service then resumes the device's saved sign-in, if there is one.
 - `email` starts a sign-in; `code` finishes it or, for a new address, asks for `sign_up`.
 - `game_start` answers the variables the launcher adds to the game's environment, at present `ANYPS5_NET_ENDPOINT` and `ANYPS5_NET_TOKEN` from the [bridge protocol](bridge-protocol.md). With `join`, the net service holds the join intent for that session. `game_end` follows when the game's process has ended.
 - `invite` invites friends to the session the player is in.
+- `profile` only reads. A player edits their profile, avatar and visibility on the cloud's web site, which uses the HTTP API directly ([cloud API](cloud-api.md#profiles-avatars-and-playtime)); the launcher shows what `profile` and `cards` answer. `upload_playtime` can be sent again with the same entries; the cloud keeps the highest minutes per title and day.
 - `relay_only` keeps every tunnel on a relay, so other players never learn the PC's addresses, or lets them go direct again. Running tunnels start again and the peers reconnect, so the launcher sends it while no game runs. `anyplay-net --relay-only` starts with it on.
 
 ## Events

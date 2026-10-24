@@ -85,11 +85,18 @@ _Avoid_: Trace, capture, dump (a dump is a game folder)
 ### Social
 
 **Profile**:
-What a player shows of themselves: handle, avatar, a short text and favourite games, each part visible to friends, everyone or nobody.
+What a player shows of themselves: handle, avatar, a short text, favourite games and playtime, each part visible to friends, everyone or nobody.
 _Avoid_: Account (the sign-in identity behind it)
 
+**Avatar**:
+The picture a player chose for their profile: a square the cloud made from the player's own PNG or JPEG file. Never taken from a game.
+_Avoid_: Icon, profile picture (when the cloud's square is meant), game art
+
+**Playtime**:
+The minutes a player spent in a title, counted per title and per day by the launcher. The cloud keeps the highest number it has seen for a day, so a repeated upload does not count twice.
+
 **Gamer card**:
-The short form of a profile that friends see in their list: avatar, handle, what they play, trophy count.
+The short form of a profile that friends see in their list: avatar, handle, what they play, trophy count. It holds nothing else, so it stays small.
 
 **Trophy record**:
 The network's note that a player earned one trophy: title ID, the trophy's number in the game, its grade and the time. Names and pictures of trophies are not part of it; they come from each player's own copy of the game.

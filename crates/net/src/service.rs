@@ -14,8 +14,8 @@ use std::time::{Duration, Instant};
 
 use anyplay_api::{
     Activity, CodeAnswer, CreateSession, Device, ErrorCode, Event, FriendLists, Invitation,
-    JoinSession, Me, Platform, PresenceRequest, Report, Session, Visibility, check_handle,
-    is_title_id,
+    JoinSession, MAX_DAY_MINUTES, MAX_PLAYTIME_UPLOAD, Me, Platform, PlaytimeEntry,
+    PresenceRequest, Report, Session, Visibility, check_handle, day_number, is_title_id,
 };
 use anyplay_bridge_protocol::{
     self as bridge, ActivateResult, DialogResult, Frame, Message, PeerInfoReply, PeerState,
@@ -638,6 +638,30 @@ impl Service {
                     id,
                     async move { cloud.set_privacy(&privacy).await },
                     |_, p| p,
+                );
+            }
+            Command::Profile { account } => {
+                let Some(cloud) = self.signed_in_cloud(id) else {
+                    return;
+                };
+                self.request(
+                    id,
+                    async move { cloud.profile(account).await },
+                    |_, profile| profile,
+                );
+            }
+            Command::UploadPlaytime { entries } => {
+                if let Some(problem) = playtime_problem(&entries) {
+                    self.fail(id, Failure::new(ErrorCode::BadRequest.as_str(), problem));
+                    return;
+                }
+                let Some(cloud) = self.signed_in_cloud(id) else {
+                    return;
+                };
+                self.request(
+                    id,
+                    async move { cloud.upload_playtime(entries).await },
+                    |_, changed| changed,
                 );
             }
             Command::RelayOnly { on } => {
@@ -2224,7 +2248,6 @@ where
     }
 }
 
-/// The endpoint key of this device, made on first use and kept in `data`.
 fn bad_title() -> Failure {
     Failure::new(
         ErrorCode::BadRequest.as_str(),
@@ -2232,6 +2255,28 @@ fn bad_title() -> Failure {
     )
 }
 
+/// What is wrong with playtime entries, if anything, before they go to the cloud.
+fn playtime_problem(entries: &[PlaytimeEntry]) -> Option<String> {
+    if entries.len() > MAX_PLAYTIME_UPLOAD {
+        return Some(format!(
+            "Send at most {MAX_PLAYTIME_UPLOAD} entries at a time."
+        ));
+    }
+    for entry in entries {
+        if !is_title_id(&entry.title_id) {
+            return Some(bad_title().message);
+        }
+        if day_number(&entry.day).is_none() {
+            return Some("A day is a date such as 2026-10-24.".into());
+        }
+        if entry.minutes > MAX_DAY_MINUTES {
+            return Some("A day has 1,440 minutes.".into());
+        }
+    }
+    None
+}
+
+/// The endpoint key of this device, made on first use and kept in `data`.
 fn endpoint_key(data: &std::path::Path) -> SecretKey {
     let path = data.join("endpoint.key");
     if let Ok(text) = std::fs::read_to_string(&path) {
@@ -2247,4 +2292,30 @@ fn endpoint_key(data: &std::path::Path) -> SecretKey {
         tracing::warn!("could not keep the endpoint key: {error}");
     }
     key
+}
+
+#[cfg(test)]
+mod profile_tests {
+    use super::*;
+
+    fn entry(title: &str, day: &str, minutes: u32) -> PlaytimeEntry {
+        PlaytimeEntry {
+            title_id: title.into(),
+            day: day.into(),
+            minutes,
+        }
+    }
+
+    #[test]
+    fn playtime_is_checked_before_it_leaves() {
+        assert_eq!(
+            playtime_problem(&[entry("GAME00001", "2026-10-24", 1440)]),
+            None
+        );
+        assert!(playtime_problem(&[entry("GAME00001", "2026-10-24", 1441)]).is_some());
+        assert!(playtime_problem(&[entry("GAME00001", "24.10.2026", 5)]).is_some());
+        assert!(playtime_problem(&[entry("../x", "2026-10-24", 5)]).is_some());
+        let many = vec![entry("GAME00001", "2026-10-24", 1); MAX_PLAYTIME_UPLOAD + 1];
+        assert!(playtime_problem(&many).is_some());
+    }
 }
