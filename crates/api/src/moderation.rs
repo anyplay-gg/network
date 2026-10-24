@@ -146,6 +146,16 @@ pub struct Statement {
     pub appeal: AppealInfo,
 }
 
+impl Statement {
+    /// True while the action limits the account at `now` (Unix seconds): a mute or a ban that has
+    /// neither been lifted nor run out. A warning limits nothing.
+    pub fn is_active(&self, now: u64) -> bool {
+        self.kind != ActionKind::Warning
+            && self.lifted.is_none()
+            && self.until.is_none_or(|until| now < until)
+    }
+}
+
 /// What a banned person gets with the `banned` error: the statement of reasons, when the cloud has
 /// one, and a token that reads their statements and files an appeal for a few days
 /// (`GET /v1/me/actions`, `POST /v1/me/actions/{id}/appeal`), because a banned account cannot sign
@@ -456,6 +466,33 @@ mod tests {
         let text = serde_json::to_string(&statement).unwrap();
         assert!(!text.contains("until") && !text.contains("lifted"));
         assert_eq!(serde_json::from_str::<Statement>(&text).unwrap(), statement);
+    }
+
+    #[test]
+    fn only_a_mute_or_a_ban_that_runs_limits_the_account() {
+        let action = |kind, until, lifted| Statement {
+            id: 1,
+            kind,
+            rule: Rule::Spam,
+            reason: String::new(),
+            created: 10,
+            until,
+            lifted,
+            from_report: false,
+            automated: false,
+            appeal: AppealInfo {
+                status: AppealStatus::Available,
+                deadline: 99,
+                text: None,
+                answer: None,
+                decided: None,
+            },
+        };
+        assert!(action(ActionKind::Mute, Some(100), None).is_active(99));
+        assert!(!action(ActionKind::Mute, Some(100), None).is_active(100));
+        assert!(!action(ActionKind::Mute, Some(100), Some(50)).is_active(60));
+        assert!(action(ActionKind::Ban, None, None).is_active(u64::MAX));
+        assert!(!action(ActionKind::Warning, None, None).is_active(0));
     }
 
     #[test]

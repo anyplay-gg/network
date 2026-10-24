@@ -4,14 +4,14 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyplay_api::{
-    AccountId, AccountLink, AccountTrophies, AddToConversation, Added, ApiError,
+    AccountId, AccountLink, AccountTrophies, AddToConversation, Added, ApiError, AppealRequest,
     BrowserTokenRequest, Cards, CodeAnswer, CodeRequest, Conversation, Conversations,
     CreateConversation, CreateSession, Device, EmailAnswer, EmailRequest, ErrorCode, FriendLists,
     FriendRequest, FriendRequestAnswer, Info, Invite, Invited, JoinSession, MarkRead, Me, Message,
     Messages, MoveParty, Party, PartyEndpoint, PartyInvitations, PlaytimeAdded, PlaytimeEntry,
     PlaytimeUpload, PresenceRequest, Privacy, Profile, Rarity, RefreshRequest, Relays, Report,
-    SendMessage, Session, SignedIn, SignupRequest, TicketRequest, Tokens, TrophiesAdded, Trophy,
-    TrophyUpload, UpdateParty, UpdateSession, path,
+    SendMessage, Session, SignedIn, SignupRequest, Statement, Statements, TicketRequest, Tokens,
+    TrophiesAdded, Trophy, TrophyUpload, UpdateParty, UpdateSession, path,
 };
 use anyplay_proof::{DeviceKey, Subject};
 use reqwest::{Method, StatusCode};
@@ -562,6 +562,25 @@ impl Cloud {
         let list: Vec<String> = accounts.iter().map(|a| a.to_string()).collect();
         let path = format!("{}?accounts={}", path::CARDS, list.join(","));
         self.call::<(), _>(Method::GET, &path, None).await
+    }
+
+    /// The actions against the signed-in account, newest first.
+    pub async fn actions(&self) -> Result<Statements, CloudError> {
+        self.call::<(), _>(Method::GET, path::ME_ACTIONS, None)
+            .await
+    }
+
+    /// Files the appeal against one of the account's actions.
+    pub async fn appeal(&self, action: u64, text: &str) -> Result<Statement, CloudError> {
+        let body = AppealRequest {
+            text: text.to_owned(),
+        };
+        self.call(
+            Method::POST,
+            &path::fill(path::ME_ACTION_APPEAL, action),
+            Some(&body),
+        )
+        .await
     }
 
     pub async fn privacy(&self) -> Result<Privacy, CloudError> {

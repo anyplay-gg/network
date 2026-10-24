@@ -36,6 +36,22 @@ Fields the receiver does not know are ignored, and so are events it does not kno
 
 Error codes are those of the [cloud API](cloud-api.md), plus `unknown_command`, `offline` (the cloud cannot be reached), `not_signed_in`, `no_game` and `bad_state` (the command does not fit what is happening, such as a code without an e-mail before it).
 
+An error can carry more than a code and a message. `version_mismatch` adds `expected`. `restricted` and `banned` add `restriction`, so the launcher can say what is limited and until when instead of showing a generic failure:
+
+```json
+{"id": 9, "error": {"code": "restricted", "message": "A moderator muted this account.", "restriction": {"kind": "muted", "until": 1793000000, "rule": "spam", "reason": "Links in every message.", "action": 41, "appeal": {"status": "available", "deadline": 1808000000}}}}
+```
+
+A **restriction** has a `kind` and, when they apply, `until`, `rule`, `reason`, `action` and `appeal`. It is the cloud's statement of reasons ([cloud API](cloud-api.md#moderation)) reduced to what the player reads; it never names a reporter or a moderator, and the appeal token of a ban stays in the net service.
+
+| `kind` | Meaning | Comes with |
+|---|---|---|
+| `muted` | A moderator muted the account: no friend requests and no messages. | `until`, `rule`, `reason`, `action`, `appeal` |
+| `new_account` | The account is too new to write to people who are not friends, or to send more friend requests today. Nothing a moderator did. | `until` (when it may) |
+| `banned` | The account is banned and signed out. | `until` (absent for good), and when the cloud has a statement `rule`, `reason`, `action`, `appeal` |
+
+`kind` is a plain string and `appeal.status` too (`available`, `open`, `upheld`, `reversed`, `expired`): a launcher treats a value it does not know as a restriction it cannot name, and still shows `until` and `reason`. A `restricted` failure from a net service that predates this field has none; the launcher then falls back to the `message`.
+
 ## Commands
 
 | `do` | Fields | `ok` |
@@ -44,6 +60,7 @@ Error codes are those of the [cloud API](cloud-api.md), plus `unknown_command`, 
 | `browser_sign_in` | `create` (default false) | `{url}`: open it in the system browser |
 | `cancel_sign_in` | | `{}` |
 | `account_page` | | `{url}`: open it in the system browser |
+| `appeal` | `action` (a restriction's `action`), `text` (1 to 1,000 characters) | `{}`; the `restrictions` event follows with the appeal's new status. `limit` when the action was appealed before, `forbidden` after its deadline, `not_found` for an action that is not the player's |
 | `email` (deprecated) | `email` | `{code_length}` |
 | `code` (deprecated) | `code` | `{result: "signed_in" \| "new_account"}` |
 | `sign_up` (deprecated) | `handle`, `age_confirmed` | `{}` |
@@ -120,6 +137,8 @@ Error codes are those of the [cloud API](cloud-api.md), plus `unknown_command`, 
 | `session` | `session` or null | the session the player is in changed, began or ended |
 | `invite_dialog` | `id`, `title`, `max` | the game opened its invitation dialog; answer with `dialog` |
 | `notice` | `code`, `message` | something failed that no command waits for |
+| `restrictions` | `restrictions` | what limits the signed-in account now: a list of restrictions, empty when nothing does. Sent after the account goes online, when a moderator mutes or warns it, when an appeal is filed or decided, and after a `restricted` failure the list did not contain |
+| `banned` | `restriction` | the account was banned (the event connection saw it, or a request answered `banned`); the account is signed out. A `notice` with the code `banned` is sent too, for launchers that predate this event |
 | `party` | `party` or null | the party the player is in changed, began or ended; a copy with an older revision is dropped before it gets here |
 | `voice` | `state`, `enabled`, `mode`, `me`, `peers` | the voice state changed, or while voice runs a level or a link changed (at most ten a second) |
 | `party_invitation` | `invitation` | the leader of a party invited the player |
@@ -131,6 +150,8 @@ Error codes are those of the [cloud API](cloud-api.md), plus `unknown_command`, 
 | `conversation` | `id` | a conversation is new or its members changed |
 | `conversation_gone` | `id` | the player is no longer in the conversation |
 
+- `restrictions` lists only the mutes that have not ended or been lifted; a warning limits nothing and is not listed, a new account's limit comes with the `restricted` failure. The net service sends it only when the list changed. A restriction with `until` in the past is over: the launcher drops it at that time without waiting for an event.
+- To appeal: a mute is appealed with the `appeal` command. A ban signs the account out, so it is appealed on the account web: the launcher starts `browser_sign_in`, and the cloud's sign-in ends on the page with the statement and the form (after a ban the player proves who they are there, as in [ADR 0015](../docs/adr/0015-moderators-are-accounts.md)).
 - `cloud` is `offline`, `connecting` or `online`. `account` is `{id, handle, email}` or null. `pending` is `code` (an e-mail is out), `handle` (the account needs a handle), `browser` (the system browser has the sign-in) or null.
 - `friends` carries the whole lists each time, with each friend's presence as in the cloud API. The net service sends at most four of them per second.
 - `message` carries no text: the launcher keeps the highest number it has for each conversation and calls `messages` with `after`. The `conversations` event after a reconnect carries every conversation's newest number (`last`), so what arrived while the connection was down is fetched the same way.
