@@ -11,6 +11,8 @@ Options:
   --data <folder>       where the service keeps its files
   --file-credentials    keep the sign-in in a file instead of the system's credential store
   --relay-ca <file>     also trust the root certificates in this PEM file for relays
+  --relay-only          connect to other players only through a relay, so they never learn
+                        this PC's addresses
   --version             print the version
 ";
 
@@ -18,12 +20,14 @@ fn main() -> std::process::ExitCode {
     let mut data = None;
     let mut file_credentials = std::env::var_os("ANYPLAY_NET_FILE_CREDENTIALS").is_some();
     let mut relay_ca = std::env::var_os("ANYPLAY_NET_RELAY_CA").map(PathBuf::from);
+    let mut relay_only = false;
     let mut args = std::env::args_os().skip(1);
     while let Some(arg) = args.next() {
         match arg.to_str() {
             Some("--data") => data = args.next().map(PathBuf::from),
             Some("--file-credentials") => file_credentials = true,
             Some("--relay-ca") => relay_ca = args.next().map(PathBuf::from),
+            Some("--relay-only") => relay_only = true,
             Some("--version") => {
                 println!("anyplay-net {}", env!("CARGO_PKG_VERSION"));
                 return std::process::ExitCode::SUCCESS;
@@ -59,6 +63,7 @@ fn main() -> std::process::ExitCode {
         file_credentials,
         relay_roots,
         bind: None,
+        relay_only,
         device_name: device_name(),
     };
     let runtime = match tokio::runtime::Builder::new_multi_thread()

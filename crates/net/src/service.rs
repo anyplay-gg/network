@@ -48,6 +48,8 @@ pub struct Config {
     pub relay_roots: Vec<rustls::pki_types::CertificateDer<'static>>,
     /// Bind tunnels only to this address, as tests do on loopback.
     pub bind: Option<std::net::SocketAddr>,
+    /// Every tunnel goes through a relay, so other players never learn this PC's addresses.
+    pub relay_only: bool,
     /// The name of this device in the account's device list.
     pub device_name: String,
 }
@@ -1105,7 +1107,7 @@ impl Service {
             relays,
             relay_roots: self.config.relay_roots.clone(),
             bind: self.config.bind,
-            relay_only: false,
+            relay_only: self.config.relay_only,
         };
         let traffic = self.traffic.clone();
         self.spawn(
