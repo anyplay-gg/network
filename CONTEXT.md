@@ -113,6 +113,30 @@ _Avoid_: Timeline, wall
 A group of up to 8 friends that stays together across games, with one chat and one voice channel. A party belongs to no game; a session does.
 _Avoid_: Group, squad, session
 
+**Party leader**:
+The member of a party who invites, removes members and moves the party into a session. The longest-standing member leads when the leader leaves.
+_Avoid_: Host, owner
+
+**Conversation**:
+A chat between accounts: two of them (direct), up to 32 (group), or the members of a party (the party's chat). Everything in it is text.
+_Avoid_: Thread, channel, room
+
+**Group conversation**:
+A conversation of up to 32 accounts that is no party. It has no game and no voice; a party does.
+_Avoid_: Group (alone; it is not a party), group chat room
+
+**Message**:
+A text of up to 2,000 characters written in a conversation. The cloud keeps it for a limited time.
+_Avoid_: Post, DM
+
+**Message number**:
+The place of a message in its conversation: 1 for the first, then up by one. A client that holds the number it read up to asks for what comes after it.
+_Avoid_: Sequence ID, timestamp
+
+**Read mark**:
+The message number a member has read a conversation up to.
+_Avoid_: Seen flag
+
 **Message request**:
 A message from someone who is not a friend, held until the receiver accepts the conversation.
 _Avoid_: Spam folder

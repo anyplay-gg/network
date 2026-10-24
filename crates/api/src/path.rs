@@ -38,6 +38,19 @@ pub const MY_AVATAR: &str = "/v1/me/avatar";
 pub const AVATAR: &str = "/v1/avatars/{id}";
 pub const MY_PLAYTIME: &str = "/v1/me/playtime";
 pub const EVENTS: &str = "/v1/events";
+pub const PARTY: &str = "/v1/party";
+pub const PARTY_LEAVE: &str = "/v1/party/leave";
+pub const PARTY_SESSION: &str = "/v1/party/session";
+pub const PARTY_MEMBER: &str = "/v1/party/members/{id}";
+pub const PARTY_INVITATIONS: &str = "/v1/party/invitations";
+pub const PARTY_INVITATION: &str = "/v1/party/invitations/{id}";
+pub const PARTY_INVITATION_ACCEPT: &str = "/v1/party/invitations/{id}/accept";
+pub const CONVERSATIONS: &str = "/v1/conversations";
+pub const CONVERSATION: &str = "/v1/conversations/{id}";
+pub const CONVERSATION_ACCEPT: &str = "/v1/conversations/{id}/accept";
+pub const CONVERSATION_MEMBERS: &str = "/v1/conversations/{id}/members";
+pub const CONVERSATION_MESSAGES: &str = "/v1/conversations/{id}/messages";
+pub const CONVERSATION_READ: &str = "/v1/conversations/{id}/read";
 
 /// The path with `{id}` replaced by `id`. IDs are numbers or URL-safe tokens, so nothing needs
 /// escaping.
@@ -61,5 +74,13 @@ mod tests {
             "/v1/friends/requests/42/accept"
         );
         assert_eq!(fill2(SESSION_MEMBER, "s1", 7), "/v1/sessions/s1/members/7");
+        assert_eq!(
+            fill(CONVERSATION_MESSAGES, "c1"),
+            "/v1/conversations/c1/messages"
+        );
+        assert_eq!(
+            fill(PARTY_INVITATION_ACCEPT, "i"),
+            "/v1/party/invitations/i/accept"
+        );
     }
 }

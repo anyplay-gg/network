@@ -69,12 +69,28 @@ Error codes are those of the [cloud API](cloud-api.md), plus `unknown_command`, 
 | `set_privacy` | `privacy` | the new `Privacy` |
 | `profile` | `account` | `Profile`: the parts the player may see of that account |
 | `upload_playtime` | `entries` | `{changed}` |
+| `party` | | `{party}`: the player's `Party`, or null |
+| `party_invite` | `accounts` | `{sent}`: friends are invited; a party is made when the player is in none |
+| `party_answer` | `id`, `accept` | `{party}` when accepted, else `{}` |
+| `party_leave` | | `{}` |
+| `party_kick` | `account` | `{}` (leader) |
+| `party_leader` | `account` | `{}` (leader) |
+| `party_move` | `session` | `{sent}`: invites the other members into the leader's session (leader) |
+| `conversations` | | `{conversations, requests}` |
+| `open_conversation` | `accounts`, `name` | the `Conversation`: with one account the direct one, with more a new group |
+| `messages` | `conversation`, `after`, `before`, `limit` | `{messages, last}`; all but `conversation` may be left out |
+| `send_message` | `conversation`, `text` | the `Message` |
+| `mark_read` | `conversation`, `seq` | `{}` |
+| `accept_request` | `conversation` | the `Conversation` |
+| `leave_conversation` | `conversation` | `{}`: leaves a group or declines a request |
+| `add_to_conversation` | `conversation`, `accounts` | `{added}` |
 
 - `hello` comes first. Until it is answered every other command gets `bad_state`. The net service then resumes the device's saved sign-in, if there is one.
 - `email` starts a sign-in; `code` finishes it or, for a new address, asks for `sign_up`.
 - `game_start` answers the variables the launcher adds to the game's environment, at present `ANYPS5_NET_ENDPOINT` and `ANYPS5_NET_TOKEN` from the [bridge protocol](bridge-protocol.md). With `join`, the net service holds the join intent for that session. `game_end` follows when the game's process has ended.
 - `invite` invites friends to the session the player is in.
 - `profile` only reads. A player edits their profile, avatar and visibility on the cloud's web site, which uses the HTTP API directly ([cloud API](cloud-api.md#profiles-avatars-and-playtime)); the launcher shows what `profile` and `cards` answer. `upload_playtime` can be sent again with the same entries; the cloud keeps the highest minutes per title and day.
+- The party and message commands are the [cloud API](cloud-api.md#parties) one to one, with the errors of its requests. `party_answer` and `party_leave` update the held party before the answer.
 - `relay_only` keeps every tunnel on a relay, so other players never learn the PC's addresses, or lets them go direct again. Running tunnels start again and the peers reconnect, so the launcher sends it while no game runs. `anyplay-net --relay-only` starts with it on.
 
 ## Events
@@ -88,7 +104,17 @@ Error codes are those of the [cloud API](cloud-api.md), plus `unknown_command`, 
 | `session` | `session` or null | the session the player is in changed, began or ended |
 | `invite_dialog` | `id`, `title`, `max` | the game opened its invitation dialog; answer with `dialog` |
 | `notice` | `code`, `message` | something failed that no command waits for |
+| `party` | `party` or null | the party the player is in changed, began or ended; a copy with an older revision is dropped before it gets here |
+| `party_invitation` | `invitation` | the leader of a party invited the player |
+| `party_invitation_gone` | `id` | an invitation expired, was answered or used up |
+| `conversations` | `conversations`, `requests` | after sign-in and after every reconnect |
+| `message` | `conversation`, `seq` | a new message; fetch it with `messages` |
+| `message_request` | `conversation` | a stranger wrote for the first time |
+| `read` | `conversation`, `account`, `seq` | a member read up to `seq` |
+| `conversation` | `id` | a conversation is new or its members changed |
+| `conversation_gone` | `id` | the player is no longer in the conversation |
 
 - `cloud` is `offline`, `connecting` or `online`. `account` is `{id, handle, email}` or null. `pending` is `code` (an e-mail is out), `handle` (the account needs a handle) or null.
 - `friends` carries the whole lists each time, with each friend's presence as in the cloud API. The net service sends at most four of them per second.
+- `message` carries no text: the launcher keeps the highest number it has for each conversation and calls `messages` with `after`. The `conversations` event after a reconnect carries every conversation's newest number (`last`), so what arrived while the connection was down is fetched the same way.
 - `session` is the cloud's `Session` without `build`, `properties` and the members' `endpoint`, and with one more field per member: `link`, which is `connecting`, `direct` or `relay` for the other players and null for the player.

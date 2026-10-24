@@ -4,11 +4,13 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyplay_api::{
-    AccountId, AccountTrophies, ApiError, Cards, CodeAnswer, CodeRequest, CreateSession, Device,
-    EmailAnswer, EmailRequest, ErrorCode, FriendLists, FriendRequest, FriendRequestAnswer, Info,
-    Invite, Invited, JoinSession, Me, PlaytimeAdded, PlaytimeEntry, PlaytimeUpload,
-    PresenceRequest, Privacy, Profile, Rarity, RefreshRequest, Relays, Report, Session, SignedIn,
-    SignupRequest, TicketRequest, Tokens, TrophiesAdded, Trophy, TrophyUpload, UpdateSession, path,
+    AccountId, AccountTrophies, AddToConversation, Added, ApiError, Cards, CodeAnswer, CodeRequest,
+    Conversation, Conversations, CreateConversation, CreateSession, Device, EmailAnswer,
+    EmailRequest, ErrorCode, FriendLists, FriendRequest, FriendRequestAnswer, Info, Invite,
+    Invited, JoinSession, MarkRead, Me, Message, Messages, MoveParty, Party, PartyInvitations,
+    PlaytimeAdded, PlaytimeEntry, PlaytimeUpload, PresenceRequest, Privacy, Profile, Rarity,
+    RefreshRequest, Relays, Report, SendMessage, Session, SignedIn, SignupRequest, TicketRequest,
+    Tokens, TrophiesAdded, Trophy, TrophyUpload, UpdateParty, UpdateSession, path,
 };
 use reqwest::{Method, StatusCode};
 use serde::Serialize;
@@ -478,6 +480,163 @@ impl Cloud {
         };
         self.call(Method::POST, path::RELAY_TICKETS, Some(&body))
             .await
+    }
+
+    // Parties
+
+    /// The party the player is in, or none.
+    pub async fn party(&self) -> Result<Option<Party>, CloudError> {
+        match self.call::<(), _>(Method::GET, path::PARTY, None).await {
+            Ok(party) => Ok(Some(party)),
+            Err(error) if error.is(ErrorCode::NotFound) => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
+    pub async fn create_party(&self) -> Result<Party, CloudError> {
+        self.call::<(), _>(Method::POST, path::PARTY, None).await
+    }
+
+    /// Invites friends; the cloud makes a party when the player is in none.
+    pub async fn invite_to_party(&self, to: Vec<AccountId>) -> Result<Invited, CloudError> {
+        self.call(Method::POST, path::PARTY_INVITATIONS, Some(&Invite { to }))
+            .await
+    }
+
+    pub async fn party_invitations(&self) -> Result<PartyInvitations, CloudError> {
+        self.call::<(), _>(Method::GET, path::PARTY_INVITATIONS, None)
+            .await
+    }
+
+    pub async fn accept_party_invitation(&self, id: &str) -> Result<Party, CloudError> {
+        self.call::<(), _>(
+            Method::POST,
+            &path::fill(path::PARTY_INVITATION_ACCEPT, id),
+            None,
+        )
+        .await
+    }
+
+    pub async fn decline_party_invitation(&self, id: &str) -> Result<(), CloudError> {
+        self.empty(Method::DELETE, &path::fill(path::PARTY_INVITATION, id))
+            .await
+    }
+
+    pub async fn leave_party(&self) -> Result<(), CloudError> {
+        self.empty(Method::POST, path::PARTY_LEAVE).await
+    }
+
+    pub async fn kick_from_party(&self, account: AccountId) -> Result<(), CloudError> {
+        self.empty(Method::DELETE, &path::fill(path::PARTY_MEMBER, account))
+            .await
+    }
+
+    pub async fn update_party(&self, body: &UpdateParty) -> Result<Party, CloudError> {
+        self.call(Method::PATCH, path::PARTY, Some(body)).await
+    }
+
+    /// Invites the party into a session of the leader's.
+    pub async fn move_party(&self, session: &str) -> Result<Invited, CloudError> {
+        let body = MoveParty {
+            session: session.to_owned(),
+        };
+        self.call(Method::POST, path::PARTY_SESSION, Some(&body))
+            .await
+    }
+
+    // Conversations and messages
+
+    pub async fn conversations(&self) -> Result<Conversations, CloudError> {
+        self.call::<(), _>(Method::GET, path::CONVERSATIONS, None)
+            .await
+    }
+
+    pub async fn open_conversation(
+        &self,
+        accounts: Vec<AccountId>,
+        name: Option<String>,
+    ) -> Result<Conversation, CloudError> {
+        self.call(
+            Method::POST,
+            path::CONVERSATIONS,
+            Some(&CreateConversation { accounts, name }),
+        )
+        .await
+    }
+
+    /// Messages after `after`, before `before` or the newest. `id` is a conversation ID from the
+    /// cloud, which only holds URL-safe characters.
+    pub async fn messages(
+        &self,
+        id: &str,
+        after: Option<u64>,
+        before: Option<u64>,
+        limit: Option<u32>,
+    ) -> Result<Messages, CloudError> {
+        let mut query = Vec::new();
+        if let Some(after) = after {
+            query.push(format!("after={after}"));
+        }
+        if let Some(before) = before {
+            query.push(format!("before={before}"));
+        }
+        if let Some(limit) = limit {
+            query.push(format!("limit={limit}"));
+        }
+        let mut path = path::fill(path::CONVERSATION_MESSAGES, id);
+        if !query.is_empty() {
+            path = format!("{path}?{}", query.join("&"));
+        }
+        self.call::<(), _>(Method::GET, &path, None).await
+    }
+
+    pub async fn send_message(&self, id: &str, text: &str) -> Result<Message, CloudError> {
+        let body = SendMessage {
+            text: text.to_owned(),
+        };
+        self.call(
+            Method::POST,
+            &path::fill(path::CONVERSATION_MESSAGES, id),
+            Some(&body),
+        )
+        .await
+    }
+
+    pub async fn mark_read(&self, id: &str, seq: u64) -> Result<(), CloudError> {
+        self.call::<_, serde_json::Value>(
+            Method::PUT,
+            &path::fill(path::CONVERSATION_READ, id),
+            Some(&MarkRead { seq }),
+        )
+        .await
+        .map(drop)
+    }
+
+    pub async fn accept_conversation(&self, id: &str) -> Result<Conversation, CloudError> {
+        self.call::<(), _>(
+            Method::POST,
+            &path::fill(path::CONVERSATION_ACCEPT, id),
+            None,
+        )
+        .await
+    }
+
+    pub async fn leave_conversation(&self, id: &str) -> Result<(), CloudError> {
+        self.empty(Method::DELETE, &path::fill(path::CONVERSATION, id))
+            .await
+    }
+
+    pub async fn add_to_conversation(
+        &self,
+        id: &str,
+        accounts: Vec<AccountId>,
+    ) -> Result<Added, CloudError> {
+        self.call(
+            Method::POST,
+            &path::fill(path::CONVERSATION_MEMBERS, id),
+            Some(&AddToConversation { accounts }),
+        )
+        .await
     }
 
     async fn empty(&self, method: Method, path: &str) -> Result<(), CloudError> {

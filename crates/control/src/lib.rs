@@ -115,6 +115,62 @@ pub enum Command {
     UploadPlaytime {
         entries: Vec<anyplay_api::PlaytimeEntry>,
     },
+    // Parties and messages
+    /// The player's party, or null.
+    Party,
+    /// Invites friends to the party; makes one when the player is in none.
+    PartyInvite {
+        accounts: Vec<AccountId>,
+    },
+    PartyAnswer {
+        id: String,
+        accept: bool,
+    },
+    PartyLeave,
+    PartyKick {
+        account: AccountId,
+    },
+    PartyLeader {
+        account: AccountId,
+    },
+    /// The leader invites the party into the session the player is in.
+    PartyMove {
+        session: String,
+    },
+    Conversations,
+    /// Opens the conversation with one account, or a group with several.
+    OpenConversation {
+        accounts: Vec<AccountId>,
+        #[serde(default)]
+        name: Option<String>,
+    },
+    Messages {
+        conversation: String,
+        #[serde(default)]
+        after: Option<u64>,
+        #[serde(default)]
+        before: Option<u64>,
+        #[serde(default)]
+        limit: Option<u32>,
+    },
+    SendMessage {
+        conversation: String,
+        text: String,
+    },
+    MarkRead {
+        conversation: String,
+        seq: u64,
+    },
+    AcceptRequest {
+        conversation: String,
+    },
+    LeaveConversation {
+        conversation: String,
+    },
+    AddToConversation {
+        conversation: String,
+        accounts: Vec<AccountId>,
+    },
 }
 
 /// The game a player is playing, as the launcher knows it.
@@ -311,6 +367,12 @@ pub struct Accepted {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Done {}
 
+/// The answer to `party` and `party_answer`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PartyState {
+    pub party: Option<anyplay_api::Party>,
+}
+
 // Events
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -397,6 +459,40 @@ pub enum Event {
     Notice {
         code: String,
         message: String,
+    },
+    // Parties and messages
+    /// The player's party changed, began (a party) or ended (null).
+    Party {
+        party: Option<anyplay_api::Party>,
+    },
+    PartyInvitation {
+        invitation: anyplay_api::PartyInvitation,
+    },
+    PartyInvitationGone {
+        id: String,
+    },
+    /// Every conversation and request with its newest number, after sign-in and after every
+    /// reconnect. Compare each `last` with the number you hold and fetch the messages after it.
+    Conversations(anyplay_api::Conversations),
+    /// A new message, by number; fetch it with `messages`.
+    Message {
+        conversation: String,
+        seq: u64,
+    },
+    MessageRequest {
+        conversation: String,
+    },
+    Read {
+        conversation: String,
+        account: AccountId,
+        seq: u64,
+    },
+    /// A conversation's members or name changed, or it is new; fetch `conversations`.
+    Conversation {
+        id: String,
+    },
+    ConversationGone {
+        id: String,
     },
     /// An event this version does not know.
     #[serde(other)]
@@ -497,6 +593,68 @@ mod tests {
     }
 
     #[test]
+    fn party_and_message_commands_are_lines() {
+        assert_eq!(
+            parse_command(r#"{"id":1,"do":"party_invite","accounts":[4,5]}"#),
+            Ok((
+                1,
+                Command::PartyInvite {
+                    accounts: vec![AccountId(4), AccountId(5)]
+                }
+            ))
+        );
+        assert_eq!(
+            parse_command(r#"{"id":2,"do":"party_leave"}"#),
+            Ok((2, Command::PartyLeave))
+        );
+        assert_eq!(
+            parse_command(r#"{"id":3,"do":"messages","conversation":"c","after":7}"#),
+            Ok((
+                3,
+                Command::Messages {
+                    conversation: "c".into(),
+                    after: Some(7),
+                    before: None,
+                    limit: None
+                }
+            ))
+        );
+        let send = Command::SendMessage {
+            conversation: "c".into(),
+            text: "hej \u{1F600}".into(),
+        };
+        assert_eq!(
+            parse_command(&command_line(9, &send)),
+            Ok((9, send.clone()))
+        );
+    }
+
+    #[test]
+    fn message_events_are_not_taken_for_answers() {
+        for event in [
+            Event::Message {
+                conversation: "c".into(),
+                seq: 3,
+            },
+            Event::Conversation { id: "c".into() },
+            Event::PartyInvitationGone { id: "i".into() },
+            Event::Party { party: None },
+            Event::Conversations(anyplay_api::Conversations::default()),
+        ] {
+            let output = Output::Event(event);
+            let text = output_line(&output);
+            assert_eq!(parse_output(&text), Some(output), "{text}");
+        }
+        assert_eq!(
+            output_line(&Output::Event(Event::Message {
+                conversation: "c".into(),
+                seq: 3
+            })),
+            "{\"event\":\"message\",\"conversation\":\"c\",\"seq\":3}\n"
+        );
+    }
+
+    #[test]
     fn an_unknown_command_keeps_its_number() {
         assert_eq!(parse_command(r#"{"id":3,"do":"teleport"}"#), Err(Some(3)));
         assert_eq!(parse_command(r#"{"do":"sign_out"}"#), Err(None));
@@ -579,6 +737,22 @@ mod tests {
                 5,
                 Failure::new("offline", "No cloud."),
             ))),
+            command_line(
+                9,
+                &Command::SendMessage {
+                    conversation: "c1".into(),
+                    text: "hej 😀".into(),
+                },
+            ),
+            output_line(&Output::Event(Event::Message {
+                conversation: "c1".into(),
+                seq: 7,
+            })),
+            output_line(&Output::Event(Event::Read {
+                conversation: "c1".into(),
+                account: AccountId(4),
+                seq: 7,
+            })),
         ];
         // A fixed-seed xorshift, so every run is the same.
         let mut seed = 0x5EED_u64;
