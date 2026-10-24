@@ -75,6 +75,7 @@ The network stands in for the platform's own services and nothing else. A game w
 | `crates/control` | the messages between the launcher and the net service |
 | `crates/api` | the cloud's API, shared by the net service and the cloud |
 | `crates/fake-game` | `anyplay-fake-game`, a game's side of the bridge, for tests and for trying the network without a game |
+| `crates/voice` | `anyplay-voice`, the party voice engine: microphone to Opus frames and frames to speakers, without a transport ([spec](spec/voice.md)) |
 | `crates/probe` | `anyplay-probe`, which measures a tunnel between two networks |
 | `fuzz/` | [fuzz targets](fuzz/README.md) for the parsers of both protocols, run every night |
 | `spec/` | the network's own specifications: [bridge protocol](spec/bridge-protocol.md), [control protocol](spec/control-protocol.md), [cloud API](spec/cloud-api.md), [own API group](spec/own-api-group.md), [observation log](spec/observation-log.md), [web API groups](spec/web-api/README.md) |
@@ -95,7 +96,7 @@ The launcher starts the net service by itself. To run one by hand: `cargo run -p
 
 ## Testing
 
-Every pull request runs formatting, Clippy with warnings as errors and all tests on Windows and Linux. The parsers of the bridge frames, the game traffic headers and the control lines are fuzzed for 15 minutes each every night, and for a minute on pull requests that touch them. The end-to-end tests in [anyplay-gg/cloud](https://github.com/anyplay-gg/cloud) run a cloud, a relay that checks tickets, two net services and two fake games in one process.
+Every pull request runs formatting, Clippy with warnings as errors and all tests on Windows and Linux. The parsers of the bridge frames, the game traffic headers, the control lines and the voice frames are fuzzed for 15 minutes each every night, and for a minute on pull requests that touch them. The end-to-end tests in [anyplay-gg/cloud](https://github.com/anyplay-gg/cloud) run a cloud, a relay that checks tickets, two net services and two fake games in one process.
 
 ## License
 

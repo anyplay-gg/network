@@ -14,7 +14,8 @@ What the network does not do yet, part by part. Each line says what is missing a
 - **Web API groups**: none of the platform's is offered yet; every request is answered "not offered" and written to the observation log. Only the network's own group `anyplay` is answered ([spec](../spec/own-api-group.md)). Closes group by group, from observations of class A titles; what each group sends is written down in [spec/web-api](../spec/web-api/README.md), starting with `userProfile`.
 - **Push events to the game**: not sent until the bridge can deliver them.
 - **NAT type**: reported as 2 while a relay is reachable, 0 otherwise; no finer measurement.
-- **Voice chat, matchmaking, leaderboards, cloud saves**: not started (phase 5).
+- **Voice chat**: the engine is written and tested without hardware ([`crates/voice`](../crates/voice), [spec](../spec/voice.md), [ADR 0014](adr/0014-voice-is-an-engine-without-a-transport.md)); the net service does not use it yet, so no party can talk. It has no echo cancellation: push-to-talk is the default, and an open microphone needs headphones. Closes with phase S3 when parties exist.
+- **Matchmaking, leaderboards, cloud saves**: not started (phase 5).
 - **Fuzzing beyond the parsers**: the parsers of both protocols are fuzzed every night ([fuzz](../fuzz/README.md)); what the net service does with the messages they read, and what it reads from the cloud, is tested with fixed cases only.
 
 ## Cloud (anyplay-gg/cloud)
