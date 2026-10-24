@@ -136,6 +136,8 @@ An invitation lives 15 minutes, or until its session closes.
 
 `POST /v1/relays/tickets` with `{endpoint}` answers `{relays: [Relay]}`. Each `token` lets this endpoint, and only it, use that relay until `expires` (24 hours). The net service asks again before then. Relays check the token themselves; they never call the cloud ([ADR 0007](../docs/adr/0007-relays-check-signed-tickets.md)).
 
+The token names the account it was issued to. A relay holds the account to a number of connections at once, refuses a token that is valid for much longer than 24 hours, and limits what each client sends; the numbers are the relay operator's settings, not part of this specification. The cloud limits how often an account may ask for tickets (see Limits), and answers `rate_limited` with `Retry-After` when it is over.
+
 ## Trophies and privacy
 
 The cloud keeps a **trophy record** per trophy a player earned: the title, the trophy's number in the game, its grade and when ([ADR 0009](../docs/adr/0009-trophy-records-not-trophy-texts.md)). Names, descriptions and pictures are not part of it; each launcher shows them from its own copy of the game. Trophies are private by default: friends see them, nobody else ([ADR 0012](../docs/adr/0012-private-by-default.md)).
@@ -190,4 +192,5 @@ The cloud keeps a **trophy record** per trophy a player earned: the title, the t
 | `auth/email` | 3 per address and 10 per IP address per 15 minutes |
 | `auth/code`, `auth/signup` | 20 per IP address per 15 minutes |
 | `auth/refresh` | 30 per device per hour |
+| `relays/tickets` | 20 per account per hour |
 | everything else | 120 per account per minute |

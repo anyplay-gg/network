@@ -37,7 +37,7 @@ use crate::credentials::{Saved, Store};
 use crate::events::{self, EventInput};
 use crate::observe::{self, Observer};
 use crate::traffic::Traffic;
-use crate::tunnel::{self, Link, LinkChange, RelayAccess, Tunnels};
+use crate::tunnel::{self, Link, LinkChange, LinkTotals, RelayAccess, Tunnels};
 
 /// How the service is set up; the cloud comes later, with the launcher's hello.
 #[derive(Clone, Debug)]
@@ -143,6 +143,7 @@ pub struct Service {
     relays_expire: u64,
     relays_asked: Option<Instant>,
     links: HashMap<u64, Link>,
+    link_totals: LinkTotals,
     observer: Observer,
     last_state: Option<(control::Cloud, Option<SignedIn>, Option<Pending>)>,
     last_bridge_state: Option<bridge::State>,
@@ -224,6 +225,7 @@ impl Service {
             relays_expire: 0,
             relays_asked: None,
             links: HashMap::new(),
+            link_totals: LinkTotals::default(),
             observer,
             last_state: None,
             last_bridge_state: None,
@@ -1350,6 +1352,22 @@ impl Service {
     }
 
     fn link_change(&mut self, change: LinkChange) {
+        // One line each time a tunnel settles on a path, with the totals so far. It names no one,
+        // so an operator can collect these from test machines and work out the direct share.
+        if self
+            .link_totals
+            .record(self.links.get(&change.account).copied(), change.link)
+        {
+            let totals = self.link_totals;
+            tracing::info!(
+                target: "anyplay::path",
+                path = if change.link == Link::Direct { "direct" } else { "relay" },
+                direct = totals.direct,
+                relay = totals.relay,
+                upgrades = totals.upgrades,
+                "tunnel path"
+            );
+        }
         if change.link == Link::Closed {
             self.links.remove(&change.account);
         } else {

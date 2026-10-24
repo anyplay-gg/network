@@ -39,6 +39,48 @@ pub enum Link {
     Closed,
 }
 
+/// How often tunnels have settled on each kind of path since the service started. Only the
+/// totals are kept: nobody can tell from them who played with whom.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct LinkTotals {
+    /// Times a tunnel came up on, or moved to, a direct path.
+    pub direct: u64,
+    /// Times a tunnel came up on, or moved to, a relay path.
+    pub relay: u64,
+    /// Times a tunnel that ran through a relay found a direct path (included in `direct`).
+    pub upgrades: u64,
+}
+
+impl LinkTotals {
+    /// Counts a tunnel going from `before` (`None` when it was not up) to `after`. Answers
+    /// whether the path changed in a way that counts: `Connecting` and `Closed` do not.
+    pub fn record(&mut self, before: Option<Link>, after: Link) -> bool {
+        if before == Some(after) {
+            return false;
+        }
+        match after {
+            Link::Direct => {
+                self.direct += 1;
+                if before == Some(Link::Relay) {
+                    self.upgrades += 1;
+                }
+                true
+            }
+            Link::Relay => {
+                self.relay += 1;
+                true
+            }
+            Link::Connecting | Link::Closed => false,
+        }
+    }
+
+    /// Direct paths as a share of all paths, once there is one.
+    pub fn direct_share(&self) -> Option<f64> {
+        let all = self.direct + self.relay;
+        (all > 0).then(|| self.direct as f64 / all as f64)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LinkChange {
     pub endpoint: EndpointId,
@@ -461,4 +503,33 @@ fn relay_map(relays: &[RelayAccess]) -> RelayMap {
         .iter()
         .map(|relay| RelayConfig::from(relay.url.clone()).with_auth_token(relay.token.clone()))
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn totals_count_each_settled_path_once() {
+        let mut totals = LinkTotals::default();
+        assert_eq!(totals.direct_share(), None);
+        assert!(!totals.record(None, Link::Connecting), "not a path");
+        assert!(totals.record(Some(Link::Connecting), Link::Relay));
+        assert!(!totals.record(Some(Link::Relay), Link::Relay), "no change");
+        assert!(
+            totals.record(Some(Link::Relay), Link::Direct),
+            "found a direct path"
+        );
+        assert!(!totals.record(Some(Link::Direct), Link::Closed));
+        assert!(totals.record(Some(Link::Connecting), Link::Direct));
+        assert_eq!(
+            totals,
+            LinkTotals {
+                direct: 2,
+                relay: 1,
+                upgrades: 1
+            }
+        );
+        assert!((totals.direct_share().unwrap() - 2.0 / 3.0).abs() < 1e-9);
+    }
 }
