@@ -81,3 +81,35 @@ _Avoid_: Third-party server, game server
 **Observation log**:
 The local record of every network library call a game made and what the bridge answered. The network's own specifications are written from it.
 _Avoid_: Trace, capture, dump (a dump is a game folder)
+
+### Social
+
+**Profile**:
+What a player shows of themselves: handle, avatar, a short text and favourite games, each part visible to friends, everyone or nobody.
+_Avoid_: Account (the sign-in identity behind it)
+
+**Gamer card**:
+The short form of a profile that friends see in their list: avatar, handle, what they play, trophy count.
+
+**Trophy record**:
+The network's note that a player earned one trophy: title ID, the trophy's number in the game, its grade and the time. Names and pictures of trophies are not part of it; they come from each player's own copy of the game.
+_Avoid_: Achievement (the word of other platforms), trophy (alone, when the record is meant)
+
+**Rarity**:
+The share of players with a title who earned a trophy, counted from trophy records.
+
+**Feed**:
+Recent activity of a player's friends: trophies, first starts of a game, sessions opened to friends.
+_Avoid_: Timeline, wall
+
+**Party**:
+A group of up to 8 friends that stays together across games, with one chat and one voice channel. A party belongs to no game; a session does.
+_Avoid_: Group, squad, session
+
+**Message request**:
+A message from someone who is not a friend, held until the receiver accepts the conversation.
+_Avoid_: Spam folder
+
+**Share play**:
+A player streams their running game to a friend, who watches and may take over a pad. The friend needs neither the game nor its files.
+_Avoid_: Remote play (playing one's own console from afar), screen share

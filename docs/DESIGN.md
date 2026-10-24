@@ -55,7 +55,8 @@ A separate process that the launcher starts and watches ([ADR 0004](adr/0004-net
 - Matchmaking tickets per title and mode; a plain queue first, region and latency later.
 - Invitations, and signaling that exchanges the tunnel keys of the players in a session.
 - Relays (`iroh-relay`), self-hosted, with bearer-token access so that only network accounts can use them.
-- Later: leaderboards, save backups, public profiles with trophies.
+- Profiles, trophy records, a feed, messages and parties; voice and share play go through the tunnels ([social design](SOCIAL.md)).
+- Later: leaderboards, save backups.
 - Moderation from the first public day: reports, blocks, rate limits, bans per account and device.
 - One `docker compose up` starts a complete cloud, and the launcher can point at any cloud. Nobody depends on a single operator.
 
@@ -100,7 +101,8 @@ A link such as `anyps5://v1/join/…` never starts a game by itself; it opens th
 | 2 Bridge | sign-in, identity, NAT, web API forwarding, push events, tests with a fake game | a game signs in and shows its handle |
 | 3 Tunnel | peer-to-peer sockets, virtual addresses, session signaling | two fake games exchange packets over the internet, direct and relayed, in CI |
 | 4 Sessions | sessions, invitations, join intents, invitation dialog, version guard | two players play a class A game together over the internet |
-| 5 More | matchmaking, voice chat with friends in any game, profiles, leaderboards, save backups | by choice |
+| 5 More | matchmaking, leaderboards, save backups | by choice |
+| S1–S6 Social | profiles and trophies, parties and messages, voice, feed and boards, share play, web profiles and sign-in ([SOCIAL.md](SOCIAL.md)) | each phase as SOCIAL.md says |
 
 Where it stands (October 2026): the probe for phase 0 is ready to measure between two real networks; the cloud v0, the net service and the launcher's online area of phase 1 are built and tested together, and wait for a cloud that runs; the bridge of phase 2 is under review in the fork; the net service's side of phases 3 and 4 is in place and tested with fake games, the bridge's is not ([docs/gaps.md](gaps.md)).
 
