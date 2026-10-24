@@ -2,7 +2,7 @@
 
 The API between the net service and a cloud. Version 1 of the paths, still a draft: it changes without notice until the first public cloud runs.
 
-The Rust reference is [`crates/api`](../crates/api). The cloud in [anyplay-gg/cloud](https://github.com/anyplay-gg/cloud) implements it. Nothing here knows the platform's formats; the net service translates those ([ADR 0001](../docs/adr/0001-bridge-forwards-net-service-translates.md)).
+The Rust reference is [`crates/api`](../crates/api). The cloud in [anyplay-gg/cloud](https://github.com/anyplay-gg/cloud) implements it. Nothing here knows the platform's formats; the net service translates those ([ADR 0001](../docs/adr/0001-bridge-forwards-net-service-translates.md)). The web portal in the player's browser uses a separate API on the browser's session cookie: [Portal API](portal-api.md).
 
 ## Conventions
 
@@ -146,7 +146,7 @@ The browser's own session on these pages is a cookie that never reaches the API.
 | Request | Answer |
 |---|---|
 | `GET /v1/me` | `Me` |
-| `DELETE /v1/me` | 204. Deletes the account with its devices, friends, requests, blocks, trophy records, profile, avatar and playtime. Reports the account filed lose their link to it; reports about it, the actions against it and the ban on its e-mail address stay until their retention ends (see Moderation). |
+| `DELETE /v1/me` | 200 `{deletion: {at}}`. Schedules the deletion of the account for `at` (Unix seconds), 30 days from now, signs out every device and every browser, and refuses the access tokens issued so far; the player can cancel on the [web portal](portal-api.md#deleting-the-account) until `at`. A request that comes again keeps the first `at`. At `at` the cloud deletes the account with its devices, friends, requests, blocks, trophy records, profile, avatar and playtime. Reports the account filed lose their link to it; reports about it, the actions against it and the ban on its e-mail address stay until their retention ends (see Moderation). |
 | `GET /v1/me/export` | Everything the cloud stores about the account, as JSON, trophy records, privacy settings, profile, avatar and playtime included. |
 | `GET /v1/accounts/{id}` | `Account` |
 | `GET /v1/accounts?handle=<handle>` | `Account`; the lookup is exact apart from case. There is no search. |
@@ -344,6 +344,10 @@ A **party** is up to 8 friends who stay together across games, with one chat. It
 - `POST /v1/party/session` moves the party into one of the leader's sessions: every other member who is not in the session gets an ordinary session invitation (see Invitations), which lets them in even when the session is for invited players only. The leader must be a member of the session, and the session must not be closed. Nothing else about the party changes; it goes on after the game.
 - `PUT /v1/party/endpoint` is how the members of a party find each other for voice ([voice](voice.md)). `endpoint` and `relay` are the caller's tunnel key and relay, as for a session `Member`, and `voice` says that the caller's net service takes part in the party's voice and accepts voice connections from the other members. The net service sends it when it joins a party, when its relay changes and when `voice` changes, and again after every reconnect. The cloud stores the three on the caller's `PartyMember`, raises the party's `revision` only when one of them changed, and answers `not_found` when the caller is in no party and `bad_request` for an `endpoint` that is not 64 lowercase hex characters or a `relay` that is not an `https` URL. Two members of one party may not name the same `endpoint`: the second request is answered `limit`. A member who has announced nothing has `endpoint` `""`, `relay` null and `voice` false. Only members of the party ever receive `endpoint` and `relay`: the invitation (`PartyInvitation`) carries neither. A net service dials only members whose `voice` is true, and accepts voice connections from every member the party lists.
 - The party's chat is a conversation of kind `party` (`Party.conversation`). A member sees what is written after it joined.
+
+## Shares
+
+Share play between two party members is drafted in the [share play spec](share-play.md#cloud-api): the `Share` object, `/v1/shares` and `/v1/share`, and the events `share_invitation`, `share` and `share_gone`. Not implemented.
 
 ## Conversations and messages
 

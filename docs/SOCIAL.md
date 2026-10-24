@@ -48,7 +48,7 @@ Party members talk over the tunnels' own iroh endpoint: Opus frames, one voice c
 
 ### Share play
 
-A player streams their running game to a friend, who watches and, when the host allows it, takes over a pad. Video and pad input go through the tunnel between the two. The friend needs neither the game nor its files; the host decides and can stop at any time.
+A player streams their running game to one friend in their party, who watches, takes over their pad, or plays beside them as a second player. Video, sound and pad input go through the tunnels on a connection of their own, like voice, and the host decides and can stop at any time. The friend needs neither the game nor its files and gets neither. The engine only copies the picture and sound out and takes a pad in; a separate worker program encodes and decodes. The decisions are in [ADR 0019](adr/0019-share-play-streams-through-a-worker.md), the protocol in the [spec](../spec/share-play.md), and the order of work in the [plan](share-play-plan.md). The public cloud keeps it switched off until a legal review is done.
 
 ### Web profile
 
@@ -70,7 +70,7 @@ A queue of reports with the reported content attached, actions with a stated rea
 | S2 Parties and messages | parties, party chat, one-to-one and group messages, message requests, notifications | a party of three chats and moves into one session together |
 | S3 Voice | party voice over the tunnels, push-to-talk, mute and volume per member | a party of four talks with relay only switched on |
 | S4 Feed and boards | feed, trophy rarity in the feed, leaderboards of trophy counts and playtime among friends | the feed shows a friend's trophy within seconds |
-| S5 Share play | streaming a game to a friend, taking over a pad | a friend without the game plays a level of it |
+| S5 Share play | streaming a game to a friend, taking over a pad | a friend without the game plays a level of it; the [plan](share-play-plan.md) splits it into watch, hand over and play together, each with numbers |
 | S6 Web and sign-in | web profiles, passkeys, Apple, Google and Discord sign-in, moderation queue | a public profile opens in a browser; a player signs in with a passkey |
 
 The infrastructure work in [anyplay-gg/cloud](https://github.com/anyplay-gg/cloud/blob/main/docs/ARCHITECTURE.md) runs beside these phases; every feature here is built for the cluster from its first line.
