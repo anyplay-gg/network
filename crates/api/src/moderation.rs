@@ -1,7 +1,7 @@
 //! Moderation: reports and their queue, actions with a stated reason, what a player sees about an
 //! action against them (the statement of reasons), appeals, and the audit log.
 //!
-//! The model is in `spec/cloud-api.md` ("Moderation") and `docs/adr/0013-moderators-are-accounts.md`.
+//! The model is in `spec/cloud-api.md` ("Moderation") and `docs/adr/0015-moderators-are-accounts.md`.
 
 use serde::{Deserialize, Serialize};
 

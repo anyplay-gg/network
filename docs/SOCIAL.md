@@ -60,7 +60,7 @@ Besides the e-mail code: passkeys, and one-tap sign-in with Apple, Google or Dis
 
 ### Moderation
 
-A queue of reports with the reported content attached, actions with a stated reason (warning, removal, mute, ban), an audit log of every action, and an appeal for the player concerned. The model is in the [cloud API](../spec/cloud-api.md#moderation) and [ADR 0013](adr/0013-moderators-are-accounts.md).
+A queue of reports with the reported content attached, actions with a stated reason (warning, removal, mute, ban), an audit log of every action, and an appeal for the player concerned. The model is in the [cloud API](../spec/cloud-api.md#moderation) and [ADR 0015](adr/0015-moderators-are-accounts.md).
 
 ## Phases
 

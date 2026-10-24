@@ -194,7 +194,7 @@ A profile has a short text, up to 3 favourite titles, an avatar and the playtime
 
 ## Moderation
 
-Reports go into a queue. A **moderator** reads the queue and takes an **action** with a reason; every action is written to an append-only **audit log**; the player concerned reads a **statement of reasons** and may **appeal** ([ADR 0013](../docs/adr/0013-moderators-are-accounts.md)).
+Reports go into a queue. A **moderator** reads the queue and takes an **action** with a reason; every action is written to an append-only **audit log**; the player concerned reads a **statement of reasons** and may **appeal** ([ADR 0015](../docs/adr/0015-moderators-are-accounts.md)).
 
 ### Who may moderate
 
