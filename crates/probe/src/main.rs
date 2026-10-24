@@ -17,14 +17,16 @@ const ALPN: &[u8] = b"anyplay/probe/0";
 const USAGE: &str = "\
 anyplay-probe: measures a tunnel between two networks
 
-  anyplay-probe listen [--relay <url>]
+  anyplay-probe listen [--relay <url>] [--relay-only]
       prints a ticket and answers probes until stopped
-  anyplay-probe connect <ticket> [--relay <url>] [--seconds <n>] [--rate <per second>]
-                                 [--size <bytes>] [--bulk <MiB>] [--json]
+  anyplay-probe connect <ticket> [--relay <url>] [--relay-only] [--seconds <n>]
+                                 [--rate <per second>] [--size <bytes>] [--bulk <MiB>] [--json]
       measures the tunnel to the listener (defaults: 20 s, 60 per second, 160 bytes, 8 MiB)
 
 Run listen on one network and connect on another, for example at home and on a phone's
-hotspot. Without --relay, the relays of the iroh project are used.
+hotspot. Without --relay, the relays of the iroh project are used. --relay-only on either side
+keeps the tunnel on the relay, to measure the relayed path. While a relay is reached, the
+ticket names no IP address; the two sides find a direct path through the relay.
 ";
 
 #[derive(Serialize, Deserialize)]
@@ -42,6 +44,7 @@ struct Options {
     size: usize,
     bulk: usize,
     json: bool,
+    relay_only: bool,
 }
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 2)]
@@ -66,6 +69,7 @@ async fn main() -> std::process::ExitCode {
             "--size" => options.size = value().parse().unwrap_or(160).clamp(16, 1100),
             "--bulk" => options.bulk = value().parse().unwrap_or(8).min(1024),
             "--json" => options.json = true,
+            "--relay-only" => options.relay_only = true,
             other if ticket.is_none() && !other.starts_with("--") => {
                 ticket = Some(other.to_owned())
             }
@@ -101,6 +105,9 @@ async fn endpoint(options: &Options, accept: bool) -> Result<Endpoint, String> {
     if accept {
         builder = builder.alpns(vec![ALPN.to_vec()]);
     }
+    if options.relay_only {
+        builder = builder.clear_ip_transports();
+    }
     let endpoint = builder.bind().await.map_err(|e| e.to_string())?;
     if tokio::time::timeout(Duration::from_secs(15), endpoint.online())
         .await
@@ -114,10 +121,17 @@ async fn endpoint(options: &Options, accept: bool) -> Result<Endpoint, String> {
 async fn listen(options: &Options) -> Result<(), String> {
     let endpoint = endpoint(options, true).await?;
     let addr = endpoint.addr();
+    let relay = addr.relay_urls().next().map(|u| u.to_string());
+    // Addresses only when no relay can introduce the two sides, so a ticket can be posted
+    // without the listener's IP.
+    let addrs = match relay {
+        Some(_) => Vec::new(),
+        None => addr.ip_addrs().map(|a| a.to_string()).collect(),
+    };
     let ticket = Ticket {
         id: addr.id.to_string(),
-        relay: addr.relay_urls().next().map(|u| u.to_string()),
-        addrs: addr.ip_addrs().map(|a| a.to_string()).collect(),
+        relay,
+        addrs,
     };
     let encoded = data_encoding::BASE64URL_NOPAD.encode(
         serde_json::to_string(&ticket)
