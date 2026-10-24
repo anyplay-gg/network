@@ -53,8 +53,24 @@ A credential of the player's phone, computer or security key that signs them in 
 _Avoid_: Biometric login, WebAuthn (the standard behind it)
 
 **Account web**:
-The pages of the cloud, in the player's browser, where they sign in, create an account and manage it. The launcher only starts the browser flow.
-_Avoid_: Portal (the later pages for profiles, trophies and friends), dashboard
+The server-rendered pages of the cloud, in the player's browser, where they sign in, create an account and manage it. The launcher only starts the browser flow. The portal replaces them.
+_Avoid_: Dashboard
+
+**Portal**:
+The web app the cloud serves from its own origin, where a player signs in, manages the account, and sees friends, trophies and profiles. It talks to the cloud through the portal API.
+_Avoid_: Dashboard, site, web client
+
+**Browser session**:
+A browser's own session on the cloud, with its cookie and CSRF token, apart from the tokens of devices. An account can have several, and ends each one by itself.
+_Avoid_: Login, device (a device is a PC with tokens)
+
+**Step-up**:
+Proving again, with an e-mail code or a passkey, who the player is before an action that would give a thief of the session a lasting hold. A session that signed in or stepped up in the last 15 minutes is fresh.
+_Avoid_: Re-login, reauthentication
+
+**Grace period**:
+The 30 days between the player asking to delete the account and the cloud deleting it. They can cancel until it ends.
+_Avoid_: Cooling-off, trash
 
 **Sign out everywhere**:
 Ending every device and every browser session of an account at once, and refusing every access token issued before.
