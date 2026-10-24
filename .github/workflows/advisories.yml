@@ -1,0 +1,28 @@
+name: advisories
+
+# New security advisories appear without a commit, so the check that every pull request gets from
+# the shared rules workflow (cargo-deny: advisories, bans, licences, sources) also runs every
+# Monday and on demand. A red run here means a dependency of the lockfile on main has a new
+# advisory; the fix is an update, or an entry in deny.toml with the reason it does not apply.
+
+on:
+  schedule:
+    - cron: "17 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deny:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          path: repo
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          manifest-path: repo/Cargo.toml
+          arguments: --all-features
+          command: check

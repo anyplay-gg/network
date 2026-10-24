@@ -79,7 +79,7 @@ The network stands in for the platform's own services and nothing else. A game w
 | `crates/probe` | `anyplay-probe`, which measures a tunnel between two networks |
 | `fuzz/` | [fuzz targets](fuzz/README.md) for the parsers of both protocols, run every night |
 | `spec/` | the network's own specifications: [bridge protocol](spec/bridge-protocol.md), [control protocol](spec/control-protocol.md), [cloud API](spec/cloud-api.md), [own API group](spec/own-api-group.md), [observation log](spec/observation-log.md), [web API groups](spec/web-api/README.md) |
-| `docs/` | [design](docs/DESIGN.md), [social layer](docs/SOCIAL.md), [decisions](docs/adr), [how games are observed](docs/OBSERVING.md) and [known gaps](docs/gaps.md) |
+| `docs/` | [design](docs/DESIGN.md), [social layer](docs/SOCIAL.md), [decisions](docs/adr), [how games are observed](docs/OBSERVING.md), [known gaps](docs/gaps.md) and [supply chain](docs/supply-chain.md) |
 
 ## Try it
 
