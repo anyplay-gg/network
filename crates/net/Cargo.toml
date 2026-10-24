@@ -16,6 +16,7 @@ path = "src/main.rs"
 anyplay-api = { path = "../api" }
 anyplay-bridge-protocol = { path = "../bridge-protocol" }
 anyplay-control = { path = "../control" }
+anyplay-proof = { path = "../proof" }
 bytes = "1"
 data-encoding = "2"
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }

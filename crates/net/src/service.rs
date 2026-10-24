@@ -23,7 +23,7 @@ use anyplay_bridge_protocol::{
 };
 use anyplay_control::{
     self as control, Accepted, Answer, CodeAccepted, CodeResult, Command, Done, EmailSent, Failure,
-    FriendAdded, GameStarted, Hello, Invited, Output, Pending, SignedIn,
+    FriendAdded, GameStarted, Hello, Invited, Opened, Output, Pending, SignedIn,
 };
 use iroh::{EndpointId, RelayUrl, SecretKey};
 use tokio::io::AsyncReadExt as _;
@@ -32,6 +32,7 @@ use tokio::task::JoinHandle;
 
 use crate::answers::{Answers, is_older};
 use crate::bridge::BridgeInput;
+use crate::browser::{self, Callback};
 use crate::cloud::{Cloud, CloudError, now};
 use crate::credentials::{Saved, Store};
 use crate::events::{self, EventInput};
@@ -104,8 +105,14 @@ struct Dialog {
 }
 
 enum PendingSignIn {
-    Code { challenge: String },
-    Handle { signup: String },
+    Code {
+        challenge: String,
+    },
+    Handle {
+        signup: String,
+    },
+    /// The system browser has the sign-in; the loopback listener waits for it.
+    Browser,
 }
 
 pub struct Service {
@@ -117,6 +124,8 @@ pub struct Service {
     store: Option<Store>,
     me: Option<Me>,
     pending: Option<PendingSignIn>,
+    /// The loopback listener and the task that finishes the browser sign-in.
+    browser: Option<(JoinHandle<()>, JoinHandle<()>)>,
     link: control::Cloud,
     offline_since: Option<Instant>,
     events: Option<(u64, JoinHandle<()>)>,
@@ -204,6 +213,7 @@ impl Service {
             store: None,
             me: None,
             pending: None,
+            browser: None,
             link: control::Cloud::Offline,
             offline_since: None,
             events: None,
@@ -398,6 +408,7 @@ impl Service {
         Device {
             name: self.config.device_name.clone(),
             platform: Platform::current(),
+            key: None,
         }
     }
 
@@ -672,6 +683,67 @@ impl Service {
                     |_, changed| changed,
                 );
             }
+            Command::BrowserSignIn { create } => {
+                let Some(cloud) = self.cloud(id) else { return };
+                if self.me.is_some() {
+                    self.fail(id, Failure::new(Failure::BAD_STATE, "Already signed in."));
+                    return;
+                }
+                self.stop_browser();
+                let name = self.config.device_name.clone();
+                self.spawn(
+                    async move {
+                        let info = cloud.info().await?;
+                        let Some(web) = info.web else {
+                            return Ok(None);
+                        };
+                        browser::start(&web, create, &name)
+                            .await
+                            .map(Some)
+                            .map_err(|e| CloudError::Offline(e.to_string()))
+                    },
+                    move |service, result| match result {
+                        Ok(Some(started)) => {
+                            service.pending = Some(PendingSignIn::Browser);
+                            service.state_changed();
+                            service.ok(
+                                id,
+                                Opened {
+                                    url: started.url.clone(),
+                                },
+                            );
+                            service.await_browser(started);
+                        }
+                        Ok(None) => service.fail(
+                            id,
+                            Failure::new(
+                                ErrorCode::NotFound.as_str(),
+                                "This cloud has no account web. Sign in with an e-mail code.",
+                            ),
+                        ),
+                        Err(error) => {
+                            let failure = service.failure(&error);
+                            service.fail(id, failure);
+                        }
+                    },
+                );
+            }
+            Command::CancelSignIn => {
+                if matches!(self.pending, Some(PendingSignIn::Browser)) {
+                    self.stop_browser();
+                    self.pending = None;
+                    self.state_changed();
+                }
+                self.ok(id, Done {});
+            }
+            Command::AccountPage => {
+                let Some(cloud) = self.signed_in_cloud(id) else {
+                    return;
+                };
+                self.request(id, async move { cloud.account_link().await }, |_, link| {
+                    Opened { url: link.url }
+                });
+            }
             Command::RelayOnly { on } => {
                 if self.config.relay_only != on {
                     self.config.relay_only = on;
@@ -890,9 +962,10 @@ impl Service {
         let store = Store::open(&self.config.data, url, self.config.file_credentials);
         let sink_store = store.clone();
         let sink: crate::cloud::TokenSink = Arc::new(move |tokens| {
-            let saved = tokens.map(|t| Saved {
+            let saved = tokens.map(|(t, key)| Saved {
                 device: t.device,
                 refresh: t.refresh.clone(),
+                key: key.map(anyplay_proof::DeviceKey::secret),
             });
             let store = sink_store.clone();
             std::thread::spawn(move || store.save(saved.as_ref()));
@@ -919,7 +992,11 @@ impl Service {
             },
             move |service, saved| {
                 let Some(saved) = saved else { return };
-                cloud.resume(saved.device, saved.refresh);
+                let key = saved
+                    .key
+                    .as_deref()
+                    .and_then(anyplay_proof::DeviceKey::from_secret);
+                cloud.resume(saved.device, saved.refresh, key);
                 service.link = control::Cloud::Connecting;
                 service.state_changed();
                 let resumed = cloud.clone();
@@ -939,6 +1016,74 @@ impl Service {
                 );
             },
         );
+    }
+
+    /// Waits for the browser to come back to the loopback address, then trades its code for
+    /// the tokens of this device.
+    fn await_browser(&mut self, started: browser::Started) {
+        let browser::Started {
+            verifier,
+            result,
+            task,
+            ..
+        } = started;
+        let cloud = self.cloud.clone();
+        let device = self.device();
+        let inbox = self.inbox.clone();
+        let waiter = tokio::spawn(async move {
+            let outcome = result.await.unwrap_or(Callback::TimedOut);
+            let Some(cloud) = cloud else { return };
+            let exchanged = match &outcome {
+                Callback::Code(code) => Some(cloud.browser_token(code, &verifier, device).await),
+                _ => None,
+            };
+            let _ = inbox.send(Input::Done(Box::new(move |service| {
+                service.browser_done(outcome, exchanged);
+            })));
+        });
+        self.browser = Some((task, waiter));
+    }
+
+    fn stop_browser(&mut self) {
+        if let Some((listener, waiter)) = self.browser.take() {
+            listener.abort();
+            waiter.abort();
+        }
+    }
+
+    fn browser_done(
+        &mut self,
+        outcome: Callback,
+        exchanged: Option<Result<anyplay_api::SignedIn, CloudError>>,
+    ) {
+        self.browser = None;
+        self.pending = None;
+        let notice = |code: &str, message: &str| control::Event::Notice {
+            code: code.to_owned(),
+            message: message.to_owned(),
+        };
+        match (outcome, exchanged) {
+            (_, Some(Ok(signed_in))) => self.signed_in(signed_in.me),
+            (_, Some(Err(error))) => {
+                let failure = self.failure(&error);
+                self.event(notice(&failure.code, &failure.message));
+                self.state_changed();
+            }
+            (Callback::Denied(_), _) => {
+                self.event(notice(
+                    "sign_in_stopped",
+                    "The sign-in was stopped in the browser.",
+                ));
+                self.state_changed();
+            }
+            _ => {
+                self.event(notice(
+                    "sign_in_timed_out",
+                    "The sign-in took too long. Start it again.",
+                ));
+                self.state_changed();
+            }
+        }
     }
 
     /// Tries a saved sign-in again after a pause, while the cloud stays unreachable.
@@ -1009,6 +1154,7 @@ impl Service {
         if let Some((_, task)) = self.events.take() {
             task.abort();
         }
+        self.stop_browser();
         self.me = None;
         self.pending = None;
         self.link = control::Cloud::Offline;
@@ -2482,6 +2628,7 @@ impl Service {
         let pending = match self.pending {
             Some(PendingSignIn::Code { .. }) => Some(Pending::Code),
             Some(PendingSignIn::Handle { .. }) => Some(Pending::Handle),
+            Some(PendingSignIn::Browser) => Some(Pending::Browser),
             None => None,
         };
         let state = (self.link, account, pending);

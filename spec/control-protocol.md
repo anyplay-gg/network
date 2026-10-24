@@ -41,9 +41,12 @@ Error codes are those of the [cloud API](cloud-api.md), plus `unknown_command`, 
 | `do` | Fields | `ok` |
 |---|---|---|
 | `hello` | `launcher` (its version), `cloud` (the cloud's URL) | `{service, protocol}` |
-| `email` | `email` | `{code_length}` |
-| `code` | `code` | `{result: "signed_in" \| "new_account"}` |
-| `sign_up` | `handle`, `age_confirmed` | `{}` |
+| `browser_sign_in` | `create` (default false) | `{url}`: open it in the system browser |
+| `cancel_sign_in` | | `{}` |
+| `account_page` | | `{url}`: open it in the system browser |
+| `email` (deprecated) | `email` | `{code_length}` |
+| `code` (deprecated) | `code` | `{result: "signed_in" \| "new_account"}` |
+| `sign_up` (deprecated) | `handle`, `age_confirmed` | `{}` |
 | `sign_out` | | `{}` |
 | `delete_account` | | `{}` |
 | `add_friend` | `handle` | `{result: "requested" \| "friends"}` |
@@ -86,7 +89,10 @@ Error codes are those of the [cloud API](cloud-api.md), plus `unknown_command`, 
 | `add_to_conversation` | `conversation`, `accounts` | `{added}` |
 
 - `hello` comes first. Until it is answered every other command gets `bad_state`. The net service then resumes the device's saved sign-in, if there is one.
-- `email` starts a sign-in; `code` finishes it or, for a new address, asks for `sign_up`.
+- `browser_sign_in` is how the launcher signs a player in or creates an account ([ADR 0016](../docs/adr/0016-accounts-are-managed-on-the-web.md)). The net service opens a listener on `127.0.0.1` with a random port, makes a PKCE verifier and a `state`, and answers the address of the cloud's sign-in page; the launcher opens it in the system browser. The net service then sends a `state` event with `pending` `browser`, and when the player has finished in the browser, a `state` event with the account (and `pending` null). It fails with `not_found` when the cloud has no account web, and with `bad_state` when an account is signed in. A browser that is not finished in 10 minutes, or a sign-in the player stops, ends with a `notice` (`sign_in_timed_out`, `sign_in_stopped`) and `pending` null. `create` opens the page at "Create account". Nothing is typed in the launcher.
+- `cancel_sign_in` ends a `browser_sign_in` that is waiting. It answers `{}` even when none is.
+- `account_page` answers a link that opens the account web signed in as the player (60 seconds, one use): e-mail, passkeys, devices, a copy of the data, deleting the account. It needs a signed-in account whose device has a key (`unauthorized` otherwise: sign in again) and a cloud with an account web (`not_found`).
+- `email`, `code` and `sign_up` still work and are deprecated: use `browser_sign_in`. `email` starts a sign-in; `code` finishes it or, for a new address, asks for `sign_up`.
 - `game_start` answers the variables the launcher adds to the game's environment, at present `ANYPS5_NET_ENDPOINT` and `ANYPS5_NET_TOKEN` from the [bridge protocol](bridge-protocol.md). With `join`, the net service holds the join intent for that session. `game_end` follows when the game's process has ended.
 - `invite` invites friends to the session the player is in.
 - `profile` only reads. A player edits their profile, avatar and visibility on the cloud's web site, which uses the HTTP API directly ([cloud API](cloud-api.md#profiles-avatars-and-playtime)); the launcher shows what `profile` and `cards` answer. `upload_playtime` can be sent again with the same entries; the cloud keeps the highest minutes per title and day.
@@ -114,7 +120,7 @@ Error codes are those of the [cloud API](cloud-api.md), plus `unknown_command`, 
 | `conversation` | `id` | a conversation is new or its members changed |
 | `conversation_gone` | `id` | the player is no longer in the conversation |
 
-- `cloud` is `offline`, `connecting` or `online`. `account` is `{id, handle, email}` or null. `pending` is `code` (an e-mail is out), `handle` (the account needs a handle) or null.
+- `cloud` is `offline`, `connecting` or `online`. `account` is `{id, handle, email}` or null. `pending` is `code` (an e-mail is out), `handle` (the account needs a handle), `browser` (the system browser has the sign-in) or null.
 - `friends` carries the whole lists each time, with each friend's presence as in the cloud API. The net service sends at most four of them per second.
 - `message` carries no text: the launcher keeps the highest number it has for each conversation and calls `messages` with `after`. The `conversations` event after a reconnect carries every conversation's newest number (`last`), so what arrived while the connection was down is fetched the same way.
 - `session` is the cloud's `Session` without `build`, `properties` and the members' `endpoint`, and with one more field per member: `link`, which is `connecting`, `direct` or `relay` for the other players and null for the player.

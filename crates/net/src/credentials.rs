@@ -5,11 +5,25 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-/// The part of a sign-in worth keeping: the device and its refresh token.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// The part of a sign-in worth keeping: the device, its refresh token and the device key that
+/// the refresh token is bound to. The key sits in the same entry, so it has the same protection
+/// as the token: the system credential store, or an owner-only file.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Saved {
     pub device: u64,
     pub refresh: String,
+    /// The secret of the device key (see `anyplay-proof`). Absent in sign-ins saved before
+    /// device binding existed; the first refresh then makes one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
+}
+
+impl std::fmt::Debug for Saved {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Saved")
+            .field("device", &self.device)
+            .finish_non_exhaustive()
+    }
 }
 
 /// One cloud's saved sign-in.
@@ -121,12 +135,30 @@ mod tests {
         let saved = Saved {
             device: 9,
             refresh: "r1".into(),
+            key: Some("k1".into()),
         };
         store.save(Some(&saved));
         assert_eq!(store.load(), Some(saved));
         store.save(None);
         assert_eq!(store.load(), None);
         store.save(None);
+    }
+
+    #[test]
+    fn a_sign_in_saved_before_device_keys_still_loads() {
+        let saved: Saved = serde_json::from_str(r#"{"device":9,"refresh":"r1"}"#).unwrap();
+        assert_eq!(saved.key, None);
+    }
+
+    #[test]
+    fn debug_output_never_shows_secrets() {
+        let saved = Saved {
+            device: 1,
+            refresh: "secret-refresh".into(),
+            key: Some("secret-key".into()),
+        };
+        let text = format!("{saved:?}");
+        assert!(!text.contains("secret"), "{text}");
     }
 
     #[test]
@@ -137,6 +169,7 @@ mod tests {
         a.save(Some(&Saved {
             device: 1,
             refresh: "a".into(),
+            key: None,
         }));
         assert_eq!(b.load(), None);
     }

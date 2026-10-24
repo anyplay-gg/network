@@ -37,7 +37,7 @@ The Rust reference is [`crates/api`](../crates/api). The cloud in [anyplay-gg/cl
 Account   { id, handle }
 Me        { id, handle, email, created }
 Tokens    { access, access_expires, refresh, device }
-Device    { name, platform }                       platform: "windows" | "linux" | "macos" | "other"
+Device    { name, platform, key }                  platform: "windows" | "linux" | "macos" | "other"; key: the device's public key or absent
 Presence  { online, activity, revision }           activity: Activity or null
 Activity  { title_id, title, version, session }    session: SessionRef or null
 SessionRef{ id, joinable, members, max_members }
@@ -73,19 +73,73 @@ Message   { conversation, seq, sender, text, created }
 
 ## Signing in
 
-Accounts have no password. A device signs in with a code sent to the account's e-mail address and then keeps a refresh token ([ADR 0005](../docs/adr/0005-sign-in-by-e-mail-code.md)).
+Accounts have no password. A device signs in with a code sent to the account's e-mail address, with a passkey, or in the player's browser, and then keeps a refresh token bound to a key of its own ([ADR 0005](../docs/adr/0005-sign-in-by-e-mail-code.md), [ADR 0016](../docs/adr/0016-accounts-are-managed-on-the-web.md)). The browser flow is the way the launcher signs in; the e-mail requests below stay for clouds without an account web and for older launchers.
 
 | Request | Body | Answer |
 |---|---|---|
 | `POST /v1/auth/email` | `{email}` | `{challenge, expires, code_length}` |
 | `POST /v1/auth/code` | `{challenge, code, device}` | `{result: "signed_in", tokens, me}` or `{result: "new_account", signup, expires}` |
 | `POST /v1/auth/signup` | `{signup, handle, age_confirmed, device}` | `{tokens, me}` |
-| `POST /v1/auth/refresh` | `{refresh}` | `Tokens` |
+| `POST /v1/auth/refresh` | `{refresh, device_key}` and a proof | `Tokens` |
 | `POST /v1/auth/signout` | none (bearer) | 204 |
+| `POST /v1/auth/browser/token` | `{code, verifier, device}` | `{tokens, me}` |
+| `POST /v1/auth/browser/link` | none (bearer) and a proof | `{url, expires}` |
 
 - `auth/email` answers the same whether or not an account exists, so it cannot be used to test addresses. A code is 6 digits, lives 10 minutes and allows 5 tries.
 - `age_confirmed` must be `true`: the player confirms being old enough to agree alone (16 in the EU unless a country sets a lower age). Younger players need a parent's consent, which this version does not collect.
-- An access token lives 15 minutes. A refresh token is replaced on every use. Using a replaced refresh token again signs the device out, because only a thief would do that.
+- `device` carries `key`, the device's public key (below). A cloud may refuse a device without one (`bad_request`): see Devices without a key.
+- An access token lives 15 minutes. A refresh token is replaced on every use. Using a replaced refresh token again signs the device out and so ends the whole chain of its refresh tokens, whether or not the request has a proof: only a copy can present it twice.
+- `device_key` in a refresh request is for a device that has none yet; see Devices without a key. For a device that has a key it is ignored.
+
+## Tokens
+
+An access token is `v2.<payload>.<signature>`. The payload is JSON in unpadded URL-safe base64 with the fields `k` (`access` or `relay`), `aud` (`cloud` for access, `relay` for relay tokens), `kid` (the first 4 bytes of the SHA-256 of the signing public key, in lowercase hex), `a` (account), `d` (device, access tokens) or `e` (endpoint, relay tokens), `i` (issued, Unix seconds) and `x` (expires). The signature is Ed25519 over the bytes `anyplay-ticket-v2` + `0x00` + `v2.` + the payload part. A verifier refuses a wrong signature, a `kid` it does not have, a kind or audience that does not fit, and a token at or past `x`. Tokens of version 1 (`v1.<payload>.<signature>`, signature over `v1.` + payload, no `i`, `aud` or `kid`) are still read and have `i` 0, and are no longer made.
+
+Test vectors, from the signing secret of 32 bytes of `0x07` (`kid` `fe812c12`):
+
+```text
+access, account 41, device 3, issued 1800000000, expires 1800000900:
+v2.eyJrIjoiYWNjZXNzIiwiYXVkIjoiY2xvdWQiLCJraWQiOiJmZTgxMmMxMiIsImEiOjQxLCJkIjozLCJpIjoxODAwMDAwMDAwLCJ4IjoxODAwMDAwOTAwfQ.v5hqHZXmSEZZ7e4zoEjBo16I88VTCue4tXoeyZHnSfpieSu1We51qnpsZ5LQnXDg-6kc5QCT5-GAVjkVRRxCCg
+relay, account 41, endpoint "ab" x 32, issued 1800000000, expires 1800086400:
+v2.eyJrIjoicmVsYXkiLCJhdWQiOiJyZWxheSIsImtpZCI6ImZlODEyYzEyIiwiYSI6NDEsImUiOiJhYmFiYWJhYmFiYWJhYmFiYWJhYmFiYWJhYmFiYWJhYmFiYWJhYmFiYWJhYmFiYWJhYmFiYWJhYmFiYWJhYmFiIiwiaSI6MTgwMDAwMDAwMCwieCI6MTgwMDA4NjQwMH0.3mLYH9L8CmrFxXt8P6n2fwcCXLAev3vaP-uVdWvLDOjVjqwqKU_i84TOSNZ0fZF0Vox-JCT9xSfzyI-tumsoDw
+```
+
+An access token is accepted only while its device is signed in, its account is not banned and the token was issued at or after the account's "not before" time, which "sign out everywhere" sets to now. Relay tokens are checked by relays alone and stay valid until they expire.
+
+## Device keys and proofs
+
+At sign-in a device sends `key`: an Ed25519 public key, 32 bytes in unpadded URL-safe base64. The cloud keeps it with the device. The private key stays on the PC, in the entry that holds the refresh token.
+
+A **proof** is the header `AnyPlay-Proof: v1.<time>.<nonce>.<signature>`: `time` is Unix seconds in decimal, `nonce` 16 random bytes in unpadded URL-safe base64, and the signature is Ed25519 over the UTF-8 text
+
+```text
+anyplay-proof-v1\n<METHOD>\n<path>\n<time>\n<nonce>\n<BASE64URL(SHA-256(token))>
+```
+
+where `path` has no query and `token` is the text of the refresh token (for refresh) or of the access token (for the link). The cloud accepts a proof whose time is within 60 seconds of its own clock, once: it keeps the nonce until the time window ends, in the store, so every node refuses a replay. A proof of the wrong time answers `bad_request` (the player's clock is off) and leaves the device signed in; any other failure answers `unauthorized`, also without signing the device out.
+
+Test vector: key secret of 32 bytes of `0x07` (public key `6kpsY-KcUgq-9VB7Ey7F-ZVHdq6-vnuSQh7qaRRG0iw`), `POST`, `/v1/auth/refresh`, token `refresh-token-1`, time 1800000000, nonce 16 bytes of `0x01`:
+
+```text
+v1.1800000000.AQEBAQEBAQEBAQEBAQEBAQ.nyoO-XK2j-igBkE6cd81u4D3dW5O4JKKa62lLTRZU4LOfJj6Vt8Gopf6TGpJBqneapSZxWgs9x7C26rXSQxuAQ
+```
+
+Which requests carry a proof: **refresh**, for every device that has a key, and **`browser/link`**. Other requests carry the access token alone: it lives 15 minutes and its device must exist.
+
+### Devices without a key
+
+A device signed in before keys existed is a *legacy device*. It may refresh without a proof until the end of its grace period (30 days after the cloud was upgraded; `legacy_device_days` for devices that sign in without a key later). A refresh with `device_key` and a proof made by that key binds the device; from then on it is a normal device, and a device is never unbound. After the grace period, or on a cloud that sets `legacy_device_days` to 0, a legacy device gets `unauthorized` and must sign in again.
+
+## Browser sign-in and the account web
+
+A cloud that has a public address serves the account web ([ADR 0016](../docs/adr/0016-accounts-are-managed-on-the-web.md)): pages to sign in, create an account and manage it. `GET /v1/info` names its origin in `web`. The pages are not part of this API; what the net service uses is:
+
+1. `GET <web>/web/authorize?client=net&intent=sign_in|create&redirect_uri=<uri>&state=<state>&code_challenge=<challenge>&code_challenge_method=S256&device=<name>` in the system browser. `redirect_uri` must be `http://127.0.0.1:<port>/<path>` or `http://[::1]:<port>/<path>` (port 1024 or higher, no user, query or fragment); `state` is 16 to 128 characters of `A-Z a-z 0-9 - _`; `code_challenge` is `BASE64URL(SHA-256(verifier))` of a verifier of 43 to 128 characters (RFC 7636). Anything else is refused with an error page and no session.
+2. The player signs in or creates the account in the browser. The cloud then sends the browser to `<redirect_uri>?code=<code>&state=<state>`. The code lives 60 seconds and can be used once.
+3. `POST /v1/auth/browser/token` with `{code, verifier, device}` answers `{tokens, me}` for a new device bound to `device.key`. A code that is unknown, used or expired answers `code_expired`; a verifier that does not match answers `code_wrong`, and the code is gone either way.
+4. `POST /v1/auth/browser/link`, with the bearer token and a proof, answers `{url, expires}`: a link (60 seconds, single use) that opens the account web signed in as the account. The page behind it asks before it signs in.
+
+The browser's own session on these pages is a cookie that never reaches the API.
 
 ## Accounts
 
@@ -352,14 +406,14 @@ Every message has a number `seq` that counts up by one in its conversation, star
 
 ## Information
 
-`GET /v1/info` needs no account and answers `{name, version, signup, privacy, terms}`. `signup` is `open` or `closed`; `privacy` and `terms` are URLs or null.
+`GET /v1/info` needs no account and answers `{name, version, signup, privacy, terms, web}`. `signup` is `open` or `closed`; `privacy` and `terms` are URLs or null; `web` is the origin of the account web, and absent when the cloud has none.
 
 ## Limits
 
 | What | Limit |
 |---|---|
 | `auth/email` | 3 per address and 10 per IP address per 15 minutes |
-| `auth/code`, `auth/signup` | 20 per IP address per 15 minutes |
+| `auth/code`, `auth/signup`, `auth/browser/token`, and the pages `web/authorize`, `web/code` and the passkey sign-in | 20 per IP address per 15 minutes |
 | `auth/refresh` | 30 per device per hour |
 | `relays/tickets` | 20 per account per hour |
 | `PUT /v1/me/avatar` | 5 per account per hour, besides the limit below |

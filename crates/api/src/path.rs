@@ -7,6 +7,10 @@ pub const AUTH_CODE: &str = "/v1/auth/code";
 pub const AUTH_SIGNUP: &str = "/v1/auth/signup";
 pub const AUTH_REFRESH: &str = "/v1/auth/refresh";
 pub const AUTH_SIGNOUT: &str = "/v1/auth/signout";
+pub const AUTH_BROWSER_TOKEN: &str = "/v1/auth/browser/token";
+pub const AUTH_BROWSER_LINK: &str = "/v1/auth/browser/link";
+/// The page where the browser sign-in starts, on the account web origin.
+pub const WEB_AUTHORIZE: &str = "/web/authorize";
 pub const ME: &str = "/v1/me";
 pub const ME_EXPORT: &str = "/v1/me/export";
 pub const ACCOUNTS: &str = "/v1/accounts";

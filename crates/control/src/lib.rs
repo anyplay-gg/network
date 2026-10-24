@@ -25,12 +25,15 @@ pub enum Command {
         launcher: String,
         cloud: String,
     },
+    /// Deprecated: use `browser_sign_in`. Still works on a cloud without an account web.
     Email {
         email: String,
     },
+    /// Deprecated: use `browser_sign_in`.
     Code {
         code: String,
     },
+    /// Deprecated: use `browser_sign_in` with `create`.
     SignUp {
         handle: String,
         age_confirmed: bool,
@@ -171,6 +174,16 @@ pub enum Command {
         conversation: String,
         accounts: Vec<AccountId>,
     },
+    /// Starts signing in (or creating an account) in the system browser. Answers the URL for the
+    /// launcher to open; the end comes as a `state` event with the account.
+    BrowserSignIn {
+        #[serde(default)]
+        create: bool,
+    },
+    /// Ends a browser sign-in that is waiting.
+    CancelSignIn,
+    /// Answers a short-lived link that opens the account web, signed in as this account.
+    AccountPage,
 }
 
 /// The game a player is playing, as the launcher knows it.
@@ -363,6 +376,12 @@ pub struct Accepted {
     pub title_id: String,
 }
 
+/// A page for the launcher to open in the system browser.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Opened {
+    pub url: String,
+}
+
 /// An answer without fields.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Done {}
@@ -388,6 +407,8 @@ pub enum Cloud {
 pub enum Pending {
     Code,
     Handle,
+    /// The browser sign-in is open; the net service waits for it.
+    Browser,
 }
 
 /// The signed-in account.
@@ -590,6 +611,22 @@ mod tests {
                 }
             ))
         );
+        assert_eq!(
+            parse_command(r#"{"id":7,"do":"browser_sign_in","create":true}"#),
+            Ok((7, Command::BrowserSignIn { create: true }))
+        );
+        assert_eq!(
+            parse_command(r#"{"id":8,"do":"browser_sign_in"}"#),
+            Ok((8, Command::BrowserSignIn { create: false }))
+        );
+        assert_eq!(
+            parse_command(r#"{"id":9,"do":"account_page"}"#),
+            Ok((9, Command::AccountPage))
+        );
+        assert_eq!(
+            parse_command(r#"{"id":10,"do":"cancel_sign_in"}"#),
+            Ok((10, Command::CancelSignIn))
+        );
     }
 
     #[test]
@@ -652,6 +689,29 @@ mod tests {
             })),
             "{\"event\":\"message\",\"conversation\":\"c\",\"seq\":3}\n"
         );
+    }
+
+    #[test]
+    fn the_browser_sign_in_answers_a_url_and_shows_as_pending() {
+        let answer = output_line(&Output::Answer(Answer::ok(
+            7,
+            Opened {
+                url: "https://cloud.example/web/authorize?x=1".into(),
+            },
+        )));
+        assert_eq!(
+            answer,
+            "{\"id\":7,\"ok\":{\"url\":\"https://cloud.example/web/authorize?x=1\"}}
+"
+        );
+        let state = Output::Event(Event::State {
+            cloud: Cloud::Offline,
+            account: None,
+            pending: Some(Pending::Browser),
+        });
+        let text = output_line(&state);
+        assert!(text.contains("\"pending\":\"browser\""), "{text}");
+        assert_eq!(parse_output(&text), Some(state));
     }
 
     #[test]
