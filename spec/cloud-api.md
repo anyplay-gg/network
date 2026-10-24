@@ -345,6 +345,10 @@ A **party** is up to 8 friends who stay together across games, with one chat. It
 - `PUT /v1/party/endpoint` is how the members of a party find each other for voice ([voice](voice.md)). `endpoint` and `relay` are the caller's tunnel key and relay, as for a session `Member`, and `voice` says that the caller's net service takes part in the party's voice and accepts voice connections from the other members. The net service sends it when it joins a party, when its relay changes and when `voice` changes, and again after every reconnect. The cloud stores the three on the caller's `PartyMember`, raises the party's `revision` only when one of them changed, and answers `not_found` when the caller is in no party and `bad_request` for an `endpoint` that is not 64 lowercase hex characters or a `relay` that is not an `https` URL. Two members of one party may not name the same `endpoint`: the second request is answered `limit`. A member who has announced nothing has `endpoint` `""`, `relay` null and `voice` false. Only members of the party ever receive `endpoint` and `relay`: the invitation (`PartyInvitation`) carries neither. A net service dials only members whose `voice` is true, and accepts voice connections from every member the party lists.
 - The party's chat is a conversation of kind `party` (`Party.conversation`). A member sees what is written after it joined.
 
+## Shares
+
+Share play between two party members is drafted in the [share play spec](share-play.md#cloud-api): the `Share` object, `/v1/shares` and `/v1/share`, and the events `share_invitation`, `share` and `share_gone`. Not implemented.
+
 ## Conversations and messages
 
 A **conversation** is `direct` (two accounts, one per pair), `group` (2 to 32 accounts) or `party` (see above). Messages are text of 1 to 2,000 characters. They are stored so that every device of the receiver gets them, and the cloud deletes them after 30 days, or the time the operator set ([ADR 0011](../docs/adr/0011-messages-are-stored-to-be-delivered.md)).
