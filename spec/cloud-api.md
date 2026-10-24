@@ -115,7 +115,7 @@ Accounts have no password. A device signs in with a code sent to the account's e
 - `max_members` is 2 to 64. An account is in at most 4 sessions at a time.
 - Joining checks, in this order: blocks between the joiner and any member (`forbidden`), visibility (`not_found`), the version guard (`version_mismatch`) and capacity (`full`). `invitation` is the ID of an invitation, or null. A member joining again only updates its `endpoint` and `relay`, for example after its net service moved to another relay.
 - When the leader leaves, the longest-standing member leads. The last member to leave closes the session.
-- Sessions live in the cloud's memory. A member whose net service stays disconnected for 30 seconds leaves.
+- Sessions live in the cloud's store, so they outlast a restart of the cloud. A member whose net service stays disconnected for 30 seconds leaves.
 
 ## Invitations
 
