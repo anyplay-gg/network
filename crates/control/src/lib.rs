@@ -432,13 +432,13 @@ mod tests {
         );
         assert_eq!(
             parse_command(
-                r#"{"id":4,"do":"upload_trophies","title_id":"PPSA00001",
+                r#"{"id":4,"do":"upload_trophies","title_id":"GAME00001",
                     "trophies":[{"number":3,"grade":"gold","earned":1800000000}]}"#
             ),
             Ok((
                 4,
                 Command::UploadTrophies {
-                    title_id: "PPSA00001".into(),
+                    title_id: "GAME00001".into(),
                     trophies: vec![anyplay_api::Trophy {
                         number: 3,
                         grade: anyplay_api::Grade::Gold,

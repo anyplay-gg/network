@@ -50,7 +50,7 @@ pub enum HandleProblem {
 }
 
 /// True for a title ID that can stand in a path: 1 to 64 characters from `A-Z a-z 0-9 _ -`,
-/// such as `PPSA01234`.
+/// such as `GAME01234`.
 pub fn is_title_id(text: &str) -> bool {
     (1..=64).contains(&text.len())
         && text
@@ -687,12 +687,12 @@ mod tests {
 
     #[test]
     fn title_ids_that_can_stand_in_a_path() {
-        assert!(is_title_id("PPSA01234"));
+        assert!(is_title_id("GAME01234"));
         assert!(is_title_id("GAME_00001-x"));
         assert!(!is_title_id(""));
         assert!(!is_title_id("../admin"));
-        assert!(!is_title_id("PPSA 01234"));
-        assert!(!is_title_id("PPSA01234?x=1"));
+        assert!(!is_title_id("GAME 01234"));
+        assert!(!is_title_id("GAME01234?x=1"));
         assert!(!is_title_id(&"A".repeat(65)));
     }
 
