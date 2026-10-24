@@ -16,7 +16,7 @@ What the network does not do yet, part by part. Each line says what is missing a
 - **NAT type**: reported as 2 while a relay is reachable, 0 otherwise; no finer measurement.
 - **Relay only**: the tunnels can keep every path on the relay, so peers never learn a player's address, and a test covers it; no setting offers it to players yet.
 - **Voice chat, matchmaking, leaderboards, cloud saves**: not started (phase 5).
-- **Coverage-guided fuzzing**: the parsers of both protocols are tested with random and damaged input from a fixed seed; a cargo-fuzz target that runs on a schedule is not set up yet.
+- **Fuzzing beyond the parsers**: the parsers of both protocols are fuzzed every night ([fuzz](../fuzz/README.md)); what the net service does with the messages they read, and what it reads from the cloud, is tested with fixed cases only.
 
 ## Cloud (anyplay-gg/cloud)
 
