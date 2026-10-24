@@ -1,5 +1,7 @@
 # The online-permission check waits
 
+Superseded by [ADR 0021](0021-the-line-is-drawn-at-the-law.md).
+
 Games ask the platform whether the player may use online features, through a check that on the console means a paid subscription. The bridge leaves that check exactly as AnyPS5 answers it today, signed in or not, until the network plays games together (phase 4) and a lawyer has reviewed the concept. Until then no game needs the answer, and an "authorized" answer is the one place where the network could be read as handing out a free subscription, which the [clean line](0003-the-clean-line.md) rules out. A notice that a game used such a feature still reaches the net service, because it only observes.
 
 ## Considered options
