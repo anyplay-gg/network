@@ -32,13 +32,13 @@ Open-source client and host for the GameStream-style protocol: RTP-like video ov
 
 Described only from the maker's public help pages. A host in a party invites one friend; the visitor sees the host's screen and, by the host's choice, either plays as the host or plays beside the host as a second player. The host can take control back. One visitor at a time; a session ends after an hour (one page says 60 minutes, another one hour) and can be started again; on the current console the host needs a subscription; the pages recommend about 2 Mbit/s each way; "both of you can enjoy the same game, regardless of who owns it". A separate screen-share mode only shows the screen.
 
-- Sources: [help page for the current console](https://www.playstation.com/en-us/support/games/ps5-share-play/), [the same in the older console's manual](https://manuals.playstation.net/document/gb/ps4/share/gameplay.html).
+- Sources: the console maker's public help page for the current console and the user manual of the older one (links kept in the project's private notes, so that no platform name appears in this repository).
 - Taken: three modes (watch, hand over, play together), party as the scope, one guest, the host can always take control back, consent by invitation.
 - Not taken: the hour limit (the operator may set one), the subscription, any format.
 
 ### Remote play of one's own console
 
-Streaming one's own console to one's own device (Xbox Remote Play, PS Remote Play). Different problem (one account on both ends), but useful for bit rates: the Xbox page asks for 10 Mbit/s down. Source: [Xbox Remote Play](https://www.xbox.com/en-US/consoles/remote-play).
+Streaming one's own console to one's own device, as current consoles offer. Different problem (one account on both ends), but useful for bit rates: one maker's page asks for 10 Mbit/s down. Source: that maker's public remote play page (link in the private notes).
 
 ## Codecs and licences
 
