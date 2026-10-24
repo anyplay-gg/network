@@ -7,6 +7,7 @@
 
 mod answers;
 pub mod bridge;
+pub mod browser;
 pub mod cloud;
 pub mod credentials;
 pub mod events;

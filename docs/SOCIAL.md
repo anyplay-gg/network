@@ -56,7 +56,7 @@ A page per profile at the cloud's address, showing only what the player made pub
 
 ### Sign-in
 
-Besides the e-mail code: passkeys, and one-tap sign-in with Apple, Google or Discord, through the system browser.
+Besides the e-mail code: passkeys (done, [ADR 0016](adr/0016-accounts-are-managed-on-the-web.md)), and one-tap sign-in with Apple, Google or Discord, through the system browser.
 
 ### Moderation
 

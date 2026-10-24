@@ -40,6 +40,25 @@ _Avoid_: Profile (the launcher's local display name), user
 The unique public name of an account, at most 16 characters. Games see it as the player's online ID.
 _Avoid_: Username, gamertag
 
+**Device**:
+One PC that is signed in to an account, with its own tokens. An account has at most 10.
+_Avoid_: Session (that is a group of players), client
+
+**Device key**:
+The key a device makes when it signs in. Its refresh token is useless without it.
+_Avoid_: Certificate, API key
+
+**Passkey**:
+A credential of the player's phone, computer or security key that signs them in on the account web, without a code.
+_Avoid_: Biometric login, WebAuthn (the standard behind it)
+
+**Account web**:
+The pages of the cloud, in the player's browser, where they sign in, create an account and manage it. The launcher only starts the browser flow.
+_Avoid_: Portal (the later pages for profiles, trophies and friends), dashboard
+
+**Sign out everywhere**:
+Ending every device and every browser session of an account at once, and refusing every access token issued before.
+
 **Friend**:
 Another account that both sides agreed to connect with.
 

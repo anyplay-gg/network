@@ -22,7 +22,7 @@ What the network does not do yet, part by part. Each line says what is missing a
 
 - **News between nodes**: presence, sessions and invitations are in the store, which every node of a cloud shares, but the nodes do not tell each other about changes yet, so a cloud runs as one node. Closes with stage 2 of the [cloud architecture](https://github.com/anyplay-gg/cloud/blob/main/docs/ARCHITECTURE.md) (NATS).
 - **Parental consent**: players under the age of consent cannot sign up.
-- **Sign-in by passkey**: not offered; e-mail codes only ([ADR 0005](adr/0005-sign-in-by-e-mail-code.md)).
+- **Sign-in with Apple, Google or Discord**: not offered; e-mail code and passkey, in the browser ([ADR 0016](adr/0016-accounts-are-managed-on-the-web.md), which says where it would fit).
 
 ## Launcher (anyplay-gg/launcher)
 

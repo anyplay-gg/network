@@ -155,6 +155,10 @@ impl Platform {
 pub struct Device {
     pub name: String,
     pub platform: Platform,
+    /// The device public key (see `anyplay-proof`), which binds the refresh token to it. A
+    /// device without one is a legacy device: see "Device keys and proofs" in the spec.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
 }
 
 // Signing in
@@ -202,6 +206,26 @@ pub struct SignedIn {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RefreshRequest {
     pub refresh: String,
+    /// Only for a legacy device: the public key to bind it to. The proof must be made with the
+    /// matching private key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device_key: Option<String>,
+}
+
+/// The second step of the browser sign-in: the one-time code the cloud sent to the loopback
+/// address, the PKCE verifier, and the device that signs in.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BrowserTokenRequest {
+    pub code: String,
+    pub verifier: String,
+    pub device: Device,
+}
+
+/// A one-time link that opens the account web, signed in as the caller account.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AccountLink {
+    pub url: String,
+    pub expires: u64,
 }
 
 // Friends, blocks and presence
@@ -438,6 +462,10 @@ pub struct Info {
     pub signup: Signup,
     pub privacy: Option<String>,
     pub terms: Option<String>,
+    /// The origin of the account web (sign in, create account, manage the account), absent when
+    /// this cloud serves none. The browser sign-in starts at `<web>/web/authorize`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub web: Option<String>,
 }
 
 // Trophies and privacy

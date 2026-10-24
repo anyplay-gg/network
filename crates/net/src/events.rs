@@ -281,7 +281,7 @@ mod tests {
         let base = format!("http://{}", listener.local_addr().unwrap());
         tokio::spawn(async move { axum::serve(listener, app).await });
         let cloud = Cloud::new(&base, Arc::new(|_| {}));
-        cloud.resume(1, "refresh".into());
+        cloud.resume(1, "refresh".into(), None);
         cloud
     }
 
@@ -345,7 +345,7 @@ mod tests {
         let base = format!("http://{}", listener.local_addr().unwrap());
         tokio::spawn(async move { axum::serve(listener, app).await });
         let cloud = Cloud::new(&base, Arc::new(|_| {}));
-        cloud.resume(1, "refresh".into());
+        cloud.resume(1, "refresh".into(), None);
         cloud
     }
 

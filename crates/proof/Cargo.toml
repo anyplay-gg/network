@@ -1,0 +1,16 @@
+[package]
+name = "anyplay-proof"
+description = "Device keys, proofs of possession and PKCE for the AnyPlay cloud API"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+base64 = "0.22"
+ed25519-dalek = "3"
+rand = "0.10"
+sha2 = "0.10"
+subtle = "2"
