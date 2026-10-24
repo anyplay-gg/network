@@ -1,6 +1,6 @@
 # Observing games
 
-How the network learns what a game sends and accepts, and how that becomes a specification and then code, without crossing the [clean line](adr/0003-the-clean-line.md). The terms are in [CONTEXT.md](../CONTEXT.md).
+How the network learns what a game sends and accepts, and how that becomes a specification and then code, without crossing the line [ADR 0021](adr/0021-the-line-is-drawn-at-the-law.md) draws. The terms are in [CONTEXT.md](../CONTEXT.md).
 
 ## Three steps, kept apart
 

@@ -487,19 +487,19 @@ Events, for [Events](cloud-api.md#events):
 | The worker crashes | The engine keeps running (the ring is overwritten, nothing waits); the net service ends the share and tells the launcher. |
 | A swapped worker | The launcher checks the download against the release's hash before it tells the net service the path ([supply chain](../docs/supply-chain.md)). |
 
-## The clean line check
+## The line check
 
-[ADR 0003](../docs/adr/0003-the-clean-line.md) and the [ground rules](../docs/DESIGN.md#ground-rules), one by one.
+[ADR 0021](../docs/adr/0021-the-line-is-drawn-at-the-law.md) and the [ground rules](../docs/DESIGN.md#ground-rules), one by one.
 
 | Rule | Share play |
 |---|---|
 | No contact with a platform's servers | None. Everything runs between players and our cloud. |
-| No material from a platform | None. The wire formats here are our own. The research is from public pages and papers; no code was taken from Moonlight, Sunshine or any other program. |
-| No tokens for others | None issued. |
+| No material from a platform (code, keys, firmware, documents) | None. The wire formats here are our own. The research is from public pages and papers; no code was taken from Moonlight, Sunshine or any other program. |
+| No tokens for others, no posing as a console | None issued. |
 | Formats from observation | Not applicable: these are our own formats, as for voice. |
 | No platform trademarks in names | The terms are plain words. The feature's name, share play, is also the name of a console's feature; see [open questions](#open-questions). The pad buttons are named by position, not by a console's symbols. |
-| No publisher backends, no bypass of anti-cheat or account checks | Share play does not touch them. A game that needs a publisher backend stays offline with or without a share. |
-| Only games the player owns | The game runs only on the host's PC, on the host's copy. The guest gets a picture and sound, as if they watched over the host's shoulder, and never the game or its data. **This is where the risk lies.** In `hand_over` and `together` a guest plays a game they do not own. The console feature this is modeled on says in its public help that both players enjoy the game "regardless of who owns it", so the idea is established, but "established" is not "licensed", and a rights holder could see a guest's play differently. The limits that keep this small: one guest, only friends in the host's party, the host present and able to take control back at once, no recording by us, no public stream, no storage. They do not replace a legal review. |
+| No stand-in for a running publisher service, no bypass of anti-cheat or copy protection | Share play does not touch them. A game whose online play needs a live publisher service stays offline on the PlayStation side with or without a share. |
+| Only games the player owns | The game runs only on the host's PC, on the host's copy. The guest gets a picture and sound, as if they watched over the host's shoulder, and never the game or its data. ADR 0021 puts play together by streaming in, with this review before the public launch. **This is where the risk lies.** In `hand_over` and `together` a guest plays a game they do not own. The console feature this is modeled on says in its public help that both players enjoy the game "regardless of who owns it", so the idea is established, but "established" is not "licensed", and a rights holder could see a guest's play differently. The limits that keep this small: one guest, only friends in the host's party, the host present and able to take control back at once, no recording by us, no public stream, no storage. They do not replace a legal review. |
 | Compatibility layer, never an emulator | The tap reads the picture AnyPS5 presents and the sound it plays, and gives it a pad. It decrypts and unlocks nothing. |
 
 Two more points that are not on the list. The hardware encoders give no patent license of their own (see [codecs](#codecs)). And the cloud's `share.enabled` is false by default, so that a public cloud does not offer share play before the review.
@@ -518,7 +518,7 @@ Two more points that are not on the list. The hardware encoders give no patent l
 ## Open questions
 
 1. **The name.** "Share Play" is also the name of a console's feature. The repo's term is lower-case and generic, but the player-facing name should be our own before a public release.
-2. **Legal review.** Patents for H.264 and AV1 through hardware and software, and the guest-without-the-game question under the clean line. Until it is done, `share.enabled` is false on the public cloud, as the online-permission check waits in [ADR 0008](../docs/adr/0008-the-online-permission-check-waits.md).
+2. **Legal review.** Patents for H.264 and AV1 through hardware and software, and the guest-without-the-game question under the rule about owned games. Until it is done, `share.enabled` is false on the public cloud, as revival servers and the online-permission answer wait for the same review ([ADR 0021](../docs/adr/0021-the-line-is-drawn-at-the-law.md)).
 3. **Datagrams or a stream per frame.** Phase 0 measures how the QUIC datagram path and its controller behave at 6 to 15 Mbit/s over a relay. If it does not hold up, a stream per frame with a reset when late is the fallback (ADR 0019).
 4. **Where the quinn controller stands.** The default controller of the QUIC stack under iroh, and whether iroh lets us choose BBR or a delay-based one, is not verified here. Phase 0 reads it and measures it.
 5. **Capture latency.** The route through the existing readback adds up to one frame. Phase 1 measures it; a GPU-side export may be needed.

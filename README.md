@@ -49,13 +49,13 @@ AnyPS5 already replaces the console's system libraries with its own code. So the
 
 ## Which games can play online
 
-The network stands in for the platform's own services and nothing else. A game whose online part needs its publisher's servers stays offline, because the network never stands in for them and never issues tokens for anyone else's client ([the clean line](docs/adr/0003-the-clean-line.md)).
+The network answers the platform's own services for online play with AnyPlay accounts. It can also bring back a game's online play after its publisher has shut the service down, with a server written from observation. It never stands in for a publisher service that still runs, and never issues tokens for anyone else's client. A game whose online play runs on such a live service stays offline on the PlayStation side ([the line is drawn at the law](docs/adr/0021-the-line-is-drawn-at-the-law.md)).
 
 | Class | The game's online part | On the network |
 |---|---|---|
 | A | Platform services only: sessions, matchmaking, peer-to-peer play, one player hosting | the goal |
 | B | Platform services plus a publisher backend | only if the game also plays without the backend |
-| C | A publisher backend only: own accounts, dedicated servers, live-service games | stays offline |
+| C | A publisher backend only: own accounts, dedicated servers, live-service games | stays offline while the publisher runs it; a revival server only after the publisher has shut it down |
 | 0 | No online part | nothing to do |
 
 ## Privacy and security

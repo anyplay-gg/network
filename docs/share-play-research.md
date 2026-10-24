@@ -1,6 +1,6 @@
 # Share play: prior art and sources
 
-What we looked at before designing [share play](../spec/share-play.md), and what we took from it. We take ideas only. No code, protocol text or key from any program below is used ([ADR 0003](adr/0003-the-clean-line.md)). Read in October 2026; pages change.
+What we looked at before designing [share play](../spec/share-play.md), and what we took from it. We take ideas only. No code, protocol text or key from any program below is used ([ADR 0021](adr/0021-the-line-is-drawn-at-the-law.md)). Read in October 2026; pages change.
 
 ## Programs and features
 
