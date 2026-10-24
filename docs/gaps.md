@@ -22,6 +22,7 @@ What the network does not do yet, part by part. Each line says what is missing a
   - the pump runs on a Tokio timer, which on Windows can tick only every 15 ms or so rather than every 5 ms; the engine's queue allows for that, but a thread of its own would be steadier;
   - no gain or level meter before a talk, no per-device sample-rate choice (the device's default is used);
   - phase S3 is done when a party of four talks with relay only switched on, which needs the cloud and a real run.
+- **Share play**: designed ([spec](../spec/share-play.md), [plan](share-play-plan.md)), nothing built. Needs a prototype of video over datagrams on real networks (phase 0), a tap in the engine (frame, sound, pad), the cloud's share records, and a legal review before a public cloud turns it on.
 - **Matchmaking, leaderboards, cloud saves**: not started (phase 5).
 - **Fuzzing beyond the parsers**: the parsers of both protocols are fuzzed every night ([fuzz](../fuzz/README.md)); what the net service does with the messages they read, and what it reads from the cloud, is tested with fixed cases only.
 

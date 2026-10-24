@@ -126,6 +126,10 @@ Game packets do not travel in frames.
 - An **intent** is held for the game to pick up, such as a join intent (`intent_type` `joinSession`) with the session in its properties. The net service sends a pending intent right after welcome. `user_id` -1 means the initial user.
 - The **invitation dialog** request is answered when the player has picked friends in the launcher or closed the picker: `result` 0 means invitations went out (`sent` of them), 1 that the player cancelled. The bridge waits for as long as the game keeps its dialog open.
 
+### Share play (`0x05xx`)
+
+Drafted in the [share play spec](share-play.md#bridge-protocol-additions): opening and closing the frame ring, the share mode, the guest's pad states, and the host's override. Not implemented.
+
 ## Observation
 
 A bridge writes an [observation log](observation-log.md) when `ANYPS5_NET_OBSERVE` names a file, with or without a net service.
