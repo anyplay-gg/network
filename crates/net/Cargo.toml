@@ -1,0 +1,39 @@
+[package]
+name = "anyplay-net"
+description = "The AnyPlay net service: account, cloud connection, bridge and tunnels on a player's PC"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[[bin]]
+name = "anyplay-net"
+path = "src/main.rs"
+
+[dependencies]
+anyplay-api = { path = "../api" }
+anyplay-bridge-protocol = { path = "../bridge-protocol" }
+anyplay-control = { path = "../control" }
+bytes = "1"
+data-encoding = "2"
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+http = "1"
+iroh = "1.4.1"
+keyring = "4"
+rand = "0.10"
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls-no-provider"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+serde.workspace = true
+serde_json.workspace = true
+tokio = { version = "1.54", features = ["rt-multi-thread", "macros", "net", "io-util", "io-std", "sync", "time", "signal"] }
+tokio-websockets = { version = "0.13", features = ["client", "rustls-platform-verifier", "sha1_smol", "rand", "getrandom"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+axum = { version = "0.8", features = ["ws"] }
+iroh-relay = { version = "1.4.1", features = ["server"] }
+rcgen = "0.14"
+tempfile = "3"

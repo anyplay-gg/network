@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/bridge-protocol"]
+members = ["crates/*"]
 
 [workspace.package]
 version = "0.0.0"
@@ -8,3 +8,17 @@ edition = "2024"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/anyplay-gg/network"
 rust-version = "1.88"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Dependencies run at a usable speed in debug builds. It also keeps windows-gnu able to link
+# iroh, which is a cdylib as well: unoptimized, it would export more symbols than a DLL holds.
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
