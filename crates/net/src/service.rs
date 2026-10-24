@@ -1105,6 +1105,7 @@ impl Service {
             relays,
             relay_roots: self.config.relay_roots.clone(),
             bind: self.config.bind,
+            relay_only: false,
         };
         let traffic = self.traffic.clone();
         self.spawn(

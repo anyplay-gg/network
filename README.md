@@ -51,7 +51,7 @@ cargo run --release -p anyplay-probe -- listen          # on one side; prints a 
 cargo run --release -p anyplay-probe -- connect <ticket> # on the other
 ```
 
-It reports whether the tunnel went direct or through a relay, the round trip, loss, jitter and throughput. Without `--relay` it uses the public relays of the iroh project, because the network's own relays do not run yet; only probe packets cross them.
+It reports whether the tunnel went direct or through a relay, the round trip, loss, jitter and throughput. Add `--relay-only` on either side to measure the relayed path. Without `--relay` it uses the public relays of the iroh project, because the network's own relays do not run yet; only probe packets cross them. While a relay is reached, the ticket names no IP address, so it can be posted where others read it.
 
 The launcher starts the net service by itself. To run one by hand: `cargo run -p anyplay-net -- --data <folder>`, then type control protocol lines.
 

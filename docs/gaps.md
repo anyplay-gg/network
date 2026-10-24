@@ -14,6 +14,7 @@ What the network does not do yet, part by part. Each line says what is missing a
 - **Web API groups**: none of the platform's is offered yet; every request is answered "not offered" and written to the observation log. Only the network's own group `anyplay` is answered ([spec](../spec/own-api-group.md)). Closes group by group, from observations of class A titles.
 - **Push events to the game**: not sent until the bridge can deliver them.
 - **NAT type**: reported as 2 while a relay is reachable, 0 otherwise; no finer measurement.
+- **Relay only**: the tunnels can keep every path on the relay, so peers never learn a player's address, and a test covers it; no setting offers it to players yet.
 - **Voice chat, matchmaking, leaderboards, cloud saves**: not started (phase 5).
 - **Coverage-guided fuzzing**: the parsers of both protocols are tested with random and damaged input from a fixed seed; a cargo-fuzz target that runs on a schedule is not set up yet.
 

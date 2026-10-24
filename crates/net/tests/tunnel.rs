@@ -1,5 +1,5 @@
 //! Game traffic from one bridge to another through two tunnel endpoints and a relay, all on
-//! loopback.
+//! loopback: on whatever path the endpoints find, and through the relay only.
 
 mod support;
 
@@ -24,7 +24,7 @@ struct Side {
     changes: mpsc::UnboundedReceiver<LinkChange>,
 }
 
-async fn side(relay: &support::relay::TestRelay) -> Side {
+async fn side(relay: &support::relay::TestRelay, relay_only: bool) -> Side {
     let traffic = Traffic::start().await.unwrap();
     let (tx, changes) = mpsc::unbounded_channel();
     let tunnels = Tunnels::start(
@@ -36,6 +36,7 @@ async fn side(relay: &support::relay::TestRelay) -> Side {
             }],
             relay_roots: vec![relay.root.clone()],
             bind: Some(SocketAddr::from((Ipv4Addr::LOCALHOST, 0))),
+            relay_only,
         },
         traffic.clone(),
         tx,
@@ -100,8 +101,8 @@ async fn exchange(
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn game_traffic_crosses_the_tunnel_both_as_datagrams_and_as_streams() {
     let relay = support::relay::start().await;
-    let mut a = side(&relay).await;
-    let mut b = side(&relay).await;
+    let mut a = side(&relay, false).await;
+    let mut b = side(&relay, false).await;
 
     a.tunnels
         .set_peers(HashMap::from([(b.tunnels.id(), peer(2, B, &b))]));
@@ -234,6 +235,57 @@ async fn game_traffic_crosses_the_tunnel_both_as_datagrams_and_as_streams() {
     .await
     .expect("the tunnel did not close");
     assert_eq!(a.tunnels.link_of(B), None);
+    a.tunnels.close().await;
+    b.tunnels.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_relay_only_tunnel_carries_game_traffic_through_the_relay() {
+    let relay = support::relay::start().await;
+    let mut a = side(&relay, true).await;
+    let mut b = side(&relay, true).await;
+
+    a.tunnels
+        .set_peers(HashMap::from([(b.tunnels.id(), peer(2, B, &b))]));
+    b.tunnels
+        .set_peers(HashMap::from([(a.tunnels.id(), peer(1, A, &a))]));
+    assert_eq!(linked(&mut a.changes).await, Link::Relay);
+    assert_eq!(linked(&mut b.changes).await, Link::Relay);
+
+    let game_a = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+    let game_b = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+    let port = |s: &UdpSocket| s.local_addr().unwrap().port();
+    for (side, game) in [(&a, &game_a), (&b, &game_b)] {
+        assert_eq!(
+            side.traffic.bind(3658, Transport::Datagram, port(game)),
+            BindResult::Bound
+        );
+    }
+    for (from, game_from, to, game_to, address) in
+        [(&a, &game_a, B, &game_b, A), (&b, &game_b, A, &game_a, B)]
+    {
+        let mut datagram = TrafficHeader {
+            address: to,
+            vport: 3658,
+            source_vport: 3658,
+        }
+        .encode()
+        .to_vec();
+        datagram.extend_from_slice(b"relayed");
+        let got = exchange(game_from, &from.traffic, &datagram, game_to).await;
+        let (header, game) = TrafficHeader::split(&got).unwrap();
+        assert_eq!(header.address, address);
+        assert_eq!(game, b"relayed");
+    }
+    // Traffic does not open a direct path either.
+    assert_eq!(
+        a.tunnels.link_of(B).map(|(link, _)| link),
+        Some(Link::Relay)
+    );
+    assert_eq!(
+        b.tunnels.link_of(A).map(|(link, _)| link),
+        Some(Link::Relay)
+    );
     a.tunnels.close().await;
     b.tunnels.close().await;
 }

@@ -84,6 +84,9 @@ pub struct Options {
     pub relay_roots: Vec<rustls::pki_types::CertificateDer<'static>>,
     /// Bind only this address instead of every interface, as tests do on loopback.
     pub bind: Option<std::net::SocketAddr>,
+    /// Never a direct path: every tunnel goes through a relay, and peers never learn this
+    /// side's addresses. `bind` is then unused.
+    pub relay_only: bool,
 }
 
 impl Tunnels {
@@ -96,7 +99,9 @@ impl Tunnels {
             .secret_key(options.secret)
             .alpns(vec![ALPN.to_vec()])
             .relay_mode(RelayMode::Custom(relay_map(&options.relays)));
-        if let Some(bind) = options.bind {
+        if options.relay_only {
+            builder = builder.clear_ip_transports();
+        } else if let Some(bind) = options.bind {
             builder = builder
                 .clear_ip_transports()
                 .bind_addr(bind)
