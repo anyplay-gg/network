@@ -5,6 +5,7 @@
 //! a game's bridge connects to it over loopback (`spec/bridge-protocol.md`). See
 //! `docs/DESIGN.md` for how the parts fit together.
 
+mod answers;
 pub mod bridge;
 pub mod cloud;
 pub mod credentials;

@@ -29,6 +29,7 @@ use tokio::io::AsyncReadExt as _;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::task::JoinHandle;
 
+use crate::answers::Answers;
 use crate::bridge::BridgeInput;
 use crate::cloud::{Cloud, CloudError, now};
 use crate::credentials::{Saved, Store};
@@ -123,7 +124,10 @@ pub struct Service {
     friends: FriendLists,
     friends_dirty: bool,
     friends_sent: Instant,
+    friends_answers: Answers,
     sessions: HashMap<String, Session>,
+    /// Per session, so that a session read on going online never undoes a newer push.
+    session_answers: HashMap<String, Answers>,
     invitations: HashMap<String, Invitation>,
     activity: Option<Activity>,
     game: Option<GameRun>,
@@ -202,7 +206,9 @@ impl Service {
             friends: FriendLists::default(),
             friends_dirty: false,
             friends_sent: Instant::now() - FRIENDS_PACE,
+            friends_answers: Answers::default(),
             sessions: HashMap::new(),
+            session_answers: HashMap::new(),
             invitations: HashMap::new(),
             activity: None,
             game: None,
@@ -894,8 +900,12 @@ impl Service {
         self.offline_since = None;
         self.address = None;
         self.friends = FriendLists::default();
+        self.friends_answers.ignore_pending();
         self.friends_dirty = true;
         self.sessions.clear();
+        for answers in self.session_answers.values_mut() {
+            answers.ignore_pending();
+        }
         self.invitations.clear();
         self.links.clear();
         if let Some(tunnels) = self.tunnels.take() {
@@ -984,8 +994,17 @@ impl Service {
                     self.event(control::Event::InvitationGone { id });
                 }
             }
-            Event::Session { session } => self.session_changed(session),
-            Event::SessionGone { id } => self.session_gone(&id),
+            Event::Session { session } => {
+                self.session_answers
+                    .entry(session.id.clone())
+                    .or_default()
+                    .pushed();
+                self.session_changed(session);
+            }
+            Event::SessionGone { id } => {
+                self.session_answers.entry(id.clone()).or_default().pushed();
+                self.session_gone(&id);
+            }
             Event::SignedOut | Event::Banned { .. } | Event::Unknown => {}
         }
     }
@@ -994,14 +1013,17 @@ impl Service {
         let Some(cloud) = self.cloud.clone().filter(|_| self.me.is_some()) else {
             return;
         };
+        // Several reads can be on their way, from signing in, going online and pushes; one
+        // that arrives late must not bring back what changed since.
+        let question = self.friends_answers.ask();
         self.spawn(
             async move { cloud.friends().await },
-            |service, result| match result {
-                Ok(lists) => {
+            move |service, result| match result {
+                Ok(lists) if service.friends_answers.take(question) => {
                     service.friends = lists;
                     service.friends_dirty = true;
                 }
-                Err(CloudError::Offline(_)) => {}
+                Ok(_) | Err(CloudError::Offline(_)) => {}
                 Err(error) => {
                     service.failure(&error);
                 }
@@ -1035,14 +1057,21 @@ impl Service {
         };
         for id in self.sessions.keys().cloned().collect::<Vec<_>>() {
             let cloud = cloud.clone();
+            let question = self.session_answers.entry(id.clone()).or_default().ask();
             self.spawn(
                 async move { (cloud.session(&id).await, id) },
-                |service, (result, id)| match result {
-                    Ok(session) => service.session_changed(session),
-                    Err(CloudError::Api(error)) if error.error == ErrorCode::NotFound => {
-                        service.session_gone(&id)
+                move |service, (result, id)| {
+                    let answers = service.session_answers.entry(id.clone()).or_default();
+                    if !answers.take(question) {
+                        return;
                     }
-                    Err(_) => {}
+                    match result {
+                        Ok(session) => service.session_changed(session),
+                        Err(CloudError::Api(error)) if error.error == ErrorCode::NotFound => {
+                            service.session_gone(&id)
+                        }
+                        Err(_) => {}
+                    }
                 },
             );
         }

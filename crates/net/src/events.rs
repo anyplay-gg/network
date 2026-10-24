@@ -16,7 +16,8 @@ use crate::cloud::{Cloud, CloudError};
 pub enum EventInput {
     /// The connection is being opened.
     Connecting,
-    /// The connection is open.
+    /// The cloud took the connection: what changes from now on arrives on it, so lists fetched
+    /// now miss nothing.
     Online,
     /// The connection broke; it is opened again after a pause.
     Offline(String),
@@ -142,7 +143,9 @@ async fn session(cloud: &Cloud, out: &UnboundedSender<EventInput>) -> Ending {
         Ok(Err(error)) => return broken(error.to_string()),
         Err(_) => return broken("the cloud did not answer in time".into()),
     };
-    let _ = out.send(EventInput::Online);
+    // The cloud sends `welcome` first, once it pushes to this connection. Until then a change
+    // could reach neither the connection nor lists fetched on going online.
+    let mut welcomed = false;
     let mut banned_until = None;
     loop {
         let next = tokio::time::timeout(SILENCE, stream.next()).await;
@@ -186,6 +189,10 @@ async fn session(cloud: &Cloud, out: &UnboundedSender<EventInput>) -> Ending {
             Ok(Event::SignedOut) => return Ending::SignedOut,
             Ok(Event::Unknown) => {}
             Ok(event) => {
+                if !welcomed && matches!(event, Event::Welcome { .. }) {
+                    welcomed = true;
+                    let _ = out.send(EventInput::Online);
+                }
                 let _ = out.send(EventInput::Event(event));
             }
             Err(error) => tracing::warn!("unreadable event: {error}"),
@@ -201,4 +208,82 @@ fn http_authorization() -> http::HeaderName {
 fn jitter(pause: Duration) -> Duration {
     let quarter = pause.as_millis() as u64 / 4;
     pause + Duration::from_millis(rand::random_range(0..=quarter))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use anyplay_api::{Tokens, path};
+    use axum::extract::ws::{Message, WebSocketUpgrade};
+    use axum::routing::{get, post};
+    use tokio::sync::{Mutex, mpsc, oneshot};
+
+    use super::*;
+    use crate::cloud::now;
+
+    /// A cloud that hands out a token and opens the event connection, but registers it, and
+    /// sends `welcome`, only when `register` fires.
+    async fn cloud_that_waits(register: oneshot::Receiver<()>) -> Cloud {
+        crate::install_crypto();
+        let register = Arc::new(Mutex::new(Some(register)));
+        let app = axum::Router::new()
+            .route(
+                path::AUTH_REFRESH,
+                post(|| async {
+                    axum::Json(Tokens {
+                        access: "access".into(),
+                        access_expires: now() + 3600,
+                        refresh: "refresh".into(),
+                        device: 1,
+                    })
+                }),
+            )
+            .route(
+                path::EVENTS,
+                get(move |upgrade: WebSocketUpgrade| async move {
+                    upgrade.on_upgrade(move |mut socket| async move {
+                        if let Some(register) = register.lock().await.take() {
+                            let _ = register.await;
+                        }
+                        let welcome = Event::Welcome {
+                            address: "10.64.0.2".into(),
+                            server_time: now(),
+                        };
+                        let text = serde_json::to_string(&welcome).unwrap();
+                        let _ = socket.send(Message::Text(text.into())).await;
+                        std::future::pending::<()>().await;
+                    })
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await });
+        let cloud = Cloud::new(&base, Arc::new(|_| {}));
+        cloud.resume(1, "refresh".into());
+        cloud
+    }
+
+    // The cloud registers a connection for pushes after the handshake and says so with
+    // `welcome`. Lists fetched on going online must come after that, or what changes in
+    // between reaches neither the lists nor the connection.
+    #[tokio::test]
+    async fn the_connection_is_online_from_the_welcome_on() {
+        let (register, registered) = oneshot::channel();
+        let cloud = cloud_that_waits(registered).await;
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let task = spawn(cloud, tx);
+        assert!(matches!(rx.recv().await, Some(EventInput::Connecting)));
+
+        let early = tokio::time::timeout(Duration::from_millis(500), rx.recv()).await;
+        assert!(early.is_err(), "before the welcome: {early:?}");
+
+        register.send(()).unwrap();
+        assert!(matches!(rx.recv().await, Some(EventInput::Online)));
+        assert!(matches!(
+            rx.recv().await,
+            Some(EventInput::Event(Event::Welcome { .. }))
+        ));
+        task.abort();
+    }
 }
