@@ -10,14 +10,14 @@ The same pattern has carried [RPCN](https://github.com/RipleyTom/rpcn) for PS3 g
 
 ## Ground rules
 
-These hold for every line of code and every public statement. [ADR 0003](adr/0003-the-clean-line.md) gives the reasons.
+These hold for every line of code and every public statement. [ADR 0021](adr/0021-the-line-is-drawn-at-the-law.md) gives the reasons: the network goes as far as the law allows.
 
 1. The network never contacts Sony's servers. A request the network does not know gets "not available"; it is never forwarded.
-2. No material from Sony: no leaked SDKs or documents, no keys, certificates or tickets, no responses recorded from Sony's servers.
-3. No tokens for others. When a game asks for an authorization code or ID token for a publisher's client, the network answers with an error. It only issues tokens for itself.
+2. No material from Sony: no leaked SDKs or documents, no code, firmware, keys, certificates or tickets, no responses recorded from Sony's servers.
+3. No tokens for others. When a game asks for an authorization code or ID token for a platform's or a publisher's client, the network answers with an error. It only issues tokens for itself, and it never presents itself to a service as a real console.
 4. Formats come from observation. The bridge sees in plain text what a game sends; what the game accepts as an answer is learned from its behaviour. The network's own specifications in [spec/](../spec) are written from that, separately from the code.
 5. No platform trademarks in names. Protocol identifiers that games expect stay in the code where they are technically needed.
-6. No publisher backends, no bypassing of anti-cheat or account checks. Games that need them stay offline.
+6. No stand-in for a publisher service that still runs, and no bypassing of anti-cheat or copy protection. A game whose online play runs on such a service stays offline on the PlayStation side. Where the publisher has shut a service down, a revival server may bring the game's online play back. It is written from observation of the game the player owns, never from the publisher's code or keys, and it stops if the publisher brings the service back.
 7. Only games the player owns. The cloud never sees game files; it knows a title ID and a game version so that only matching versions play together.
 
 ## Parts
@@ -30,7 +30,7 @@ The bridge is small on purpose. It forwards; it does not translate.
 - **One connection** to the net service, speaking the [bridge protocol](../spec/bridge-protocol.md). Request bodies pass through as opaque bytes, so the engine needs no JSON, WebSocket or ICE code.
 - **What it forwards:**
   - sign-in state and its changes, reachability, the handle and account ID;
-  - the online-permission check stays as AnyPS5 answers it today until phase 4 ([ADR 0008](adr/0008-the-online-permission-check-waits.md));
+  - the online-permission check. The target is the network's own rule: signed in and not banned, for play on the AnyPlay network only ([ADR 0021](adr/0021-the-line-is-drawn-at-the-law.md)). The bridge does not do this yet and still leaves the check as AnyPS5 answers it today;
   - NAT information measured by the net service;
   - every web API request (user context, API group, path, method, headers, body) and its response, plus push events in the other direction;
   - session signaling: activation, connection state and connection info;
@@ -82,7 +82,7 @@ A link such as `anyps5://v1/join/…` never starts a game by itself; it opens th
 |---|---|
 | Am I signed in? | Yes while the net service holds a valid session; changes arrive as callbacks. |
 | Who am I? | The handle as online ID (at most 16 characters, the size games reserve) and a 64-bit account ID from the cloud. |
-| May I use online features? | As AnyPS5 answers today, until phase 4 decides it after a legal review ([ADR 0008](adr/0008-the-online-permission-check-waits.md)). |
+| May I use online features? | Yes while the player is signed in to the network and not banned. The answer speaks for the AnyPlay network only, never for a platform subscription ([ADR 0021](adr/0021-the-line-is-drawn-at-the-law.md)). The bridge still leaves the check as AnyPS5 answers it today, and the answer needs a lawyer's review before the public launch. |
 | Which NAT type? | Measured by the net service. Because a relay is always reachable, the game sees at least type 2. |
 | Authorization code or ID token for client X | Only for the network's own clients; an error for any publisher's client. |
 | Create, join or leave a session; set its properties | A cloud session. |
@@ -93,7 +93,7 @@ A link such as `anyps5://v1/join/…` never starts a game by itself; it opens th
 
 ## Limits
 
-- Publisher backends stay out, and with them every game that needs one.
+- Publisher services that still run stay out, and with them every game whose online play needs one. Revival servers for services a publisher has shut down are allowed ([ADR 0021](adr/0021-the-line-is-drawn-at-the-law.md)) and not built yet.
 - There are no dedicated servers. What works is peer-to-peer play or one player hosting.
 - Session and matchmaking formats are not publicly documented. They are learned game by game from observation.
 - Many games run slowly on AnyPS5 today. Network code with timeouts can give up at low frame rates, so the network grows alongside AnyPS5's performance work.

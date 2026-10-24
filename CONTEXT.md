@@ -110,8 +110,12 @@ How much of a game's online part can work on the network. A: platform services o
 _Avoid_: Compatibility rating, badge
 
 **Publisher backend**:
-Servers that a game's publisher runs, such as its own accounts, matchmaking or game servers. The network never stands in for them.
+Servers that a game's publisher runs, such as its own accounts, matchmaking or game servers. The network never stands in for one that still runs.
 _Avoid_: Third-party server, game server
+
+**Revival server**:
+A server the network writes for a game whose publisher has shut its online service down. It is written from observation of the game the player owns, never from the publisher's code or keys, and it stops if the publisher brings the service back ([ADR 0021](docs/adr/0021-the-line-is-drawn-at-the-law.md)).
+_Avoid_: Private server, emulator
 
 **Observation log**:
 The local record of every network library call a game made and what the bridge answered. The network's own specifications are written from it.
