@@ -54,6 +54,12 @@ Privacy   { trophies, about, favourites, avatar, playtime }   each "friends" | "
 Profile   { account, about, favourites, avatar, playtime }    each part null when unset or hidden from the caller
 PlaytimeEntry { title_id, day, minutes }           day: "YYYY-MM-DD" (UTC)
 TitlePlaytime { title_id, minutes }
+Party     { id, leader, members, max_members, conversation, created, revision }
+PartyMember { account, joined }
+PartyInvitation { id, from, party, members, expires }
+Conversation { id, kind, name, members, last, read, marks, updated, request, party }   kind: "direct" | "group" | "party"
+ReadMark  { account, seq }
+Message   { conversation, seq, sender, text, created }
 ```
 
 - A **handle** has 3 to 16 characters from `A-Z a-z 0-9 _ -` and starts with a letter. Handles are unique without regard to case; the spelling of the owner is kept. Some handles are reserved (names of the network, of staff roles, and of platforms).
@@ -181,6 +187,58 @@ A profile has a short text, up to 3 favourite titles, an avatar and the playtime
 
 `POST /v1/reports` with `{account, reason, details}` answers 204. `reason` is `cheating`, `harassment`, `spam`, `name` or `other`; `details` has at most 1,000 characters.
 
+## Parties
+
+A **party** is up to 8 friends who stay together across games, with one chat. It belongs to no game, and an account is in at most one party. The leader invites; members leave when they like. The party's `revision` rises with every change, as a session's does.
+
+| Request | Body | Answer |
+|---|---|---|
+| `GET /v1/party` | | `Party`, or `not_found` when the caller is in none |
+| `POST /v1/party` | | `Party`: a party of one, the caller leading it. `limit` when the caller is in one already. |
+| `POST /v1/party/invitations` | `{to: [id]}` | `{sent: [id]}`: leader only; starts a party when the caller is in none |
+| `GET /v1/party/invitations` | | `{invitations: [PartyInvitation]}`: the ones the caller holds |
+| `POST /v1/party/invitations/{id}/accept` | | `Party` |
+| `DELETE /v1/party/invitations/{id}` | | 204: declines |
+| `POST /v1/party/leave` | | 204 |
+| `DELETE /v1/party/members/{account}` | | 204 (leader only) |
+| `PATCH /v1/party` | `{leader}` | `Party` (leader only; the new leader is a member) |
+| `POST /v1/party/session` | `{session}` | `{sent: [id]}` (leader only) |
+
+- Only friends of the leader receive an invitation, and not those who are in the party, who blocked a member or whom a member blocked. An invitation lives 15 minutes, or until its recipient joins any party.
+- Accepting answers `limit` when the caller is in a party already, `full` when the party has 8 members, and `forbidden` when a block lies between the caller and a member.
+- When the leader leaves, the longest-standing member leads. The last member to leave ends the party, its invitations and its chat. A member whose net service stays disconnected for 15 minutes leaves.
+- `POST /v1/party/session` moves the party into one of the leader's sessions: every other member who is not in the session gets an ordinary session invitation (see Invitations), which lets them in even when the session is for invited players only. The leader must be a member of the session, and the session must not be closed. Nothing else about the party changes; it goes on after the game.
+- The party's chat is a conversation of kind `party` (`Party.conversation`). A member sees what is written after it joined.
+
+## Conversations and messages
+
+A **conversation** is `direct` (two accounts, one per pair), `group` (2 to 32 accounts) or `party` (see above). Messages are text of 1 to 2,000 characters. They are stored so that every device of the receiver gets them, and the cloud deletes them after 30 days, or the time the operator set ([ADR 0011](../docs/adr/0011-messages-are-stored-to-be-delivered.md)).
+
+Every message has a number `seq` that counts up by one in its conversation, starting at 1. Numbers are given in the order the messages were stored, and a message with a lower number is always stored before one with a higher number ([ADR 0013](../docs/adr/0013-messages-are-numbered-per-conversation.md)).
+
+| Request | Body | Answer |
+|---|---|---|
+| `GET /v1/conversations` | | `{conversations: [Conversation], requests: [Conversation]}`, newest first |
+| `GET /v1/conversations/{id}` | | `Conversation` |
+| `POST /v1/conversations` | `{accounts: [id], name}` | `Conversation`: with one account, the direct conversation (made when there is none); with 2 to 31, a new group |
+| `POST /v1/conversations/{id}/members` | `{accounts: [id]}` | `{added: [id]}`: groups only |
+| `DELETE /v1/conversations/{id}` | | 204: leaves a group, or declines a message request |
+| `POST /v1/conversations/{id}/accept` | | `Conversation`: accepts a message request |
+| `POST /v1/conversations/{id}/messages` | `{text}` | `Message` |
+| `GET /v1/conversations/{id}/messages?after=N` | | `{messages: [Message], last}`: the next messages after number `N`, oldest first |
+| `GET /v1/conversations/{id}/messages?before=N` | | the newest messages below `N`, oldest first |
+| `GET /v1/conversations/{id}/messages` | | the newest messages |
+| `PUT /v1/conversations/{id}/read` | `{seq}` | 204 |
+
+- A fetch answers at most `limit` messages (default 50, at most 100). `last` is the number of the conversation's newest message. A conversation that the caller is not in answers `not_found`.
+- `Conversation.last` is the newest number, `read` the number the caller read up to, `marks` how far the others read, `request` whether the caller still has to accept it. A client keeps the highest number it has fetched for each conversation. After a break it reads the list, and for each conversation whose `last` is above its own number it fetches `after` its own number until it has reached `last`. Messages a block kept away are missing from a fetch, so numbers can skip.
+- **Groups.** The creator names friends only (`forbidden` otherwise, also for a block in either direction). Any member may add its own friends; those who are members already, who are no friends of the adder, whom a member blocked or who blocked a member are left out of `added`. A new member sees messages written from then on. An account is in at most 50 groups. A group is `full` at 32.
+- **Message requests.** Opening a conversation with an account that is no friend makes a request for that account. It is listed in `requests` once it holds a message, and the receiver can read it; links in it stay inactive in the launcher, and nothing tells the sender that it was read. The receiver is told once (`message_request`). The receiver accepts it, declines it, or answers, which accepts it. A decline is silent: the sender can write on, but nothing reaches the receiver. A stranger may send 5 messages before the receiver answers (`limit`) and may open at most 10 conversations with strangers an hour (`rate_limited`); an account holds at most 100 requests. An account younger than the cloud's `stranger_min_age_hours` (24 by default) may not open a conversation with a stranger (`forbidden`). Once the two are friends, a request is an ordinary conversation.
+- **Blocks.** If the caller blocked the other account of a direct conversation, writing and opening it answer `forbidden`. If the other blocked the caller, writing succeeds and nothing is delivered. In a group, a block hides one sender's messages from one member, in both directions. A message a block kept away stays away after the block is lifted.
+- **Read marks.** `PUT .../read` moves the caller's mark forward to `seq` (at most `last`); a lower value changes nothing. Marks are shown to the members who accepted the conversation; the marks of a request stay with the receiver's own devices. Writing reads up to the message written.
+- A conversation with a friend cannot be left. A party's chat ends with the party.
+- **Limits.** 30 messages per account per minute (`rate_limited`). Deleting an account deletes its messages and its direct conversations; the export lists the messages the account wrote and its conversations.
+
 ## Events
 
 `GET /v1/events` upgrades to a WebSocket. The upgrade carries the bearer token. The cloud sends one JSON object per text message, each with a `type`:
@@ -196,7 +254,17 @@ A profile has a short text, up to 3 favourite titles, an avatar and the playtime
 | `session_gone` | `id` | This account is no longer in the session: it closed, or the leader removed it. |
 | `signed_out` | | This device was signed out or the account deleted. Forget the tokens. |
 | `banned` | `until` | The account was banned. |
+| `party` | `party` | The party this account is in changed. Keep the highest `revision` and drop an older copy. |
+| `party_gone` | `id` | This account is no longer in the party. |
+| `party_invitation` | `invitation` | The leader of a party invited this account. |
+| `party_invitation_gone` | `id` | A party invitation expired, was declined or used up. |
+| `message` | `conversation, seq` | A new message. Fetch the messages after the number you hold. It carries no text. |
+| `message_request` | `conversation` | A stranger wrote for the first time. Fetch the requests. |
+| `read` | `conversation, account, seq` | A member read up to `seq`. |
+| `conversation` | `id` | A conversation is new or its members changed. Fetch it. |
+| `conversation_gone` | `id` | This account is no longer in the conversation. |
 
+- After `welcome`, and after every reconnect, a client reads what it may have missed: `GET /v1/party` and `GET /v1/party/invitations`, and `GET /v1/conversations` with the messages after the numbers it holds. News is a pointer or a numbered state and may be lost; reading the state is always right.
 - The cloud pings every 20 seconds and closes a connection that does not answer.
 - One device holds one event connection; a new one replaces the old.
 - Close codes: 4001 the access token expired (refresh, then reconnect), 4003 banned, 4004 signed out. 1001 and 1012 mean the cloud's node is going away or restarting: reconnect at a random moment within the next 10 seconds, so that the clients of one node do not all come back at once. After any other break, a client waits half its pause plus a random part of up to the whole pause, starting at 1 second and doubling to at most 30.
@@ -215,4 +283,6 @@ A profile has a short text, up to 3 favourite titles, an avatar and the playtime
 | `auth/refresh` | 30 per device per hour |
 | `relays/tickets` | 20 per account per hour |
 | `PUT /v1/me/avatar` | 5 per account per hour, besides the limit below |
+| messages | 30 per account per minute |
+| conversations with strangers | 10 per account per hour |
 | everything else | 120 per account per minute |

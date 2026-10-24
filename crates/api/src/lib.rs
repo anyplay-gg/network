@@ -41,6 +41,16 @@ pub const MAX_DAY_MINUTES: u32 = 24 * 60;
 pub const MAX_ACCOUNT_ID: u64 = (1 << 53) - 1;
 /// The shortest and longest handle, in characters.
 pub const HANDLE_LEN: std::ops::RangeInclusive<usize> = 3..=16;
+/// The most members a party has.
+pub const MAX_PARTY_MEMBERS: u16 = 8;
+/// The most members a group conversation has.
+pub const MAX_GROUP_MEMBERS: u16 = 32;
+/// The longest message, in characters.
+pub const MAX_MESSAGE_CHARS: usize = 2000;
+/// The longest name of a group conversation, in characters.
+pub const MAX_CONVERSATION_NAME: usize = 64;
+/// The most messages one fetch answers with.
+pub const MAX_MESSAGES_PAGE: u32 = 100;
 
 /// The number of an account. Games see it as the player's 64-bit account ID.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -762,6 +772,45 @@ pub enum Event {
     Banned {
         until: Option<u64>,
     },
+    // Parties and messages
+    /// The party this account is in changed. A client drops a copy whose revision is older.
+    Party {
+        party: Party,
+    },
+    /// This account is no longer in the party: it left, was removed or the party ended.
+    PartyGone {
+        id: String,
+    },
+    PartyInvitation {
+        invitation: PartyInvitation,
+    },
+    PartyInvitationGone {
+        id: String,
+    },
+    /// A new message in a conversation, by its number. Fetch it with
+    /// `GET /v1/conversations/{id}/messages?after=<last number known>`.
+    Message {
+        conversation: String,
+        seq: u64,
+    },
+    /// Someone who is not a friend wrote for the first time. Fetch the requests.
+    MessageRequest {
+        conversation: String,
+    },
+    /// A member read a conversation up to `seq`.
+    Read {
+        conversation: String,
+        account: AccountId,
+        seq: u64,
+    },
+    /// The members or the name of a conversation changed, or there is a new one. Fetch it.
+    Conversation {
+        id: String,
+    },
+    /// This account is no longer in the conversation.
+    ConversationGone {
+        id: String,
+    },
     /// An event this version does not know.
     #[serde(other)]
     Unknown,
@@ -905,9 +954,216 @@ pub fn is_virtual(address: std::net::Ipv4Addr) -> bool {
     u32::from(address) & mask == u32::from(base)
 }
 
+// Parties
+
+/// A member of a party.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PartyMember {
+    pub account: Account,
+    pub joined: u64,
+}
+
+/// A group of up to [`MAX_PARTY_MEMBERS`] friends that stays together across games. It belongs
+/// to no game.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Party {
+    pub id: String,
+    pub leader: AccountId,
+    /// Longest-standing first.
+    pub members: Vec<PartyMember>,
+    pub max_members: u16,
+    /// The party's chat.
+    pub conversation: String,
+    pub created: u64,
+    /// Rises with every change to the party. A client drops a copy older than the one it has.
+    #[serde(default)]
+    pub revision: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PartyInvitation {
+    pub id: String,
+    pub from: Account,
+    pub party: String,
+    /// How many members the party has now.
+    pub members: u16,
+    pub expires: u64,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PartyInvitations {
+    pub invitations: Vec<PartyInvitation>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UpdateParty {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub leader: Option<AccountId>,
+}
+
+/// Moves the party into a session of its leader.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MoveParty {
+    pub session: String,
+}
+
+// Conversations and messages
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversationKind {
+    Direct,
+    Group,
+    Party,
+}
+
+/// How far a member read a conversation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReadMark {
+    pub account: AccountId,
+    pub seq: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Conversation {
+    pub id: String,
+    pub kind: ConversationKind,
+    /// The name of a group, if it has one.
+    pub name: Option<String>,
+    /// Everyone in it, the caller included.
+    pub members: Vec<Account>,
+    /// The number of the newest message, 0 for none. Numbers count up by one in each
+    /// conversation, so a client that knows the number it has read up to knows what it misses.
+    pub last: u64,
+    /// The number the caller read up to.
+    pub read: u64,
+    /// How far the other members read. A member who has not accepted the conversation yet has
+    /// no mark in it.
+    pub marks: Vec<ReadMark>,
+    /// Unix seconds of the newest message or of the conversation's start.
+    pub updated: u64,
+    /// True for a message request: the caller has not accepted it.
+    pub request: bool,
+    /// The party, for a party's chat.
+    pub party: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Conversations {
+    /// Newest first.
+    pub conversations: Vec<Conversation>,
+    /// Message requests, newest first.
+    pub requests: Vec<Conversation>,
+}
+
+/// Opens a conversation. One account opens (or finds) the conversation with that account; more
+/// open a group.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CreateConversation {
+    pub accounts: Vec<AccountId>,
+    #[serde(default)]
+    pub name: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AddToConversation {
+    pub accounts: Vec<AccountId>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Added {
+    pub added: Vec<AccountId>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SendMessage {
+    pub text: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Message {
+    pub conversation: String,
+    pub seq: u64,
+    pub sender: Account,
+    pub text: String,
+    pub created: u64,
+}
+
+/// Messages in ascending order of `seq`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Messages {
+    pub messages: Vec<Message>,
+    /// The number of the conversation's newest message.
+    pub last: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MarkRead {
+    pub seq: u64,
+}
+
+/// True for message text the cloud takes: 1 to [`MAX_MESSAGE_CHARS`] characters, not only white
+/// space, and no control characters other than line breaks and tabs.
+pub fn is_message_text(text: &str) -> bool {
+    let chars = text.chars().count();
+    (1..=MAX_MESSAGE_CHARS).contains(&chars)
+        && !text.trim().is_empty()
+        && !text
+            .chars()
+            .any(|c| c.is_control() && !matches!(c, '\n' | '\t'))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn message_text_has_bounds() {
+        assert!(is_message_text("hi"));
+        assert!(is_message_text("two\nlines\tand a tab"));
+        assert!(is_message_text(&"ä".repeat(MAX_MESSAGE_CHARS)));
+        assert!(!is_message_text(&"ä".repeat(MAX_MESSAGE_CHARS + 1)));
+        assert!(!is_message_text(""));
+        assert!(!is_message_text(" \n\t "));
+        assert!(!is_message_text("bell\u{7}"));
+    }
+
+    #[test]
+    fn message_events_are_pointers() {
+        let event = Event::Message {
+            conversation: "c1".into(),
+            seq: 7,
+        };
+        let text = serde_json::to_string(&event).unwrap();
+        assert_eq!(text, r#"{"type":"message","conversation":"c1","seq":7}"#);
+        assert_eq!(serde_json::from_str::<Event>(&text).unwrap(), event);
+        assert_eq!(
+            serde_json::from_str::<Event>(
+                r#"{"type":"read","conversation":"c1","account":4,"seq":2}"#
+            )
+            .unwrap(),
+            Event::Read {
+                conversation: "c1".into(),
+                account: AccountId(4),
+                seq: 2
+            }
+        );
+        assert_eq!(
+            serde_json::from_str::<Event>(r#"{"type":"party_gone","id":"p"}"#).unwrap(),
+            Event::PartyGone { id: "p".into() }
+        );
+    }
+
+    #[test]
+    fn a_party_without_a_revision_reads_as_zero() {
+        let party: Party = serde_json::from_str(
+            r#"{"id":"p","leader":1,"members":[{"account":{"id":1,"handle":"Alec"},"joined":3}],
+                "max_members":8,"conversation":"c","created":3}"#,
+        )
+        .unwrap();
+        assert_eq!(party.revision, 0);
+        assert_eq!(party.members.len(), 1);
+    }
 
     #[test]
     fn title_ids_that_can_stand_in_a_path() {

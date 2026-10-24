@@ -126,6 +126,10 @@ pub struct Service {
     friends_dirty: bool,
     friends_sent: Instant,
     friends_answers: Answers,
+    party: Option<anyplay_api::Party>,
+    party_answers: Answers,
+    party_invitations: HashMap<String, anyplay_api::PartyInvitation>,
+    conversation_answers: Answers,
     sessions: HashMap<String, Session>,
     /// Per session, so that a session read on going online never undoes a newer push.
     session_answers: HashMap<String, Answers>,
@@ -209,6 +213,10 @@ impl Service {
             friends_dirty: false,
             friends_sent: Instant::now() - FRIENDS_PACE,
             friends_answers: Answers::default(),
+            party: None,
+            party_answers: Answers::default(),
+            party_invitations: HashMap::new(),
+            conversation_answers: Answers::default(),
             sessions: HashMap::new(),
             session_answers: HashMap::new(),
             invitations: HashMap::new(),
@@ -827,6 +835,22 @@ impl Service {
                     },
                 );
             }
+            // Parties and messages
+            social @ (Command::Party
+            | Command::PartyInvite { .. }
+            | Command::PartyAnswer { .. }
+            | Command::PartyLeave
+            | Command::PartyKick { .. }
+            | Command::PartyLeader { .. }
+            | Command::PartyMove { .. }
+            | Command::Conversations
+            | Command::OpenConversation { .. }
+            | Command::Messages { .. }
+            | Command::SendMessage { .. }
+            | Command::MarkRead { .. }
+            | Command::AcceptRequest { .. }
+            | Command::LeaveConversation { .. }
+            | Command::AddToConversation { .. }) => self.social_command(id, social),
         }
     }
 
@@ -998,6 +1022,7 @@ impl Service {
             answers.ignore_pending();
         }
         self.invitations.clear();
+        self.forget_social();
         self.links.clear();
         if let Some(tunnels) = self.tunnels.take() {
             tokio::spawn(async move { tunnels.close().await });
@@ -1026,6 +1051,7 @@ impl Service {
                 self.fetch_friends();
                 self.push_presence();
                 self.refresh_sessions();
+                self.refresh_social();
             }
             EventInput::Offline(reason) => {
                 tracing::info!("event connection: {reason}");
@@ -1098,6 +1124,7 @@ impl Service {
                 self.session_gone(&id);
             }
             Event::SignedOut | Event::Banned { .. } | Event::Unknown => {}
+            social => self.social_event(social),
         }
     }
 
@@ -1179,6 +1206,322 @@ impl Service {
                 },
             );
         }
+    }
+
+    // Parties and messages
+
+    fn social_command(&mut self, id: u64, command: Command) {
+        let Some(cloud) = self.signed_in_cloud(id) else {
+            return;
+        };
+        match command {
+            Command::Party => self.request(id, async move { cloud.party().await }, |_, party| {
+                control::PartyState { party }
+            }),
+            Command::PartyInvite { accounts } => self.request(
+                id,
+                async move { cloud.invite_to_party(accounts).await },
+                |_, invited| Invited { sent: invited.sent },
+            ),
+            Command::PartyAnswer {
+                id: invitation,
+                accept,
+            } => {
+                if !is_title_id(&invitation) {
+                    self.fail(id, bad_id());
+                    return;
+                }
+                if accept {
+                    self.request(
+                        id,
+                        async move { cloud.accept_party_invitation(&invitation).await },
+                        |service, party| {
+                            service.party_invitations.retain(|_, i| i.party != party.id);
+                            service.party_changed(party.clone());
+                            control::PartyState { party: Some(party) }
+                        },
+                    );
+                } else {
+                    self.drop_party_invitation(&invitation);
+                    self.request(
+                        id,
+                        async move { cloud.decline_party_invitation(&invitation).await },
+                        |_, ()| Done {},
+                    );
+                }
+            }
+            Command::PartyLeave => self.request(
+                id,
+                async move { cloud.leave_party().await },
+                |service, ()| {
+                    service.party_cleared();
+                    Done {}
+                },
+            ),
+            Command::PartyKick { account } => self.request(
+                id,
+                async move { cloud.kick_from_party(account).await },
+                |_, ()| Done {},
+            ),
+            Command::PartyLeader { account } => self.request(
+                id,
+                async move {
+                    let body = anyplay_api::UpdateParty {
+                        leader: Some(account),
+                    };
+                    cloud.update_party(&body).await
+                },
+                |service, party| {
+                    service.party_changed(party);
+                    Done {}
+                },
+            ),
+            Command::PartyMove { session } => {
+                if !is_title_id(&session) {
+                    self.fail(id, bad_id());
+                    return;
+                }
+                self.request(
+                    id,
+                    async move { cloud.move_party(&session).await },
+                    |_, invited| Invited { sent: invited.sent },
+                );
+            }
+            Command::Conversations => self.request(
+                id,
+                async move { cloud.conversations().await },
+                |_, conversations| conversations,
+            ),
+            Command::OpenConversation { accounts, name } => self.request(
+                id,
+                async move { cloud.open_conversation(accounts, name).await },
+                |_, conversation| conversation,
+            ),
+            Command::Messages {
+                conversation,
+                after,
+                before,
+                limit,
+            } => {
+                if !is_title_id(&conversation) {
+                    self.fail(id, bad_id());
+                    return;
+                }
+                self.request(
+                    id,
+                    async move { cloud.messages(&conversation, after, before, limit).await },
+                    |_, messages| messages,
+                );
+            }
+            Command::SendMessage { conversation, text } => {
+                if !is_title_id(&conversation) {
+                    self.fail(id, bad_id());
+                    return;
+                }
+                if !anyplay_api::is_message_text(&text) {
+                    self.fail(
+                        id,
+                        Failure::new(
+                            ErrorCode::BadRequest.as_str(),
+                            "A message has 1 to 2000 characters and is not only white space.",
+                        ),
+                    );
+                    return;
+                }
+                self.request(
+                    id,
+                    async move { cloud.send_message(&conversation, &text).await },
+                    |_, message| message,
+                );
+            }
+            Command::MarkRead { conversation, seq } => {
+                if !is_title_id(&conversation) {
+                    self.fail(id, bad_id());
+                    return;
+                }
+                self.request(
+                    id,
+                    async move { cloud.mark_read(&conversation, seq).await },
+                    |_, ()| Done {},
+                );
+            }
+            Command::AcceptRequest { conversation } => {
+                if !is_title_id(&conversation) {
+                    self.fail(id, bad_id());
+                    return;
+                }
+                self.request(
+                    id,
+                    async move { cloud.accept_conversation(&conversation).await },
+                    |_, conversation| conversation,
+                );
+            }
+            Command::LeaveConversation { conversation } => {
+                if !is_title_id(&conversation) {
+                    self.fail(id, bad_id());
+                    return;
+                }
+                self.request(
+                    id,
+                    async move { cloud.leave_conversation(&conversation).await },
+                    |_, ()| Done {},
+                );
+            }
+            Command::AddToConversation {
+                conversation,
+                accounts,
+            } => {
+                if !is_title_id(&conversation) {
+                    self.fail(id, bad_id());
+                    return;
+                }
+                self.request(
+                    id,
+                    async move { cloud.add_to_conversation(&conversation, accounts).await },
+                    |_, added| added,
+                );
+            }
+            _ => self.fail(
+                id,
+                Failure::new(Failure::UNKNOWN_COMMAND, "Not a social command."),
+            ),
+        }
+    }
+
+    /// News of parties and messages from the cloud. Messages arrive as pointers; the launcher
+    /// fetches them.
+    fn social_event(&mut self, event: Event) {
+        match event {
+            Event::Party { party } => {
+                self.party_answers.pushed();
+                self.party_changed(party);
+            }
+            Event::PartyGone { id } => {
+                self.party_answers.pushed();
+                if self.party.as_ref().is_some_and(|p| p.id == id) {
+                    self.party_cleared();
+                }
+            }
+            Event::PartyInvitation { invitation } => {
+                self.party_invitations
+                    .insert(invitation.id.clone(), invitation.clone());
+                self.event(control::Event::PartyInvitation { invitation });
+            }
+            Event::PartyInvitationGone { id } => self.drop_party_invitation(&id),
+            Event::Message { conversation, seq } => {
+                self.event(control::Event::Message { conversation, seq });
+            }
+            Event::MessageRequest { conversation } => {
+                self.event(control::Event::MessageRequest { conversation });
+            }
+            Event::Read {
+                conversation,
+                account,
+                seq,
+            } => self.event(control::Event::Read {
+                conversation,
+                account,
+                seq,
+            }),
+            Event::Conversation { id } => self.event(control::Event::Conversation { id }),
+            Event::ConversationGone { id } => {
+                self.event(control::Event::ConversationGone { id });
+            }
+            _ => {}
+        }
+    }
+
+    /// Takes a party the cloud sent unless a newer copy of it is held already.
+    fn party_changed(&mut self, party: anyplay_api::Party) {
+        if let Some(known) = &self.party
+            && known.id == party.id
+            && is_older(party.revision, known.revision)
+        {
+            return;
+        }
+        self.party = Some(party.clone());
+        self.event(control::Event::Party { party: Some(party) });
+    }
+
+    fn party_cleared(&mut self) {
+        if self.party.take().is_some() {
+            self.event(control::Event::Party { party: None });
+        }
+    }
+
+    fn drop_party_invitation(&mut self, id: &str) {
+        if self.party_invitations.remove(id).is_some() {
+            self.event(control::Event::PartyInvitationGone { id: id.to_owned() });
+        }
+    }
+
+    /// Reads party, party invitations and conversations again, after signing in and after the
+    /// event connection was away. The launcher compares the conversations' newest numbers with
+    /// the ones it holds and fetches what it missed.
+    fn refresh_social(&mut self) {
+        let Some(cloud) = self.cloud.clone().filter(|_| self.me.is_some()) else {
+            return;
+        };
+        let question = self.party_answers.ask();
+        let party = cloud.clone();
+        self.spawn(
+            async move {
+                let party_now = party.party().await;
+                let invitations = party.party_invitations().await;
+                (party_now, invitations)
+            },
+            move |service, (party, invitations)| {
+                if !service.party_answers.take(question) {
+                    return;
+                }
+                match party {
+                    Ok(Some(party)) => service.party_changed(party),
+                    Ok(None) => service.party_cleared(),
+                    Err(CloudError::Offline(_)) => {}
+                    Err(error) => {
+                        service.failure(&error);
+                    }
+                }
+                if let Ok(list) = invitations {
+                    let now = now();
+                    let known: Vec<String> = service.party_invitations.keys().cloned().collect();
+                    for id in known {
+                        if !list.invitations.iter().any(|i| i.id == id) {
+                            service.drop_party_invitation(&id);
+                        }
+                    }
+                    for invitation in list.invitations.into_iter().filter(|i| i.expires > now) {
+                        if !service.party_invitations.contains_key(&invitation.id) {
+                            service
+                                .party_invitations
+                                .insert(invitation.id.clone(), invitation.clone());
+                            service.event(control::Event::PartyInvitation { invitation });
+                        }
+                    }
+                }
+            },
+        );
+        let question = self.conversation_answers.ask();
+        self.spawn(
+            async move { cloud.conversations().await },
+            move |service, result| match result {
+                Ok(conversations) if service.conversation_answers.take(question) => {
+                    service.event(control::Event::Conversations(conversations));
+                }
+                Ok(_) | Err(CloudError::Offline(_)) => {}
+                Err(error) => {
+                    service.failure(&error);
+                }
+            },
+        );
+    }
+
+    /// Forgets the party and its invitations, as after a sign-out.
+    fn forget_social(&mut self) {
+        self.party_answers.ignore_pending();
+        self.conversation_answers.ignore_pending();
+        self.party_invitations.clear();
+        self.party_cleared();
     }
 
     // Relays and tunnels
@@ -2246,6 +2589,13 @@ where
             return;
         }
     }
+}
+
+fn bad_id() -> Failure {
+    Failure::new(
+        ErrorCode::BadRequest.as_str(),
+        "An ID has 1 to 64 letters, digits, underscores and hyphens.",
+    )
 }
 
 fn bad_title() -> Failure {

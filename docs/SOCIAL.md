@@ -32,7 +32,7 @@ Activity of friends, newest first: a trophy earned, a game started for the first
 
 ### Messages
 
-One-to-one and group conversations as text, with read marks. A conversation between friends opens at once; a message from anyone else lands in the receiver's **message requests** until they accept it. The cloud stores messages to deliver them to every device and keeps them for a limited time ([ADR 0011](adr/0011-messages-are-stored-to-be-delivered.md)). New accounts may not write to strangers during their first day.
+One-to-one and group conversations as text, with read marks. A conversation between friends opens at once; a message from anyone else lands in the receiver's **message requests** until they accept it. The cloud stores messages to deliver them to every device and keeps them for a limited time ([ADR 0011](adr/0011-messages-are-stored-to-be-delivered.md)). Text up to 2,000 characters; the cloud keeps messages 30 days unless its operator sets another time. Every message has a number in its conversation, so a launcher that was away asks for what comes after the number it holds ([ADR 0013](adr/0013-messages-are-numbered-per-conversation.md)). New accounts may not write to strangers during their first day. A block stops delivery both ways. The API is in the [cloud API](../spec/cloud-api.md#conversations-and-messages).
 
 ### Notifications
 
@@ -40,7 +40,7 @@ Friend requests, invitations, messages, party invitations and trophies of friend
 
 ### Party
 
-A group of friends, up to 8, that stays together across games and game sessions: one party chat, one voice channel, and a way to move everybody into the same session. Unlike a session, a party belongs to no game. The leader invites; members may leave at any time.
+A group of friends, up to 8, that stays together across games and game sessions: one party chat, one voice channel, and a way to move everybody into the same session. Unlike a session, a party belongs to no game. The leader invites; members may leave at any time. The leader moves the party into a session by inviting every member to its own session, with the invitations sessions have already. The API is in the [cloud API](../spec/cloud-api.md#parties).
 
 ### Voice
 
