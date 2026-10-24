@@ -173,7 +173,8 @@ pub struct AppealRequest {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Restriction {
-    /// The account is too new to write to strangers. `until` says when it may.
+    /// The account is too new to do this yet: write to strangers, or send more friend requests
+    /// than a new account may. `until` says when it may.
     NewAccount,
     /// A moderator muted the account. `until` is the end of the mute, absent for good.
     Muted,
@@ -496,5 +497,26 @@ mod wire_tests {
         );
         let action: Event = serde_json::from_str(r#"{"type":"action","statement":{"id":1,"kind":"mute","rule":"spam","reason":"x","created":1,"until":9,"from_report":false,"automated":false,"appeal":{"status":"available","deadline":99}}}"#).unwrap();
         assert!(matches!(action, Event::Action { .. }));
+    }
+}
+
+#[cfg(test)]
+mod report_tests {
+    use crate::{AccountId, Report, ReportReason};
+
+    #[test]
+    fn a_report_about_a_message_names_it_and_an_old_one_still_reads() {
+        let old: Report = serde_json::from_str(r#"{"account":5,"reason":"spam"}"#).unwrap();
+        assert_eq!((old.conversation, old.seq), (None, None));
+        let report = Report {
+            account: AccountId(5),
+            reason: ReportReason::Harassment,
+            details: String::new(),
+            conversation: Some("c-1".into()),
+            seq: Some(7),
+        };
+        let text = serde_json::to_string(&report).unwrap();
+        assert!(text.contains(r#""conversation":"c-1""#) && text.contains(r#""seq":7"#));
+        assert_eq!(serde_json::from_str::<Report>(&text).unwrap(), report);
     }
 }
