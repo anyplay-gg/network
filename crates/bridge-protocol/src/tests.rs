@@ -137,14 +137,14 @@ fn flags_are_ignored() {
     assert_eq!(decoder.next_frame(), Ok(Some(welcome)));
 }
 
-#[test]
-fn every_message_survives_the_round_trip() {
+/// One message of every kind, with fields that are not all zero.
+fn samples() -> Vec<Message> {
     let address = Ipv4Addr::new(198, 18, 4, 20);
     let pairs = vec![
         ("Content-Type".to_owned(), "application/json".to_owned()),
         ("X-Empty".to_owned(), String::new()),
     ];
-    for message in [
+    vec![
         Message::Hello(Hello {
             version: 0,
             token: vec![1, 2, 3],
@@ -254,7 +254,12 @@ fn every_message_survives_the_round_trip() {
             result: DialogResult::Sent,
             sent: 2,
         },
-    ] {
+    ]
+}
+
+#[test]
+fn every_message_survives_the_round_trip() {
+    for message in samples() {
         round_trip(message);
     }
 }
@@ -373,4 +378,176 @@ fn traffic_headers_split_from_the_game_bytes() {
         Some((header, &b"game"[..]))
     );
     assert_eq!(TrafficHeader::split(&datagram[..7]), None);
+}
+
+// Random input. The other side of the connection is a game process, so nothing it sends may
+// crash the net service. A fixed seed keeps every run the same.
+
+struct Rng(u64);
+
+impl Rng {
+    fn next(&mut self) -> u64 {
+        self.0 ^= self.0 >> 12;
+        self.0 ^= self.0 << 25;
+        self.0 ^= self.0 >> 27;
+        self.0.wrapping_mul(0x2545_F491_4F6C_DD1D)
+    }
+
+    fn below(&mut self, n: usize) -> usize {
+        (self.next() % n as u64) as usize
+    }
+
+    fn bytes(&mut self, len: usize) -> Vec<u8> {
+        (0..len).map(|_| self.next() as u8).collect()
+    }
+}
+
+/// Every kind this version reads, and one it does not.
+fn kinds() -> Vec<Kind> {
+    let mut kinds: Vec<Kind> = samples().iter().map(Message::kind).collect();
+    kinds.push(Kind(0x0777));
+    kinds
+}
+
+/// A message read from any payload is written back so that it reads the same. True when the
+/// payload was read as a message.
+fn reads_back_the_same(kind: Kind, payload: &[u8]) -> bool {
+    let Ok(Some(message)) = Message::parse(kind, payload) else {
+        return false;
+    };
+    let again = message.payload().unwrap();
+    assert_eq!(Message::parse(kind, &again), Ok(Some(message)));
+    true
+}
+
+#[test]
+fn random_payloads_are_read_or_refused() {
+    let kinds = kinds();
+    let mut rng = Rng(0x5EED);
+    let mut read = 0;
+    for _ in 0..50_000 {
+        let kind = kinds[rng.below(kinds.len())];
+        let len = rng.below(80);
+        read += usize::from(reads_back_the_same(kind, &rng.bytes(len)));
+    }
+    // About half are read; the rest are refused.
+    assert!(read > 10_000, "only {read} payloads were read");
+}
+
+#[test]
+fn damaged_messages_are_read_or_refused() {
+    let samples = samples();
+    let mut rng = Rng(0xD00D);
+    let mut read = 0;
+    for _ in 0..50_000 {
+        let message = &samples[rng.below(samples.len())];
+        let mut payload = message.payload().unwrap();
+        for _ in 0..1 + rng.below(3) {
+            match rng.below(3) {
+                0 if !payload.is_empty() => {
+                    let at = rng.below(payload.len());
+                    payload[at] ^= 1 << rng.below(8);
+                }
+                1 => payload.truncate(rng.below(payload.len() + 1)),
+                _ => {
+                    let len = rng.below(8);
+                    payload.extend(rng.bytes(len));
+                }
+            }
+        }
+        read += usize::from(reads_back_the_same(message.kind(), &payload));
+    }
+    assert!(read > 10_000, "only {read} payloads were read");
+}
+
+#[test]
+fn a_cut_message_is_truncated_never_misread() {
+    for message in samples() {
+        // These end in a field that takes the rest of the payload, so a cut one still reads.
+        if matches!(message, Message::Hello(_) | Message::Reject(_)) {
+            continue;
+        }
+        let payload = message.payload().unwrap();
+        for len in 0..payload.len() {
+            assert_eq!(
+                Message::parse(message.kind(), &payload[..len]),
+                Err(Error::Truncated),
+                "{message:?} cut at {len}"
+            );
+        }
+    }
+}
+
+#[test]
+fn the_stream_reads_the_same_however_it_is_cut() {
+    let frames: Vec<Frame> = samples()
+        .iter()
+        .zip(1..)
+        .map(|(message, request)| Frame::numbered(message, request).unwrap())
+        .collect();
+    let mut wire = Vec::new();
+    for frame in &frames {
+        frame.encode(&mut wire).unwrap();
+    }
+    let mut rng = Rng(0xC0FFEE);
+    for _ in 0..500 {
+        let mut decoder = Decoder::new();
+        let mut got = Vec::new();
+        let mut at = 0;
+        while at < wire.len() {
+            let end = (at + 1 + rng.below(40)).min(wire.len());
+            decoder.push(&wire[at..end]);
+            at = end;
+            while let Some(frame) = decoder.next_frame().unwrap() {
+                got.push(frame);
+            }
+        }
+        assert_eq!(got, frames);
+    }
+}
+
+#[test]
+fn random_bytes_on_the_connection_are_framed_or_refused() {
+    let kinds = kinds();
+    let mut rng = Rng(0xBAD_5EED);
+    let mut decoder = Decoder::new();
+    let (mut frames, mut read) = (0, 0);
+    for round in 0..20_000 {
+        // A new connection now and then, since noise can announce a frame that never ends.
+        if round % 100 == 0 {
+            decoder = Decoder::new();
+        }
+        // Mostly a plausible header with a random payload, sometimes plain noise.
+        let chunk = if rng.below(4) == 0 {
+            let len = rng.below(32);
+            rng.bytes(len)
+        } else {
+            let len = rng.below(48);
+            let mut chunk = (len as u32).to_le_bytes().to_vec();
+            chunk.extend(kinds[rng.below(kinds.len())].0.to_le_bytes());
+            chunk.extend(rng.bytes(6 + len));
+            chunk
+        };
+        decoder.push(&chunk);
+        loop {
+            match decoder.next_frame() {
+                Ok(Some(frame)) => {
+                    assert!(frame.payload.len() <= MAX_PAYLOAD);
+                    frames += 1;
+                    read += usize::from(reads_back_the_same(frame.kind, &frame.payload));
+                }
+                Ok(None) => break,
+                // The net service closes such a connection.
+                Err(Error::TooLarge(_)) => {
+                    decoder = Decoder::new();
+                    break;
+                }
+                Err(other) => panic!("the decoder refuses only sizes, not {other:?}"),
+            }
+        }
+    }
+    assert!(
+        frames > 5_000 && read > 1_000,
+        "{frames} frames, {read} read"
+    );
 }

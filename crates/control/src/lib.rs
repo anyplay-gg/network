@@ -460,4 +460,84 @@ mod tests {
         assert!(text.starts_with("{\"event\":\"friends\",\"friends\":[]"));
         assert_eq!(parse_output(&text), Some(event));
     }
+
+    // The launcher and the net service read each other's lines; a broken line from either is
+    // refused, never a crash.
+
+    #[test]
+    fn damaged_lines_are_read_or_refused() {
+        let lines = [
+            command_line(
+                7,
+                &Command::Report {
+                    account: AccountId(41),
+                    reason: anyplay_api::ReportReason::Spam,
+                    details: "äb".into(),
+                },
+            ),
+            command_line(
+                8,
+                &Command::Dialog {
+                    id: 3,
+                    accounts: Some(vec![AccountId(41), AccountId(42)]),
+                },
+            ),
+            output_line(&Output::Event(Event::State {
+                cloud: Cloud::Online,
+                account: None,
+                pending: Some(Pending::Code),
+            })),
+            output_line(&Output::Answer(Answer::error(
+                5,
+                Failure::new("offline", "No cloud."),
+            ))),
+        ];
+        // A fixed-seed xorshift, so every run is the same.
+        let mut seed = 0x5EED_u64;
+        let mut next = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed as usize
+        };
+        let (mut commands, mut outputs) = (0, 0);
+        for _ in 0..20_000 {
+            let mut bytes = lines[next() % lines.len()].as_bytes().to_vec();
+            for _ in 0..1 + next() % 3 {
+                let at = next() % bytes.len().max(1);
+                match next() % 3 {
+                    0 if !bytes.is_empty() => bytes[at] = next() as u8,
+                    1 => bytes.truncate(at),
+                    _ => bytes.insert(at.min(bytes.len()), next() as u8),
+                }
+            }
+            let line = String::from_utf8_lossy(&bytes);
+            if let Ok((id, command)) = parse_command(&line) {
+                commands += 1;
+                assert_eq!(
+                    parse_command(&command_line(id, &command)),
+                    Ok((id, command))
+                );
+            }
+            if let Some(output) = parse_output(&line) {
+                outputs += 1;
+                assert_eq!(parse_output(&output_line(&output)), Some(output));
+            }
+        }
+        assert!(
+            commands > 100 && outputs > 100,
+            "{commands} commands, {outputs} outputs"
+        );
+    }
+
+    #[test]
+    fn a_deeply_nested_line_is_refused() {
+        let deep = format!("{}{}", "[".repeat(100_000), "]".repeat(100_000));
+        assert_eq!(parse_command(&deep), Err(None));
+        assert_eq!(parse_output(&deep), None);
+        let inside = format!(r#"{{"id":1,"do":"invite","accounts":{deep}}}"#);
+        assert_eq!(parse_command(&inside), Err(None));
+        let event = format!(r#"{{"event":"state","cloud":{deep}}}"#);
+        assert_eq!(parse_output(&event), None);
+    }
 }

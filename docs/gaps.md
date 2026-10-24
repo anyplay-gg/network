@@ -15,6 +15,7 @@ What the network does not do yet, part by part. Each line says what is missing a
 - **Push events to the game**: not sent until the bridge can deliver them.
 - **NAT type**: reported as 2 while a relay is reachable, 0 otherwise; no finer measurement.
 - **Voice chat, matchmaking, leaderboards, cloud saves**: not started (phase 5).
+- **Coverage-guided fuzzing**: the parsers of both protocols are tested with random and damaged input from a fixed seed; a cargo-fuzz target that runs on a schedule is not set up yet.
 
 ## Cloud (anyplay-gg/cloud)
 
@@ -26,3 +27,4 @@ What the network does not do yet, part by part. Each line says what is missing a
 
 - **No default cloud**: until AnyPlay's own cloud runs, release builds name none and the player enters one.
 - **Game launch on Linux** with the bridge is untested.
+- **Signed releases**: the binaries carry no code signature, and the self-update checks a download only against the checksums of the same release. Closes with a signing key kept outside GitHub, whose public half ships in the launcher.
