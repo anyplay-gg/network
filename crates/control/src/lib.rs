@@ -213,6 +213,12 @@ pub enum Command {
     CancelSignIn,
     /// Answers a short-lived link that opens the account web, signed in as this account.
     AccountPage,
+    /// Files the one appeal against an action that mutes the account. A ban is appealed on the
+    /// account web instead, because a banned account is signed out.
+    Appeal {
+        action: u64,
+        text: String,
+    },
 }
 
 /// When the microphone is open.
@@ -281,6 +287,103 @@ pub struct Failure {
     pub message: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expected: Option<Expected>,
+    /// With the codes `restricted` and `banned`: what is restricted and until when.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub restriction: Option<Box<Restriction>>,
+}
+
+/// What limits an account, as the player is told. Plain strings and numbers, like the code of a
+/// `Failure`, so that a launcher still reads a value a newer cloud adds.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Restriction {
+    /// `muted` (no friend requests and no messages), `new_account` (too new to write to
+    /// strangers or to send more friend requests) or `banned`. Treat any other value as a
+    /// restriction you cannot name.
+    pub kind: String,
+    /// Unix seconds when it ends. Absent for a ban for good.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub until: Option<u64>,
+    /// The rule of the terms (`harassment`, `spam` ...) and the moderator's words. Absent for
+    /// `new_account`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rule: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// The number of the action, to appeal it with `appeal`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action: Option<u64>,
+    /// Where the appeal stands.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub appeal: Option<Appeal>,
+}
+
+/// Where the appeal of an action stands.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Appeal {
+    /// `available`, `open`, `upheld`, `reversed` or `expired`.
+    pub status: String,
+    /// Unix seconds. An appeal can be filed until then.
+    pub deadline: u64,
+}
+
+impl Restriction {
+    pub const MUTED: &'static str = "muted";
+    pub const NEW_ACCOUNT: &'static str = "new_account";
+    pub const BANNED: &'static str = "banned";
+
+    /// A restriction without a reason, such as a new account's.
+    pub fn new(kind: impl Into<String>, until: Option<u64>) -> Self {
+        Self {
+            kind: kind.into(),
+            until,
+            rule: None,
+            reason: None,
+            action: None,
+            appeal: None,
+        }
+    }
+
+    /// The restriction a mute or a ban states; none for a warning.
+    pub fn of_statement(statement: &anyplay_api::Statement) -> Option<Self> {
+        let kind = match statement.kind {
+            anyplay_api::ActionKind::Warning => return None,
+            anyplay_api::ActionKind::Mute => Self::MUTED,
+            anyplay_api::ActionKind::Ban => Self::BANNED,
+        };
+        Some(Self {
+            kind: kind.to_owned(),
+            until: statement.until,
+            rule: Some(statement.rule.as_str().to_owned()),
+            reason: Some(statement.reason.clone()),
+            action: Some(statement.id),
+            appeal: Some(Appeal {
+                status: statement.appeal.status.as_str().to_owned(),
+                deadline: statement.appeal.deadline,
+            }),
+        })
+    }
+
+    /// The restriction a ban states, from its end and statement.
+    pub fn of_ban(until: Option<u64>, statement: Option<&anyplay_api::Statement>) -> Self {
+        let mut restriction = statement
+            .and_then(Self::of_statement)
+            .unwrap_or_else(|| Self::new(Self::BANNED, None));
+        restriction.kind = Self::BANNED.to_owned();
+        restriction.until = restriction.until.or(until);
+        restriction
+    }
+
+    /// The restriction a cloud error states: `restricted` or `banned`.
+    pub fn of_error(error: &anyplay_api::ApiError) -> Option<Self> {
+        match error.error {
+            ErrorCode::Restricted => Some(Self::new(error.restriction?.as_str(), error.until)),
+            ErrorCode::Banned => Some(Self::of_ban(
+                error.until,
+                error.ban.as_ref().and_then(|ban| ban.statement.as_ref()),
+            )),
+            _ => None,
+        }
+    }
 }
 
 impl Failure {
@@ -295,6 +398,7 @@ impl Failure {
             code: code.into(),
             message: message.into(),
             expected: None,
+            restriction: None,
         }
     }
 
@@ -304,6 +408,7 @@ impl Failure {
             code: error.error.as_str().to_owned(),
             message: error.message.clone(),
             expected: error.expected.clone(),
+            restriction: Restriction::of_error(error).map(Box::new),
         }
     }
 
@@ -570,6 +675,16 @@ pub enum Event {
     Notice {
         code: String,
         message: String,
+    },
+    /// What limits the account now: its mutes that have not ended or been lifted. Sent after
+    /// sign-in, after a moderator acts and after an appeal is decided; an empty list means none.
+    /// A new account's limits are not here: they come with the `restricted` failure.
+    Restrictions {
+        restrictions: Vec<Restriction>,
+    },
+    /// The account was banned and is signed out. A `notice` with the code `banned` comes too.
+    Banned {
+        restriction: Restriction,
     },
     // Parties and messages
     /// The player's party changed, began (a party) or ended (null).
@@ -1005,6 +1120,170 @@ mod tests {
         assert_eq!(
             parse_output(r#"{"event":"meteor","size":3}"#),
             Some(Output::Event(Event::Unknown))
+        );
+    }
+
+    fn api_error(
+        code: ErrorCode,
+        restriction: Option<anyplay_api::Restriction>,
+    ) -> anyplay_api::ApiError {
+        anyplay_api::ApiError {
+            until: Some(2000),
+            restriction,
+            ..anyplay_api::ApiError::new(code, "No.")
+        }
+    }
+
+    #[test]
+    fn a_restricted_failure_says_what_and_until_when() {
+        let failure = Failure::api(&api_error(
+            ErrorCode::Restricted,
+            Some(anyplay_api::Restriction::NewAccount),
+        ));
+        assert_eq!(failure.code, "restricted");
+        assert_eq!(
+            failure.restriction.as_deref(),
+            Some(&Restriction::new(Restriction::NEW_ACCOUNT, Some(2000)))
+        );
+        let text = output_line(&Output::Answer(Answer::error(7, failure.clone())));
+        assert!(
+            text.contains(r#""restriction":{"kind":"new_account","until":2000}"#),
+            "{text}"
+        );
+        let Some(Output::Answer(answer)) = parse_output(&text) else {
+            panic!("not an answer");
+        };
+        assert_eq!(answer.into_result::<Done>(), Err(failure));
+
+        let muted = Failure::api(&api_error(
+            ErrorCode::Restricted,
+            Some(anyplay_api::Restriction::Muted),
+        ));
+        assert_eq!(muted.restriction.unwrap().kind, "muted");
+        // Other errors, and a `restricted` without its reason, carry none.
+        assert_eq!(
+            Failure::api(&api_error(ErrorCode::Limit, None)).restriction,
+            None
+        );
+        assert_eq!(
+            Failure::api(&api_error(ErrorCode::Restricted, None)).restriction,
+            None
+        );
+    }
+
+    #[test]
+    fn a_failure_of_an_older_net_service_still_reads() {
+        let text =
+            r#"{"id":3,"error":{"code":"restricted","message":"A moderator muted this account."}}"#;
+        let Some(Output::Answer(answer)) = parse_output(text) else {
+            panic!("not an answer");
+        };
+        let failure = answer.into_result::<Done>().unwrap_err();
+        assert!(failure.is(ErrorCode::Restricted) && failure.restriction.is_none());
+        // And a restriction of a newer cloud, with a kind and a field this version lacks.
+        let newer = r#"{"id":4,"error":{"code":"restricted","message":"x","restriction":{"kind":"quiet_hours","until":9,"colour":"red"}}}"#;
+        let Some(Output::Answer(answer)) = parse_output(newer) else {
+            panic!("not an answer");
+        };
+        let failure = answer.into_result::<Done>().unwrap_err();
+        assert_eq!(failure.restriction.unwrap().kind, "quiet_hours");
+    }
+
+    #[test]
+    fn a_ban_carries_its_statement_into_the_failure() {
+        let statement = anyplay_api::Statement {
+            id: 12,
+            kind: anyplay_api::ActionKind::Ban,
+            rule: anyplay_api::Rule::Cheating,
+            reason: "Cheats in a game.".into(),
+            created: 10,
+            until: None,
+            lifted: None,
+            from_report: false,
+            automated: false,
+            appeal: anyplay_api::AppealInfo {
+                status: anyplay_api::AppealStatus::Open,
+                deadline: 500,
+                text: Some("It was not me.".into()),
+                answer: None,
+                decided: None,
+            },
+        };
+        let mut error = api_error(ErrorCode::Banned, None);
+        error.until = None;
+        error.ban = Some(Box::new(anyplay_api::BanNotice {
+            statement: Some(statement),
+            appeal_token: "secret".into(),
+        }));
+        let failure = Failure::api(&error);
+        let restriction = failure.restriction.clone().map(|r| *r).unwrap();
+        assert_eq!(restriction.kind, "banned");
+        assert_eq!(restriction.until, None);
+        assert_eq!(restriction.rule.as_deref(), Some("cheating"));
+        assert_eq!(restriction.action, Some(12));
+        assert_eq!(
+            restriction.appeal,
+            Some(Appeal {
+                status: "open".into(),
+                deadline: 500
+            })
+        );
+        // The appeal token and the player's own text never leave the net service.
+        let text = output_line(&Output::Answer(Answer::error(1, failure)));
+        assert!(
+            !text.contains("secret") && !text.contains("not me"),
+            "{text}"
+        );
+
+        // A ban without a statement still says when it ends.
+        let bare = Failure::api(&api_error(ErrorCode::Banned, None));
+        assert_eq!(
+            bare.restriction.as_deref(),
+            Some(&Restriction::new(Restriction::BANNED, Some(2000)))
+        );
+    }
+
+    #[test]
+    fn a_warning_restricts_nothing_and_a_mute_does() {
+        let mut statement = anyplay_api::Statement {
+            id: 2,
+            kind: anyplay_api::ActionKind::Warning,
+            rule: anyplay_api::Rule::Spam,
+            reason: "Stop.".into(),
+            created: 1,
+            until: Some(77),
+            lifted: None,
+            from_report: false,
+            automated: false,
+            appeal: anyplay_api::AppealInfo {
+                status: anyplay_api::AppealStatus::Available,
+                deadline: 9,
+                text: None,
+                answer: None,
+                decided: None,
+            },
+        };
+        assert_eq!(Restriction::of_statement(&statement), None);
+        statement.kind = anyplay_api::ActionKind::Mute;
+        let mute = Restriction::of_statement(&statement).unwrap();
+        assert_eq!((mute.kind.as_str(), mute.until), ("muted", Some(77)));
+        let event = Output::Event(Event::Restrictions {
+            restrictions: vec![mute],
+        });
+        assert_eq!(parse_output(&output_line(&event)), Some(event));
+    }
+
+    #[test]
+    fn the_appeal_command_reads() {
+        assert_eq!(
+            parse_command(r#"{"id":5,"do":"appeal","action":12,"text":"Please look again."}"#),
+            Ok((
+                5,
+                Command::Appeal {
+                    action: 12,
+                    text: "Please look again.".into()
+                }
+            ))
         );
     }
 

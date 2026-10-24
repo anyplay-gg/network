@@ -172,6 +172,9 @@ pub struct Service {
     party_invitations: HashMap<String, anyplay_api::PartyInvitation>,
     voice: VoiceSide,
     conversation_answers: Answers,
+    /// The mutes that limit the account, as the launcher was last told.
+    restrictions: Vec<control::Restriction>,
+    restriction_answers: Answers,
     sessions: HashMap<String, Session>,
     /// Per session, so that a session read on going online never undoes a newer push.
     session_answers: HashMap<String, Answers>,
@@ -262,6 +265,8 @@ impl Service {
             party_invitations: HashMap::new(),
             voice: VoiceSide::default(),
             conversation_answers: Answers::default(),
+            restrictions: Vec::new(),
+            restriction_answers: Answers::default(),
             sessions: HashMap::new(),
             session_answers: HashMap::new(),
             invitations: HashMap::new(),
@@ -429,10 +434,22 @@ impl Service {
     fn failure(&mut self, error: &CloudError) -> Failure {
         match error {
             CloudError::Api(api) => {
-                if api.error == ErrorCode::Banned {
-                    self.end_online("banned");
+                let failure = Failure::api(api);
+                match api.error {
+                    ErrorCode::Banned => {
+                        if let Some(restriction) = failure.restriction.clone() {
+                            self.event(control::Event::Banned {
+                                restriction: *restriction,
+                            });
+                        }
+                        self.end_online("banned");
+                    }
+                    // A mute the launcher was not told of, such as one that began while it was
+                    // away.
+                    ErrorCode::Restricted => self.fetch_restrictions(),
+                    _ => {}
                 }
-                Failure::api(api)
+                failure
             }
             CloudError::Offline(reason) => Failure::new(Failure::OFFLINE, reason.clone()),
             CloudError::SignedOut => {
@@ -786,6 +803,19 @@ impl Service {
                 self.request(id, async move { cloud.account_link().await }, |_, link| {
                     Opened { url: link.url }
                 });
+            }
+            Command::Appeal { action, text } => {
+                let Some(cloud) = self.signed_in_cloud(id) else {
+                    return;
+                };
+                self.request(
+                    id,
+                    async move { cloud.appeal(action, &text).await },
+                    |service, _| {
+                        service.fetch_restrictions();
+                        Done {}
+                    },
+                );
             }
             Command::RelayOnly { on } => {
                 if self.config.relay_only != on {
@@ -1320,6 +1350,8 @@ impl Service {
             tokio::spawn(async move { tunnels.close().await });
         }
         self.relays_expire = 0;
+        self.restriction_answers.ignore_pending();
+        self.restrictions_changed(Vec::new());
         if let Some(cloud) = &self.cloud
             && cloud.is_signed_in()
             && why != "offline"
@@ -1344,6 +1376,7 @@ impl Service {
                 self.push_presence();
                 self.refresh_sessions();
                 self.refresh_social();
+                self.fetch_restrictions();
             }
             EventInput::Offline(reason) => {
                 tracing::info!("event connection: {reason}");
@@ -1360,8 +1393,8 @@ impl Service {
                 });
                 self.end_online("signed out");
             }
-            EventInput::Banned(until) => {
-                let message = match until {
+            EventInput::Banned(restriction) => {
+                let message = match restriction.until {
                     Some(until) => format!("This account is banned until {until} (Unix time)."),
                     None => "This account is banned.".to_owned(),
                 };
@@ -1369,6 +1402,7 @@ impl Service {
                     code: ErrorCode::Banned.as_str().into(),
                     message,
                 });
+                self.event(control::Event::Banned { restriction });
                 self.end_online("banned");
             }
         }
@@ -1415,8 +1449,52 @@ impl Service {
                 self.session_answers.entry(id.clone()).or_default().pushed();
                 self.session_gone(&id);
             }
-            Event::SignedOut | Event::Banned { .. } | Event::Action { .. } | Event::Unknown => {}
+            // A mute, a warning or the decision on an appeal: read what limits the account again.
+            Event::Action { .. } => self.fetch_restrictions(),
+            Event::SignedOut | Event::Banned { .. } | Event::Unknown => {}
             social => self.social_event(social),
+        }
+    }
+
+    // Restrictions
+
+    /// Reads the account's actions and tells the launcher which mutes still limit it.
+    fn fetch_restrictions(&mut self) {
+        let Some(cloud) = self.cloud.clone().filter(|_| self.me.is_some()) else {
+            return;
+        };
+        let question = self.restriction_answers.ask();
+        self.spawn(
+            async move { cloud.actions().await },
+            move |service, result| {
+                if !service.restriction_answers.take(question) {
+                    return;
+                }
+                match result {
+                    Ok(list) => {
+                        let now = now();
+                        let active = list
+                            .actions
+                            .iter()
+                            .filter(|statement| statement.is_active(now))
+                            .filter_map(control::Restriction::of_statement)
+                            .collect();
+                        service.restrictions_changed(active);
+                    }
+                    Err(CloudError::Offline(_)) => {}
+                    Err(error) => {
+                        service.failure(&error);
+                    }
+                }
+            },
+        );
+    }
+
+    /// Sends the launcher the limits when they differ from what it holds.
+    fn restrictions_changed(&mut self, restrictions: Vec<control::Restriction>) {
+        if self.restrictions != restrictions {
+            self.restrictions = restrictions.clone();
+            self.event(control::Event::Restrictions { restrictions });
         }
     }
 

@@ -9,6 +9,8 @@ use tokio::sync::mpsc::UnboundedSender;
 use tokio::task::JoinHandle;
 use tokio_websockets::{ClientBuilder, Limits};
 
+use anyplay_control::Restriction;
+
 use crate::cloud::{Cloud, CloudError};
 
 /// What the event connection reports.
@@ -26,7 +28,7 @@ pub enum EventInput {
     /// The cloud signed the device out. The connection ends for good.
     SignedOut,
     /// The account is banned. The connection ends for good.
-    Banned(Option<u64>),
+    Banned(Restriction),
 }
 
 /// Quiet time after which a connection counts as dead. The cloud pings every 20 seconds.
@@ -47,8 +49,8 @@ pub fn spawn(cloud: Cloud, out: UnboundedSender<EventInput>) -> JoinHandle<()> {
                     let _ = out.send(EventInput::SignedOut);
                     return;
                 }
-                Ending::Banned(until) => {
-                    let _ = out.send(EventInput::Banned(until));
+                Ending::Banned(restriction) => {
+                    let _ = out.send(EventInput::Banned(restriction));
                     return;
                 }
                 Ending::Refresh => {
@@ -91,7 +93,7 @@ fn final_ending(error: &CloudError) -> Option<EventInput> {
     match error {
         CloudError::SignedOut => Some(EventInput::SignedOut),
         CloudError::Api(api) if api.error == ErrorCode::Banned => {
-            Some(EventInput::Banned(api.until))
+            Restriction::of_error(api).map(EventInput::Banned)
         }
         _ => None,
     }
@@ -99,7 +101,7 @@ fn final_ending(error: &CloudError) -> Option<EventInput> {
 
 enum Ending {
     SignedOut,
-    Banned(Option<u64>),
+    Banned(Restriction),
     Refresh,
     Broken {
         reason: String,
@@ -114,7 +116,7 @@ async fn session(cloud: &Cloud, out: &UnboundedSender<EventInput>) -> Ending {
         Ok(access) => access,
         Err(error) => {
             return match final_ending(&error) {
-                Some(EventInput::Banned(until)) => Ending::Banned(until),
+                Some(EventInput::Banned(restriction)) => Ending::Banned(restriction),
                 Some(_) => Ending::SignedOut,
                 None => Ending::Broken {
                     reason: error.to_string(),
@@ -157,7 +159,7 @@ async fn session(cloud: &Cloud, out: &UnboundedSender<EventInput>) -> Ending {
     // The cloud sends `welcome` first, once it pushes to this connection. Until then a change
     // could reach neither the connection nor lists fetched on going online.
     let mut welcomed = false;
-    let mut banned_until = None;
+    let mut banned = None;
     loop {
         let next = tokio::time::timeout(SILENCE, stream.next()).await;
         let message = match next {
@@ -184,7 +186,9 @@ async fn session(cloud: &Cloud, out: &UnboundedSender<EventInput>) -> Ending {
         if let Some((code, _)) = message.as_close() {
             return match u16::from(code) {
                 close::TOKEN_EXPIRED => Ending::Refresh,
-                close::BANNED => Ending::Banned(banned_until),
+                close::BANNED => {
+                    Ending::Banned(banned.unwrap_or_else(|| Restriction::of_ban(None, None)))
+                }
                 close::SIGNED_OUT => Ending::SignedOut,
                 close::GOING_AWAY | close::RESTARTING => {
                     Ending::GoingAway("the cloud is restarting".into())
@@ -199,7 +203,9 @@ async fn session(cloud: &Cloud, out: &UnboundedSender<EventInput>) -> Ending {
             continue;
         };
         match serde_json::from_str::<Event>(text) {
-            Ok(Event::Banned { until, .. }) => banned_until = until,
+            Ok(Event::Banned { until, statement }) => {
+                banned = Some(Restriction::of_ban(until, statement.as_deref()));
+            }
             Ok(Event::SignedOut) => return Ending::SignedOut,
             Ok(Event::Unknown) => {}
             Ok(event) => {
@@ -308,8 +314,9 @@ mod tests {
         task.abort();
     }
 
-    /// A cloud that sends `welcome` and then closes the event connection with `code`.
-    async fn cloud_that_closes(code: u16) -> Cloud {
+    /// A cloud that sends `welcome`, then `notice` if there is one, and closes the event
+    /// connection with `code`.
+    async fn cloud_that_closes(code: u16, notice: Option<Event>) -> Cloud {
         crate::install_crypto();
         let app = axum::Router::new()
             .route(
@@ -333,6 +340,10 @@ mod tests {
                         };
                         let text = serde_json::to_string(&welcome).unwrap();
                         let _ = socket.send(Message::Text(text.into())).await;
+                        if let Some(notice) = notice {
+                            let text = serde_json::to_string(&notice).unwrap();
+                            let _ = socket.send(Message::Text(text.into())).await;
+                        }
                         let frame = axum::extract::ws::CloseFrame {
                             code,
                             reason: "restarting".into(),
@@ -352,14 +363,58 @@ mod tests {
     #[tokio::test]
     async fn a_cloud_that_restarts_sends_its_clients_away_to_come_back_later() {
         for code in [close::GOING_AWAY, close::RESTARTING] {
-            let cloud = cloud_that_closes(code).await;
+            let cloud = cloud_that_closes(code, None).await;
             let (tx, _rx) = mpsc::unbounded_channel();
             let ending = session(&cloud, &tx).await;
             assert!(matches!(ending, Ending::GoingAway(_)), "code {code}");
         }
-        let cloud = cloud_that_closes(1011).await;
+        let cloud = cloud_that_closes(1011, None).await;
         let (tx, _rx) = mpsc::unbounded_channel();
         assert!(matches!(session(&cloud, &tx).await, Ending::Broken { .. }));
+    }
+
+    // The launcher tells the player why: the ban's end and statement travel from the cloud's
+    // `banned` event to the ending of the connection.
+    #[tokio::test]
+    async fn a_ban_keeps_its_end_and_its_statement() {
+        let statement = anyplay_api::Statement {
+            id: 8,
+            kind: anyplay_api::ActionKind::Ban,
+            rule: anyplay_api::Rule::Harassment,
+            reason: "Repeated insults.".into(),
+            created: 100,
+            until: Some(5000),
+            lifted: None,
+            from_report: true,
+            automated: false,
+            appeal: anyplay_api::AppealInfo {
+                status: anyplay_api::AppealStatus::Available,
+                deadline: 9000,
+                text: None,
+                answer: None,
+                decided: None,
+            },
+        };
+        let banned = Event::Banned {
+            until: Some(5000),
+            statement: Some(Box::new(statement)),
+        };
+        let cloud = cloud_that_closes(close::BANNED, Some(banned)).await;
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let Ending::Banned(restriction) = session(&cloud, &tx).await else {
+            panic!("not a ban");
+        };
+        assert_eq!(restriction.kind, Restriction::BANNED);
+        assert_eq!(restriction.until, Some(5000));
+        assert_eq!(restriction.rule.as_deref(), Some("harassment"));
+        assert_eq!(restriction.reason.as_deref(), Some("Repeated insults."));
+        assert_eq!(restriction.action, Some(8));
+
+        let bare = cloud_that_closes(close::BANNED, None).await;
+        let Ending::Banned(restriction) = session(&bare, &tx).await else {
+            panic!("not a ban");
+        };
+        assert_eq!(restriction, Restriction::new(Restriction::BANNED, None));
     }
 
     #[test]
