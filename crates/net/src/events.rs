@@ -199,7 +199,7 @@ async fn session(cloud: &Cloud, out: &UnboundedSender<EventInput>) -> Ending {
             continue;
         };
         match serde_json::from_str::<Event>(text) {
-            Ok(Event::Banned { until }) => banned_until = until,
+            Ok(Event::Banned { until, .. }) => banned_until = until,
             Ok(Event::SignedOut) => return Ending::SignedOut,
             Ok(Event::Unknown) => {}
             Ok(event) => {

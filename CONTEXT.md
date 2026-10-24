@@ -141,6 +141,40 @@ _Avoid_: Seen flag
 A message from someone who is not a friend, held until the receiver accepts the conversation.
 _Avoid_: Spam folder
 
+### Moderation
+
+**Report**:
+A player's note that another account broke a rule, saved with a snapshot of what was reported. It outlives both accounts until its retention ends.
+_Avoid_: Ticket, complaint, flag
+
+**Moderator**:
+An account with the moderator role, granted by the operator. It reads the queue of reports and takes actions.
+_Avoid_: Admin (the admin token is the operator's bootstrap, not a role of players), staff
+
+**Operator**:
+The person or group that runs a cloud. Authenticates with the admin token and grants the moderator role.
+_Avoid_: Owner, host
+
+**Action**:
+What a moderator does to an account, with a rule and a reason the player can read: a warning, a mute or a ban.
+_Avoid_: Sanction, punishment, strike
+
+**Statement of reasons**:
+What the player is told about an action against them: what, why, which rule, for how long, how to appeal. It names neither the reporter nor the moderator.
+_Avoid_: Ban message, notice
+
+**Appeal**:
+A player's one request, per action, that a moderator look at it again. A moderator other than the one who acted decides it when there is another.
+_Avoid_: Complaint, objection
+
+**Audit log**:
+The append-only record of every moderation action, with who did it, to whom, why and when.
+_Avoid_: History, ban log
+
+**Restriction**:
+A limit on what an account may do at the moment: too new an account, or a mute.
+_Avoid_: Penalty
+
 **Share play**:
 A player streams their running game to a friend, who watches and may take over a pad. The friend needs neither the game nor its files.
 _Avoid_: Remote play (playing one's own console from afar), screen share

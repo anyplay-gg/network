@@ -7,7 +7,10 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+pub mod moderation;
 pub mod path;
+
+pub use moderation::*;
 
 /// The largest request body the cloud reads.
 pub const MAX_BODY: usize = 64 * 1024;
@@ -769,8 +772,17 @@ pub enum Event {
         id: String,
     },
     SignedOut,
+    /// The account was banned. The connection closes after this event.
     Banned {
         until: Option<u64>,
+        /// Why, as the player reads it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        statement: Option<Box<Statement>>,
+    },
+    /// A moderator took an action that leaves the account signed in (a warning or a mute), or an
+    /// appeal against an action was decided.
+    Action {
+        statement: Box<Statement>,
     },
     // Parties and messages
     /// The party this account is in changed. A client drops a copy whose revision is older.
@@ -844,6 +856,8 @@ pub enum ErrorCode {
     Unauthorized,
     Banned,
     Forbidden,
+    /// The account may not do this yet or at the moment; the body adds `restriction`.
+    Restricted,
     NotFound,
     HandleTaken,
     VersionMismatch,
@@ -866,7 +880,7 @@ impl ErrorCode {
             | ErrorCode::CodeExpired
             | ErrorCode::HandleInvalid => 400,
             ErrorCode::Unauthorized => 401,
-            ErrorCode::Banned | ErrorCode::Forbidden => 403,
+            ErrorCode::Banned | ErrorCode::Forbidden | ErrorCode::Restricted => 403,
             ErrorCode::NotFound => 404,
             ErrorCode::HandleTaken
             | ErrorCode::VersionMismatch
@@ -888,6 +902,7 @@ impl ErrorCode {
             ErrorCode::Unauthorized => "unauthorized",
             ErrorCode::Banned => "banned",
             ErrorCode::Forbidden => "forbidden",
+            ErrorCode::Restricted => "restricted",
             ErrorCode::NotFound => "not_found",
             ErrorCode::HandleTaken => "handle_taken",
             ErrorCode::VersionMismatch => "version_mismatch",
@@ -923,6 +938,12 @@ pub struct ApiError {
     pub until: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expected: Option<Expected>,
+    /// With `restricted`: why. `until` says when the restriction ends, if it does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub restriction: Option<Restriction>,
+    /// With `banned`: why, and how to appeal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ban: Option<Box<BanNotice>>,
 }
 
 impl ApiError {
@@ -932,6 +953,8 @@ impl ApiError {
             message: message.into(),
             until: None,
             expected: None,
+            restriction: None,
+            ban: None,
         }
     }
 }
