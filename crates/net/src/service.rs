@@ -29,7 +29,7 @@ use tokio::io::AsyncReadExt as _;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::task::JoinHandle;
 
-use crate::answers::Answers;
+use crate::answers::{Answers, is_older};
 use crate::bridge::BridgeInput;
 use crate::cloud::{Cloud, CloudError, now};
 use crate::credentials::{Saved, Store};
@@ -979,6 +979,7 @@ impl Service {
                     .friends
                     .iter_mut()
                     .find(|f| f.account.id == account)
+                    && !is_older(presence.revision, friend.presence.revision)
                 {
                     friend.presence = presence;
                     self.friends_dirty = true;
@@ -1019,7 +1020,19 @@ impl Service {
         self.spawn(
             async move { cloud.friends().await },
             move |service, result| match result {
-                Ok(lists) if service.friends_answers.take(question) => {
+                Ok(mut lists) if service.friends_answers.take(question) => {
+                    // A presence pushed while the lists were on their way may be newer.
+                    for friend in &mut lists.friends {
+                        if let Some(known) = service
+                            .friends
+                            .friends
+                            .iter()
+                            .find(|f| f.account.id == friend.account.id)
+                            && is_older(friend.presence.revision, known.presence.revision)
+                        {
+                            friend.presence = known.presence.clone();
+                        }
+                    }
                     service.friends = lists;
                     service.friends_dirty = true;
                 }
@@ -1315,6 +1328,14 @@ impl Service {
 
     fn session_changed(&mut self, session: Session) {
         let id = session.id.clone();
+        // Another node may tell of an older change after a newer one.
+        if self
+            .sessions
+            .get(&id)
+            .is_some_and(|known| is_older(session.revision, known.revision))
+        {
+            return;
+        }
         let before = self.sessions.insert(id.clone(), session);
         if self.is_activated(&id) {
             let after = &self.sessions[&id];

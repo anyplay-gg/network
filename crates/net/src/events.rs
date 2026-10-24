@@ -76,6 +76,12 @@ pub fn spawn(cloud: Cloud, out: UnboundedSender<EventInput>) -> JoinHandle<()> {
                     tokio::time::sleep(jitter(pause)).await;
                     pause = (pause * 2).min(LONGEST_PAUSE);
                 }
+                Ending::GoingAway(reason) => {
+                    refreshed = false;
+                    let _ = out.send(EventInput::Offline(reason));
+                    pause = Duration::from_secs(1);
+                    tokio::time::sleep(spread()).await;
+                }
             }
         }
     })
@@ -95,7 +101,12 @@ enum Ending {
     SignedOut,
     Banned(Option<u64>),
     Refresh,
-    Broken { reason: String, was_online: bool },
+    Broken {
+        reason: String,
+        was_online: bool,
+    },
+    /// The cloud took its node down and asked its clients to come back spread out.
+    GoingAway(String),
 }
 
 async fn session(cloud: &Cloud, out: &UnboundedSender<EventInput>) -> Ending {
@@ -175,6 +186,9 @@ async fn session(cloud: &Cloud, out: &UnboundedSender<EventInput>) -> Ending {
                 close::TOKEN_EXPIRED => Ending::Refresh,
                 close::BANNED => Ending::Banned(banned_until),
                 close::SIGNED_OUT => Ending::SignedOut,
+                close::GOING_AWAY | close::RESTARTING => {
+                    Ending::GoingAway("the cloud is restarting".into())
+                }
                 other => Ending::Broken {
                     reason: format!("closed with code {other}"),
                     was_online: true,
@@ -204,10 +218,17 @@ fn http_authorization() -> http::HeaderName {
     http::header::AUTHORIZATION
 }
 
-/// The pause, stretched by up to a quarter so that many net services do not reconnect at once.
+/// Half the pause plus a random part of up to the whole, so that net services that lost the
+/// cloud together come back spread over a whole pause instead of a quarter of one.
 fn jitter(pause: Duration) -> Duration {
-    let quarter = pause.as_millis() as u64 / 4;
-    pause + Duration::from_millis(rand::random_range(0..=quarter))
+    let millis = pause.as_millis() as u64;
+    Duration::from_millis(millis / 2 + rand::random_range(0..=millis))
+}
+
+/// A random moment within [`close::RECONNECT_SPREAD_SECS`], after the cloud asked to come back
+/// later.
+fn spread() -> Duration {
+    Duration::from_millis(rand::random_range(0..=close::RECONNECT_SPREAD_SECS * 1000))
 }
 
 #[cfg(test)]
@@ -285,5 +306,81 @@ mod tests {
             Some(EventInput::Event(Event::Welcome { .. }))
         ));
         task.abort();
+    }
+
+    /// A cloud that sends `welcome` and then closes the event connection with `code`.
+    async fn cloud_that_closes(code: u16) -> Cloud {
+        crate::install_crypto();
+        let app = axum::Router::new()
+            .route(
+                path::AUTH_REFRESH,
+                post(|| async {
+                    axum::Json(Tokens {
+                        access: "access".into(),
+                        access_expires: now() + 3600,
+                        refresh: "refresh".into(),
+                        device: 1,
+                    })
+                }),
+            )
+            .route(
+                path::EVENTS,
+                get(move |upgrade: WebSocketUpgrade| async move {
+                    upgrade.on_upgrade(move |mut socket| async move {
+                        let welcome = Event::Welcome {
+                            address: "10.64.0.2".into(),
+                            server_time: now(),
+                        };
+                        let text = serde_json::to_string(&welcome).unwrap();
+                        let _ = socket.send(Message::Text(text.into())).await;
+                        let frame = axum::extract::ws::CloseFrame {
+                            code,
+                            reason: "restarting".into(),
+                        };
+                        let _ = socket.send(Message::Close(Some(frame))).await;
+                    })
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await });
+        let cloud = Cloud::new(&base, Arc::new(|_| {}));
+        cloud.resume(1, "refresh".into());
+        cloud
+    }
+
+    #[tokio::test]
+    async fn a_cloud_that_restarts_sends_its_clients_away_to_come_back_later() {
+        for code in [close::GOING_AWAY, close::RESTARTING] {
+            let cloud = cloud_that_closes(code).await;
+            let (tx, _rx) = mpsc::unbounded_channel();
+            let ending = session(&cloud, &tx).await;
+            assert!(matches!(ending, Ending::GoingAway(_)), "code {code}");
+        }
+        let cloud = cloud_that_closes(1011).await;
+        let (tx, _rx) = mpsc::unbounded_channel();
+        assert!(matches!(session(&cloud, &tx).await, Ending::Broken { .. }));
+    }
+
+    #[test]
+    fn a_pause_spreads_over_a_whole_pause() {
+        let pause = Duration::from_secs(1);
+        let pauses: Vec<Duration> = (0..2000).map(|_| jitter(pause)).collect();
+        assert!(
+            pauses
+                .iter()
+                .all(|p| *p >= pause / 2 && *p <= pause * 3 / 2)
+        );
+        assert!(pauses.iter().any(|p| *p < Duration::from_millis(600)));
+        assert!(pauses.iter().any(|p| *p > Duration::from_millis(1400)));
+    }
+
+    #[test]
+    fn reconnects_after_a_restart_spread_over_the_whole_window() {
+        let window = Duration::from_secs(close::RECONNECT_SPREAD_SECS);
+        let waits: Vec<Duration> = (0..2000).map(|_| spread()).collect();
+        assert!(waits.iter().all(|w| *w <= window));
+        assert!(waits.iter().any(|w| *w < window / 10));
+        assert!(waits.iter().any(|w| *w > window * 9 / 10));
     }
 }
