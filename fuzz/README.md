@@ -1,0 +1,27 @@
+# Fuzz targets
+
+Coverage-guided fuzzing with [cargo-fuzz](https://github.com/rust-fuzz/cargo-fuzz) of the parsers that read another process's bytes. A game process writes the bridge protocol and the launcher writes the control protocol, so nothing either sends may crash the net service.
+
+| Target | What it reads | What must hold |
+|---|---|---|
+| `bridge_message` | one frame payload; the first two bytes pick the kind | read or refused; a message read is written back so that it reads the same, with the same kind |
+| `bridge_stream` | the bytes of a connection, cut into pieces | every frame stays within the size limit and encodes back to itself; its message reads back the same |
+| `traffic_header` | a game datagram or the start of a game stream | the header is exactly the first eight bytes; the rest is left as it came |
+| `control_line` | one line between the launcher and the net service | text that is not UTF-8 is refused; a command or output read is written back so that it reads the same |
+
+The fixed-seed tests next to each parser cover the same ground on every `cargo test`; these targets search further.
+
+## Run
+
+cargo-fuzz needs a nightly toolchain and Linux or macOS:
+
+```sh
+cargo install cargo-fuzz --version 0.13.2 --locked
+cargo +nightly fuzz run bridge_stream -- -max_total_time=300
+```
+
+An input that breaks a target is saved under `fuzz/artifacts/<target>/`. Replay it with `cargo +nightly fuzz run <target> <file>`, then add it to the parser's tests as a fixed case before fixing the parser.
+
+## In CI
+
+[`.github/workflows/fuzz.yml`](../.github/workflows/fuzz.yml) runs each target for a minute on pull requests that touch the parsers, and for a quarter of an hour every night. The corpus grows from run to run in the Actions cache. When a target fails, the input is attached to the run as the artifact `crash-<target>`.

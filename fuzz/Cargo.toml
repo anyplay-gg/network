@@ -1,0 +1,47 @@
+[package]
+name = "anyplay-fuzz"
+description = "Coverage-guided fuzz targets for the network's parsers"
+version = "0.0.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+# Its own workspace: the targets build only with cargo-fuzz on a nightly toolchain.
+[workspace]
+members = ["."]
+
+[dependencies]
+libfuzzer-sys = "0.4.13"
+anyplay-bridge-protocol = { path = "../crates/bridge-protocol" }
+anyplay-control = { path = "../crates/control" }
+
+[[bin]]
+name = "bridge_message"
+path = "fuzz_targets/bridge_message.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "bridge_stream"
+path = "fuzz_targets/bridge_stream.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "traffic_header"
+path = "fuzz_targets/traffic_header.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "control_line"
+path = "fuzz_targets/control_line.rs"
+test = false
+doc = false
+bench = false

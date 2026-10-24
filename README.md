@@ -39,6 +39,7 @@ Games whose online part uses only the platform's own services: sessions, matchma
 | `crates/api` | the cloud's API, shared by the net service and the cloud |
 | `crates/fake-game` | `anyplay-fake-game`, a game's side of the bridge, for tests and for trying the network without a game |
 | `crates/probe` | `anyplay-probe`, which measures a tunnel between two networks (phase 0) |
+| `fuzz/` | [fuzz targets](fuzz/README.md) for the parsers of both protocols |
 | `spec/` | the network's own specifications: [bridge protocol](spec/bridge-protocol.md), [control protocol](spec/control-protocol.md), [cloud API](spec/cloud-api.md), [own API group](spec/own-api-group.md), [observation log](spec/observation-log.md) |
 | `docs/` | [design](docs/DESIGN.md), [decisions](docs/adr), [how games are observed](docs/OBSERVING.md) and [known gaps](docs/gaps.md) |
 
