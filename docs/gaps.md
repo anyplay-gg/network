@@ -19,7 +19,7 @@ What the network does not do yet, part by part. Each line says what is missing a
 
 ## Cloud (anyplay-gg/cloud)
 
-- **One instance**: presence, sessions and invitations live in the memory of one cloud process. Several instances need a shared bus first.
+- **News between nodes**: presence, sessions and invitations are in the store, which every node of a cloud shares, but the nodes do not tell each other about changes yet, so a cloud runs as one node. Closes with stage 2 of the [cloud architecture](https://github.com/anyplay-gg/cloud/blob/main/docs/ARCHITECTURE.md) (NATS).
 - **Parental consent**: players under the age of consent cannot sign up.
 - **Sign-in by passkey**: not offered; e-mail codes only ([ADR 0005](adr/0005-sign-in-by-e-mail-code.md)).
 
