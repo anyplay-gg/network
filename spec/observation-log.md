@@ -25,6 +25,13 @@ Each line is one JSON object in UTF-8, ended by `\n`. A writer that falls behind
 | `ret` | string | The return value in hex, such as `0x80550006`, for exports that return a code. |
 | `dropped` | number | Only on a line of its own (`fn` is `dropped`): how many lines were lost since the last one. |
 
+Two lines describe the writer rather than a call. Both carry `lib` `libSceNetCtl`, the library the bridge lives in:
+
+- **`dropped`**, with the field `dropped`: how many lines were lost since the last one.
+- **`not_implemented`**, with `in.export`: the name of an export the game called that AnyPS5 does not implement. The bridge writes it straight to disk, after the lines still queued, just before that export stops the game, so the last call a game made is never lost. It has no `ret`.
+
+A reader skips a line whose `fn` it does not know.
+
 Strings from the game are written as JSON strings when they are valid UTF-8 and as `{"b64": "..."}` otherwise. A body longer than 64 KiB is cut there and the line gets `"cut": <full length>`.
 
 Example lines:
@@ -32,4 +39,5 @@ Example lines:
 ```json
 {"v":1,"t_ns":812345,"src":"bridge","lib":"libSceNpManager","fn":"sceNpGetState","in":{"user_id":268435456},"out":{"state":2},"ret":"0x0"}
 {"v":1,"t_ns":901100,"src":"bridge","lib":"libSceNpWebApi2","fn":"sceNpWebApi2SendRequest","in":{"api_group":"example","path":"/v1/items","method":"GET","headers":{},"body":""},"out":{"status":0},"ret":"0x80553406"}
+{"v":1,"t_ns":955000,"src":"bridge","lib":"libSceNetCtl","fn":"not_implemented","in":{"export":"sceNpExampleCall"},"out":{}}
 ```
