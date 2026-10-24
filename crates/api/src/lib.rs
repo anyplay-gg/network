@@ -207,6 +207,11 @@ pub struct FriendRequestAnswer {
 pub struct Presence {
     pub online: bool,
     pub activity: Option<Activity>,
+    /// Rises whenever the cloud tells friends about a change. A client keeps the highest it has
+    /// seen for each account and drops a copy that is not newer, however late it arrives. A
+    /// cloud that does not count sends 0.
+    #[serde(default)]
+    pub revision: u64,
 }
 
 /// The game an account is playing.
@@ -257,6 +262,10 @@ pub struct Session {
     pub properties: String,
     pub members: Vec<Member>,
     pub created: u64,
+    /// Rises with every change to the session. A client drops a copy older than the one it has.
+    /// A cloud that does not count sends 0.
+    #[serde(default)]
+    pub revision: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -422,9 +431,18 @@ pub enum Event {
 
 /// Close codes of the event connection.
 pub mod close {
+    /// The cloud's node is shutting down. Reconnect at a random moment within
+    /// [`RECONNECT_SPREAD_SECS`].
+    pub const GOING_AWAY: u16 = 1001;
+    /// The cloud's node restarts; the same as [`GOING_AWAY`].
+    pub const RESTARTING: u16 = 1012;
     pub const TOKEN_EXPIRED: u16 = 4001;
     pub const BANNED: u16 = 4003;
     pub const SIGNED_OUT: u16 = 4004;
+
+    /// After [`GOING_AWAY`] or [`RESTARTING`], clients spread their reconnects over this many
+    /// seconds, so that a node taken down for a deploy does not send them all back at once.
+    pub const RECONNECT_SPREAD_SECS: u64 = 10;
 }
 
 // Errors

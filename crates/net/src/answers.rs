@@ -1,6 +1,13 @@
 //! Orders the answers to a question the net service asks the cloud again and again, such as the
 //! friend lists. Answers can arrive in another order than they were asked; one that arrives late
-//! must never undo a newer one.
+//! must never undo a newer one. Objects the cloud numbers, sessions and presence, are ordered by
+//! their revision instead ([`is_older`]), because several nodes of a cloud may tell of them.
+
+/// True when a copy with revision `new` is older than the one with `known` and must be dropped.
+/// Revision 0 comes from a cloud that does not count, and is never older.
+pub fn is_older(new: u64, known: u64) -> bool {
+    new != 0 && new < known
+}
 
 /// The questions asked and the newest answer taken.
 #[derive(Debug, Default)]
@@ -42,6 +49,15 @@ impl Answers {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_older_revision_is_dropped_and_a_cloud_that_does_not_count_is_believed() {
+        assert!(is_older(3, 4));
+        assert!(!is_older(4, 4), "the same state again changes nothing");
+        assert!(!is_older(5, 4));
+        assert!(!is_older(0, 4), "0 means the cloud does not count");
+        assert!(!is_older(1, 0));
+    }
 
     #[test]
     fn a_late_answer_never_undoes_a_newer_one() {

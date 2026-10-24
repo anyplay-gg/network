@@ -37,12 +37,12 @@ Account   { id, handle }
 Me        { id, handle, email, created }
 Tokens    { access, access_expires, refresh, device }
 Device    { name, platform }                       platform: "windows" | "linux" | "macos" | "other"
-Presence  { online, activity }                     activity: Activity or null
+Presence  { online, activity, revision }           activity: Activity or null
 Activity  { title_id, title, version, session }    session: SessionRef or null
 SessionRef{ id, joinable, members, max_members }
 Friend    { account, since, presence }
 Request   { account, since }
-Session   { id, title_id, title, version, build, leader, max_members, visibility, properties, members, created }
+Session   { id, title_id, title, version, build, leader, max_members, visibility, properties, members, created, revision }
 Member    { account, endpoint, relay, address, joined }
 Invitation{ id, from, session, title_id, title, version, expires }
 Relay     { url, token, expires }
@@ -54,6 +54,7 @@ Relay     { url, token, expires }
 - `endpoint` is the net service's tunnel key (an iroh endpoint ID) as lowercase hex, and `relay` the URL of the relay it is reachable through, or null. Other members dial it with both; the cloud publishes neither anywhere else.
 - `address` is the member's virtual address (see Events).
 - `build` names the AnyPS5 build. Two players may only play together when `title_id`, `version` and `build` all match.
+- `revision` rises with every change to a session, and with every change of an account's presence its friends are told about. Several nodes of one cloud may send news, so a copy can arrive after a newer one: a client keeps the highest revision it has seen and drops a copy with a lower one. A cloud that does not count sends 0, which a client always takes.
 
 ## Signing in
 
@@ -152,7 +153,7 @@ An invitation lives 15 minutes, or until its session closes.
 
 - The cloud pings every 20 seconds and closes a connection that does not answer.
 - One device holds one event connection; a new one replaces the old.
-- Close codes: 4001 the access token expired (refresh, then reconnect), 4003 banned, 4004 signed out.
+- Close codes: 4001 the access token expired (refresh, then reconnect), 4003 banned, 4004 signed out. 1001 and 1012 mean the cloud's node is going away or restarting: reconnect at a random moment within the next 10 seconds, so that the clients of one node do not all come back at once. After any other break, a client waits half its pause plus a random part of up to the whole pause, starting at 1 second and doubling to at most 30.
 - **Virtual addresses** come from `198.18.0.0/15`. The cloud leases one to every online account, the same for the account each time when it is free, so every member of a session sees the same address for the same player.
 
 ## Information
