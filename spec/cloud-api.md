@@ -112,7 +112,7 @@ Accounts have no password. A device signs in with a code sent to the account's e
 - A request to an account that already asked us makes both friends at once (`state: "friends"`).
 - A request to an account that blocked us answers `requested` and does nothing, so a block stays private.
 - Limits: 500 friends, 100 outgoing requests.
-- An account younger than the cloud's minimum age (24 hours by default) may not send a friend request: `restricted` with `restriction: "new_account"` and `until` set to the moment it may. The rule is the one for writing to strangers, and later messages to non-friends follow it. Accepting a waiting request, or answering it with a request of one's own, is not writing to a stranger and stays allowed. A muted account gets `restricted` with `restriction: "muted"`.
+- A new account (younger than the cloud's `new_account_hours`, 24 by default) may send friend requests, but at most 10 during that time (`new_account_friend_requests_per_day`): the 11th answers `restricted` with `restriction: "new_account"` and `until` set to the moment the account is old enough. Accepting a waiting request does not count. A muted account sends none: `restricted` with `restriction: "muted"`.
 
 ## Presence
 
@@ -187,9 +187,9 @@ A profile has a short text, up to 3 favourite titles, an avatar and the playtime
 
 ## Reports
 
-`POST /v1/reports` with `{account, reason, details}` answers 204. `reason` is `cheating`, `harassment`, `spam`, `name` or `other`; `details` has at most 1,000 characters.
+`POST /v1/reports` with `{account, reason, details, conversation, seq}` answers 204. `reason` is `cheating`, `harassment`, `spam`, `name` or `other`; `details` has at most 1,000 characters. `conversation` and `seq` are optional and go together: they name one message written by `account` in a conversation the reporter can read. The reporter cannot report a message they cannot see (`not_found`), or one written by someone else (`bad_request`).
 
-- The cloud saves a snapshot of what was reported with the report (today the reported handle; later the messages or the profile text), so a report is evidence even when the content or the account is gone.
+- The cloud saves a snapshot of what was reported with the report: the reported handle, and for a message its text, so a report is evidence even when the message was swept or the account is gone. A moderator reads it as `content`.
 - An account may have one open report about the same account at a time (`limit`), and files at most 20 reports a day and 5 in 10 minutes (`limit`, `rate_limited`). The numbers are settings of the cloud.
 
 ## Moderation
@@ -234,7 +234,7 @@ Actor       { id, handle }                           id absent for the operator
 | `kind` | Effect | `days` |
 |---|---|---|
 | `warning` | A recorded notice. Nothing is restricted. | not allowed |
-| `mute` | No friend requests, and later no messages, until it ends. The account stays signed in. | required, 1 to 3650 |
+| `mute` | No friend requests and no messages, until it ends. The account stays signed in. | required, 1 to 3650 |
 | `ban` | The account is signed out on every node and cannot sign in again; its e-mail address cannot sign up. | absent: for good |
 
 - `rule` is one of `cheating`, `harassment`, `spam`, `name`, `illegal`, `other`: the rule of the terms the action rests on. `reason` has 1 to 500 characters and is what the player reads, so it is written for them. It must not name the reporter.
@@ -312,7 +312,7 @@ Every message has a number `seq` that counts up by one in its conversation, star
 - A fetch answers at most `limit` messages (default 50, at most 100). `last` is the number of the conversation's newest message. A conversation that the caller is not in answers `not_found`.
 - `Conversation.last` is the newest number, `read` the number the caller read up to, `marks` how far the others read, `request` whether the caller still has to accept it. A client keeps the highest number it has fetched for each conversation. After a break it reads the list, and for each conversation whose `last` is above its own number it fetches `after` its own number until it has reached `last`. Messages a block kept away are missing from a fetch, so numbers can skip.
 - **Groups.** The creator names friends only (`forbidden` otherwise, also for a block in either direction). Any member may add its own friends; those who are members already, who are no friends of the adder, whom a member blocked or who blocked a member are left out of `added`. A new member sees messages written from then on. An account is in at most 50 groups. A group is `full` at 32.
-- **Message requests.** Opening a conversation with an account that is no friend makes a request for that account. It is listed in `requests` once it holds a message, and the receiver can read it; links in it stay inactive in the launcher, and nothing tells the sender that it was read. The receiver is told once (`message_request`). The receiver accepts it, declines it, or answers, which accepts it. A decline is silent: the sender can write on, but nothing reaches the receiver. A stranger may send 5 messages before the receiver answers (`limit`) and may open at most 10 conversations with strangers an hour (`rate_limited`); an account holds at most 100 requests. An account younger than the cloud's `stranger_min_age_hours` (24 by default) may not open a conversation with a stranger (`forbidden`). Once the two are friends, a request is an ordinary conversation.
+- **Message requests.** Opening a conversation with an account that is no friend makes a request for that account. It is listed in `requests` once it holds a message, and the receiver can read it; links in it stay inactive in the launcher, and nothing tells the sender that it was read. The receiver is told once (`message_request`). The receiver accepts it, declines it, or answers, which accepts it. A decline is silent: the sender can write on, but nothing reaches the receiver. A stranger may send 5 messages before the receiver answers (`limit`) and may open at most 10 conversations with strangers an hour (`rate_limited`); an account holds at most 100 requests. An account younger than the cloud's `new_account_hours` (24 by default) may not open a conversation with a stranger (`restricted`, `restriction: "new_account"`, `until`). It may write to its friends at once. A muted account may not send messages at all (`restricted`, `restriction: "muted"`). Once the two are friends, a request is an ordinary conversation.
 - **Blocks.** If the caller blocked the other account of a direct conversation, writing and opening it answer `forbidden`. If the other blocked the caller, writing succeeds and nothing is delivered. In a group, a block hides one sender's messages from one member, in both directions. A message a block kept away stays away after the block is lifted.
 - **Read marks.** `PUT .../read` moves the caller's mark forward to `seq` (at most `last`); a lower value changes nothing. Marks are shown to the members who accepted the conversation; the marks of a request stay with the receiver's own devices. Writing reads up to the message written.
 - A conversation with a friend cannot be left. A party's chat ends with the party.
@@ -365,6 +365,7 @@ Every message has a number `seq` that counts up by one in its conversation, star
 | `PUT /v1/me/avatar` | 5 per account per hour, besides the limit below |
 | messages | 30 per account per minute |
 | conversations with strangers | 10 per account per hour |
+| friend requests of a new account | 10 in its first day (`new_account_friend_requests_per_day`) |
 | `reports` | 20 per account per day and 5 per 10 minutes (settings of the cloud) |
 | appeals | 10 per account per hour |
 | everything else | 120 per account per minute |

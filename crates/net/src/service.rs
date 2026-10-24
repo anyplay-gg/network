@@ -578,6 +578,8 @@ impl Service {
                                 account,
                                 reason,
                                 details,
+                                conversation: None,
+                                seq: None,
                             })
                             .await
                     },

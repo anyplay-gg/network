@@ -417,6 +417,11 @@ pub struct Report {
     pub reason: ReportReason,
     #[serde(default)]
     pub details: String,
+    /// With `seq`: the message being reported, in a conversation the reporter can read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conversation: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seq: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
