@@ -140,7 +140,7 @@ An invitation lives 15 minutes, or until its session closes.
 
 | Type | Fields | Meaning |
 |---|---|---|
-| `welcome` | `address, server_time` | Sent first. `address` is this account's virtual address while it is online. |
+| `welcome` | `address, server_time` | Sent first, once the cloud pushes to this connection. A client counts as online from here and fetches its lists after it, so no change falls between the two. `address` is this account's virtual address while it is online. |
 | `friends` | | The friend lists changed; fetch `GET /v1/friends`. |
 | `presence` | `account, presence` | A friend's presence changed. |
 | `invitation` | `invitation` | A friend invited this account. |
