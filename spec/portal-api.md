@@ -37,7 +37,7 @@ Some actions give an attacker who holds a stolen session a lasting hold. They ne
 
 The actions that need it: starting or finishing a passkey registration, removing a passkey, the export of the data, signing out a device or another browser (a browser may always sign itself out), signing out everywhere, asking for or confirming a new e-mail address, and starting the deletion of the account. A thief with an old copy of a session can then neither read everything the cloud stores nor end the owner's sessions and keep the only one. Everything else needs only a session.
 
-The page proves again who the player is in one of two ways, then repeats the action:
+The error body names the ways that count in `methods`: `["passkey", "email_code"]`, or `["passkey"]` alone for the e-mail change of an account that has a passkey. The page proves again who the player is in one of those ways, then repeats the action:
 
 | Way | Requests | Answer |
 |---|---|---|
@@ -45,6 +45,8 @@ The page proves again who the player is in one of two ways, then repeats the act
 | Passkey | `POST /passkey/sign-in/start`, then `POST /step-up/passkey/finish` | `{fresh_until}` |
 
 The session does not change: its cookie, its token and everything the page holds stay as they are. Only `fresh_until` moves.
+
+**The e-mail change is stronger.** A code sent to an address cannot protect the change of that address: whoever reads the mail can step up and move the account. So when the account has a passkey, `POST /account/email` and `POST /account/email/confirm` need a session that a passkey made fresh in the last 15 minutes, by signing in with a passkey or by `POST /step-up/passkey/finish`. A fresh session made by a code is not enough, and the answer is `step_up_required` with `methods: ["passkey"]`. An account without a passkey has only the code, which then counts.
 
 ## Errors
 
@@ -166,8 +168,8 @@ Browser  { id, current, created, last_used }       id: names the session to its 
 | `DELETE /account/sessions/{id}` | `{}` | `{ok: true, signed_out}`. Step-up, unless it is the browser's own session (then the cookie is cleared and `signed_out` is true). |
 | `POST /account/sign-out-everywhere` | `{}` | `{signed_out: true}`. Step-up. Ends every device and every browser, this one too, and refuses every access token issued before. |
 | `GET /account/export` | | Step-up. A JSON file (`Content-Disposition: attachment`) with everything the cloud stores about the account; the same document as `GET /v1/me/export`. |
-| `POST /account/email` | `{email}` | `{step: "code", email}`. Step-up. Sends a code to the new address. An address that is invalid, the account's own or banned is `bad_request`. |
-| `POST /account/email/confirm` | `{code}` | `{email}`. Step-up. The code makes the address the account's. If another account has it, `bad_request`, with the words of any other address that cannot be used: the answer does not say who has an address. Every device and every other browser is signed out (the browser that confirmed stays), and the old address gets a notice (see Mail). |
+| `POST /account/email` | `{email}` | `{step: "code", email}`. Step-up, and **a passkey when the account has one** (below). Sends a code to the new address. An address that is invalid, the account's own or banned is `bad_request`. |
+| `POST /account/email/confirm` | `{code}` | `{email}`. Step-up, as above. The code makes the address the account's. If another account has it, `bad_request`, with the words of any other address that cannot be used: the answer does not say who has an address. Every device and every other browser is signed out first (the browser that confirmed stays); only then does the address change, so a failure leaves the account as it was. The old address gets a notice (see Mail). |
 | `POST /account/deletion` | `{handle}` | `{deletion: {at}}`. Step-up. `handle` must be the account's own handle, any case (else `bad_request`, `field: "handle"`). |
 | `DELETE /account/deletion` | `{}` | `{deletion: null}`. Cancels a scheduled deletion; harmless when there is none. From `at` on it is `forbidden` ("The grace period has ended"): the sweep is certain. |
 | `POST /step-up/email` | `{}` | `{step: "code", email_hint}`. Sends a code to the account's own address. `email_hint` is `a***@example.com`. |
@@ -176,13 +178,18 @@ Browser  { id, current, created, last_used }       id: names the session to its 
 
 ### Deleting the account
 
-The deletion waits for a **grace period** of 30 days, so a hijacked session, a stolen access token or a slip does not lose the account. **Every way to delete goes through it**: `POST /account/deletion`, `DELETE /v1/me` of the net service, and the HTML page `/web/account/delete`. Scheduling sets `at`, signs out every device, refuses the access tokens issued so far (the "not before" time moves) and ends every browser session but the one that asked; `DELETE /v1/me` is called by a device, so it ends them all. The account is not hidden meanwhile: friends still see it. The player cancels with `DELETE /account/deletion` until `at`. When `at` has passed, the sweep of every node deletes the account, whatever else happens; an account the sweep cannot delete is tried again ten minutes later, so a few failing rows do not hold up the others. Asking again keeps the first time. A player who signs in during the grace period (in the portal or for the launcher) sees `deletion` in `GET /account` and can cancel. The HTML pages cannot cancel; the portal can.
+The deletion waits for a **grace period** of 30 days, so a hijacked session, a stolen access token or a slip does not lose the account. **Every way to delete goes through it**: `POST /account/deletion`, `DELETE /v1/me` of the net service, and the HTML page `/web/account/delete`. Scheduling sets `at`, mails the account (see Mail), signs out every device, refuses the access tokens issued so far (the "not before" time moves) and ends every browser session but the one that asked; `DELETE /v1/me` is called by a device, so it ends them all. The account is not hidden meanwhile: friends still see it. The player cancels with `DELETE /account/deletion` until `at`. When `at` has passed, the sweep of every node deletes the account, whatever else happens; an account the sweep cannot delete is tried again ten minutes later, so a few failing rows do not hold up the others. Asking again keeps the first time. A player who signs in during the grace period (in the portal or for the launcher) sees `deletion` in `GET /account` and can cancel. On a cloud without a portal the HTML account page shows a pending deletion with its day and a form that cancels it (`POST /web/account/delete/cancel`, with the page's CSRF token); the confirmation after asking to delete names the day, which is the first day when the request came again.
 
 `GET /v1/me` does not show a scheduled deletion yet: `Me` has no field for it (see Open questions).
 
 ### Mail
 
-Besides codes the cloud sends one kind of notice: when the account's address changes, the **old** address gets a plain-text mail (same sender as the codes) that names the new address and says what to do if it was not the player. It does not yet send a notice when a passkey is added or removed, or when a deletion is scheduled or cancelled (see Open questions).
+Besides codes the cloud sends two kinds of notice, plain text, from the same sender as the codes:
+
+- **The address changed.** The **old** address is told. The mail names the new address only in part (`n***@example.com`), and, because the old address no longer opens the account, says to contact the operator of the cloud, not to sign in. A cloud has no contact address of its own, so the mail gives the cloud's name and its `public_url`.
+- **A deletion was scheduled.** The account's address is told, whichever way the deletion was asked for (the portal, `DELETE /v1/me`, the HTML page): the day the account will be deleted (UTC), that every device and browser was signed out, to sign in and cancel it before then if it was not the player, or to contact the operator. A request that comes again for a deletion that is scheduled sends no second mail.
+
+A failure to send is logged and does not stop the action. There is no notice yet when a passkey is added or removed, or when a deletion is cancelled (see Open questions).
 
 ## Friends
 
@@ -256,7 +263,7 @@ With it:
 
 ## Open questions
 
-- Mail notices for the other security changes (passkey added or removed, deletion scheduled or cancelled).
+- Mail notices for the other security changes (passkey added or removed, deletion cancelled).
 - `deletion_at` in `Me` (`GET /v1/me`), so the launcher can show a scheduled deletion. It needs a field in the API crate and a cloud that reads it.
 - A stricter dormant state during the grace period: the account stays visible to friends now.
 - Recovery codes, and a list of recent sign-ins with a rough place.

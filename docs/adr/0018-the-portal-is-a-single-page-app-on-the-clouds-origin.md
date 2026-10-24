@@ -4,7 +4,7 @@ The web portal (profile, friends, trophies, account) is a single-page app, built
 
 The account web keeps its HTML pages until the portal covers every flow. Both use the same session and the same steps of the sign-in flow, so they cannot disagree. `/web/authorize` and `/web/link` stay server routes: the launcher opens them. A public profile is a route of the app, but its shell carries Open Graph tags from the profile, so a shared link previews without running the app.
 
-The content security policy stays as strict as for the HTML pages (`script-src 'self'`, `style-src 'self'`). Every write needs the CSRF token, the cloud's own origin, and `Content-Type: application/json`, which a form on another site cannot send. Actions that would give a thief of a session a lasting hold or let them read everything (passkeys, the export, a new address, ending other sessions and devices, signing out everywhere, deleting the account) need a step-up. Every way to delete an account, in the portal, in the net service's API and on the HTML pages, waits 30 days and can be cancelled until the time.
+The content security policy stays as strict as for the HTML pages (`script-src 'self'`, `style-src 'self'`). Every write needs the CSRF token, the cloud's own origin, and `Content-Type: application/json`, which a form on another site cannot send. Actions that would give a thief of a session a lasting hold or let them read everything (passkeys, the export, a new address (by passkey, when the account has one), ending other sessions and devices, signing out everywhere, deleting the account) need a step-up. Every way to delete an account, in the portal, in the net service's API and on the HTML pages, waits 30 days and can be cancelled until the time.
 
 ## Considered options
 
