@@ -35,7 +35,7 @@ The bridge is small on purpose. It forwards; it does not translate.
   - every web API request (user context, API group, path, method, headers, body) and its response, plus push events in the other direction;
   - session signaling: activation, connection state and connection info;
   - the join intent for a starting game, and the result of the invitation dialog.
-- **Game traffic.** Peer-to-peer sockets are accepted, and each player in a session gets a virtual address from `198.18.0.0/15`, a range reserved for testing and never routed on the internet. Whatever a game sends to a virtual address goes over a loopback socket to the net service and through the tunnel. The receiving game sees the sender's virtual address. Reliable peer-to-peer streams become QUIC streams in the tunnel. The two loopback hops add an estimated 0.1 ms or less.
+- **Game traffic.** Peer-to-peer sockets are accepted, and each player in a session gets a virtual address from `198.18.0.0/15`, one that no other member of that session has ([ADR 0020](adr/0020-virtual-addresses-belong-to-sessions.md)). The range is reserved for testing and never routed on the internet. Whatever a game sends to a virtual address goes over a loopback socket to the net service and through the tunnel. The receiving game sees the sender's virtual address. Reliable peer-to-peer streams become QUIC streams in the tunnel. The two loopback hops add an estimated 0.1 ms or less.
 
 ### Net service (this repository)
 
