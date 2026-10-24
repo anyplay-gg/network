@@ -1,0 +1,22 @@
+[package]
+name = "anyplay-voice"
+description = "Party voice for the AnyPlay network: noise suppression, Opus, jitter buffer and mixer behind a small interface"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[features]
+# The real microphone and speakers through cpal. Off by default: it needs ALSA headers on Linux.
+devices = ["dep:cpal"]
+
+[dependencies]
+nnnoiseless = { version = "0.5.2", default-features = false }
+opus = "0.4"
+cpal = { version = "0.18", optional = true }
+
+[[example]]
+name = "loopback"
+required-features = ["devices"]
