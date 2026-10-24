@@ -17,6 +17,14 @@ pub const MAX_PROPERTIES: usize = 8 * 1024;
 pub const MAX_MEMBERS: u16 = 64;
 /// The longest report details, in characters.
 pub const MAX_REPORT_DETAILS: usize = 1000;
+/// Trophy numbers are below this.
+pub const MAX_TROPHY_NUMBER: u16 = 2048;
+/// The most trophies one upload carries.
+pub const MAX_TROPHY_UPLOAD: usize = 512;
+/// The most accounts one request for gamer cards names.
+pub const MAX_CARDS: usize = 100;
+/// Rarity is given once this many players have a title, so it cannot reveal one player.
+pub const RARITY_MIN_PLAYERS: u32 = 10;
 /// Account IDs stay below 2^53 so every JSON parser reads them exactly.
 pub const MAX_ACCOUNT_ID: u64 = (1 << 53) - 1;
 /// The shortest and longest handle, in characters.
@@ -39,6 +47,15 @@ pub enum HandleProblem {
     Length,
     FirstCharacter,
     Character,
+}
+
+/// True for a title ID that can stand in a path: 1 to 64 characters from `A-Z a-z 0-9 _ -`,
+/// such as `PPSA01234`.
+pub fn is_title_id(text: &str) -> bool {
+    (1..=64).contains(&text.len())
+        && text
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
 }
 
 /// Checks the shape of a handle: 3 to 16 characters from `A-Z a-z 0-9 _ -`, a letter first.
@@ -393,6 +410,103 @@ pub struct Info {
     pub terms: Option<String>,
 }
 
+// Trophies and privacy
+
+/// How valuable a trophy is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Grade {
+    Bronze,
+    Silver,
+    Gold,
+    Platinum,
+}
+
+/// A trophy a player earned: its number in the game, its grade and when. Its name and picture
+/// come from the player's own copy of the game, never from the cloud.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Trophy {
+    pub number: u16,
+    pub grade: Grade,
+    /// Unix seconds.
+    pub earned: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TrophyUpload {
+    pub trophies: Vec<Trophy>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TrophiesAdded {
+    pub added: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TitleTrophies {
+    pub title_id: String,
+    pub trophies: Vec<Trophy>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AccountTrophies {
+    pub titles: Vec<TitleTrophies>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TrophyRarity {
+    pub number: u16,
+    pub earned_by: u32,
+}
+
+/// How many of a title's players earned each trophy.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Rarity {
+    pub title_id: String,
+    /// Accounts with at least one record for the title; 0 below [`RARITY_MIN_PLAYERS`].
+    pub players: u32,
+    pub trophies: Vec<TrophyRarity>,
+}
+
+/// Trophies by grade.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Count {
+    pub bronze: u32,
+    pub silver: u32,
+    pub gold: u32,
+    pub platinum: u32,
+}
+
+/// The short form of a profile that friends see in their list.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Card {
+    pub account: Account,
+    /// `None` when the account's trophies are hidden from the caller.
+    pub trophies: Option<Count>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Cards {
+    pub cards: Vec<Card>,
+}
+
+/// Who may see a part of a profile.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Audience {
+    /// Friends only, the default.
+    #[default]
+    Friends,
+    Everyone,
+    Nobody,
+}
+
+/// What a player shows to whom.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Privacy {
+    pub trophies: Audience,
+}
+
 // Events
 
 /// One message on the event connection.
@@ -570,6 +684,24 @@ pub fn is_virtual(address: std::net::Ipv4Addr) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn title_ids_that_can_stand_in_a_path() {
+        assert!(is_title_id("PPSA01234"));
+        assert!(is_title_id("GAME_00001-x"));
+        assert!(!is_title_id(""));
+        assert!(!is_title_id("../admin"));
+        assert!(!is_title_id("PPSA 01234"));
+        assert!(!is_title_id("PPSA01234?x=1"));
+        assert!(!is_title_id(&"A".repeat(65)));
+    }
+
+    #[test]
+    fn privacy_starts_at_friends() {
+        assert_eq!(Privacy::default().trophies, Audience::Friends);
+        let read: Privacy = serde_json::from_str(r#"{"trophies":"nobody"}"#).unwrap();
+        assert_eq!(read.trophies, Audience::Nobody);
+    }
 
     #[test]
     fn handles_follow_the_rules() {

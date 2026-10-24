@@ -27,6 +27,11 @@ pub const SESSION_INVITATIONS: &str = "/v1/sessions/{id}/invitations";
 pub const INVITATION: &str = "/v1/invitations/{id}";
 pub const RELAY_TICKETS: &str = "/v1/relays/tickets";
 pub const REPORTS: &str = "/v1/reports";
+pub const MY_TROPHIES: &str = "/v1/me/trophies/{id}";
+pub const ACCOUNT_TROPHIES: &str = "/v1/accounts/{id}/trophies";
+pub const RARITY: &str = "/v1/titles/{id}/rarity";
+pub const CARDS: &str = "/v1/cards";
+pub const PRIVACY: &str = "/v1/me/privacy";
 pub const EVENTS: &str = "/v1/events";
 
 /// The path with `{id}` replaced by `id`. IDs are numbers or URL-safe tokens, so nothing needs

@@ -61,6 +61,12 @@ Error codes are those of the [cloud API](cloud-api.md), plus `unknown_command`, 
 | `answer_invitation` | `id`, `accept` | `{session, title_id}` when accepted, else `{}` |
 | `dialog` | `id`, `accounts` (null when the player closed the picker) | `{}` |
 | `relay_only` | `on` | `{}` |
+| `upload_trophies` | `title_id`, `trophies` | `{added}` |
+| `trophies` | `account` | `{titles}`, or the error `not_found` when they are hidden |
+| `rarity` | `title_id` | `{title_id, players, trophies}` |
+| `cards` | `accounts` | `{cards}` |
+| `privacy` | | the player's `Privacy` |
+| `set_privacy` | `privacy` | the new `Privacy` |
 
 - `hello` comes first. Until it is answered every other command gets `bad_state`. The net service then resumes the device's saved sign-in, if there is one.
 - `email` starts a sign-in; `code` finishes it or, for a new address, asks for `sign_up`.

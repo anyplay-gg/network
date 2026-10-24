@@ -92,6 +92,23 @@ pub enum Command {
     RelayOnly {
         on: bool,
     },
+    UploadTrophies {
+        title_id: String,
+        trophies: Vec<anyplay_api::Trophy>,
+    },
+    Trophies {
+        account: AccountId,
+    },
+    Rarity {
+        title_id: String,
+    },
+    Cards {
+        accounts: Vec<AccountId>,
+    },
+    Privacy,
+    SetPrivacy {
+        privacy: anyplay_api::Privacy,
+    },
 }
 
 /// The game a player is playing, as the launcher knows it.
@@ -412,6 +429,38 @@ mod tests {
         assert_eq!(
             parse_command(r#"{"id":2,"do":"relay_only","on":true}"#),
             Ok((2, Command::RelayOnly { on: true }))
+        );
+        assert_eq!(
+            parse_command(
+                r#"{"id":4,"do":"upload_trophies","title_id":"PPSA00001",
+                    "trophies":[{"number":3,"grade":"gold","earned":1800000000}]}"#
+            ),
+            Ok((
+                4,
+                Command::UploadTrophies {
+                    title_id: "PPSA00001".into(),
+                    trophies: vec![anyplay_api::Trophy {
+                        number: 3,
+                        grade: anyplay_api::Grade::Gold,
+                        earned: 1_800_000_000,
+                    }],
+                }
+            ))
+        );
+        assert_eq!(
+            parse_command(r#"{"id":5,"do":"set_privacy","privacy":{"trophies":"everyone"}}"#),
+            Ok((
+                5,
+                Command::SetPrivacy {
+                    privacy: anyplay_api::Privacy {
+                        trophies: anyplay_api::Audience::Everyone,
+                    },
+                }
+            ))
+        );
+        assert_eq!(
+            parse_command(r#"{"id":6,"do":"privacy"}"#),
+            Ok((6, Command::Privacy))
         );
     }
 

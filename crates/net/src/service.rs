@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 use anyplay_api::{
     Activity, CodeAnswer, CreateSession, Device, ErrorCode, Event, FriendLists, Invitation,
     JoinSession, Me, Platform, PresenceRequest, Report, Session, Visibility, check_handle,
+    is_title_id,
 };
 use anyplay_bridge_protocol::{
     self as bridge, ActivateResult, DialogResult, Frame, Message, PeerInfoReply, PeerState,
@@ -571,6 +572,70 @@ impl Service {
                             .await
                     },
                     |_, ()| Done {},
+                );
+            }
+            Command::UploadTrophies { title_id, trophies } => {
+                if !is_title_id(&title_id) {
+                    self.fail(id, bad_title());
+                    return;
+                }
+                let Some(cloud) = self.signed_in_cloud(id) else {
+                    return;
+                };
+                self.request(
+                    id,
+                    async move { cloud.upload_trophies(&title_id, trophies).await },
+                    |_, added| added,
+                );
+            }
+            Command::Trophies { account } => {
+                let Some(cloud) = self.signed_in_cloud(id) else {
+                    return;
+                };
+                self.request(
+                    id,
+                    async move { cloud.trophies(account).await },
+                    |_, trophies| trophies,
+                );
+            }
+            Command::Rarity { title_id } => {
+                if !is_title_id(&title_id) {
+                    self.fail(id, bad_title());
+                    return;
+                }
+                let Some(cloud) = self.signed_in_cloud(id) else {
+                    return;
+                };
+                self.request(
+                    id,
+                    async move { cloud.rarity(&title_id).await },
+                    |_, rarity| rarity,
+                );
+            }
+            Command::Cards { accounts } => {
+                let Some(cloud) = self.signed_in_cloud(id) else {
+                    return;
+                };
+                self.request(
+                    id,
+                    async move { cloud.cards(&accounts).await },
+                    |_, cards| cards,
+                );
+            }
+            Command::Privacy => {
+                let Some(cloud) = self.signed_in_cloud(id) else {
+                    return;
+                };
+                self.request(id, async move { cloud.privacy().await }, |_, p| p);
+            }
+            Command::SetPrivacy { privacy } => {
+                let Some(cloud) = self.signed_in_cloud(id) else {
+                    return;
+                };
+                self.request(
+                    id,
+                    async move { cloud.set_privacy(&privacy).await },
+                    |_, p| p,
                 );
             }
             Command::RelayOnly { on } => {
@@ -2142,6 +2207,13 @@ where
 }
 
 /// The endpoint key of this device, made on first use and kept in `data`.
+fn bad_title() -> Failure {
+    Failure::new(
+        ErrorCode::BadRequest.as_str(),
+        "A title ID has 1 to 64 letters, digits, underscores and hyphens.",
+    )
+}
+
 fn endpoint_key(data: &std::path::Path) -> SecretKey {
     let path = data.join("endpoint.key");
     if let Ok(text) = std::fs::read_to_string(&path) {
