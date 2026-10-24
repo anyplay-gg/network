@@ -11,7 +11,7 @@ What the network does not do yet, part by part. Each line says what is missing a
 
 ## Net service (this repository)
 
-- **Web API groups**: none of the platform's is offered yet; every request is answered "not offered" and written to the observation log. Only the network's own group `anyplay` is answered ([spec](../spec/own-api-group.md)). Closes group by group, from observations of class A titles.
+- **Web API groups**: none of the platform's is offered yet; every request is answered "not offered" and written to the observation log. Only the network's own group `anyplay` is answered ([spec](../spec/own-api-group.md)). Closes group by group, from observations of class A titles; what each group sends is written down in [spec/web-api](../spec/web-api/README.md), starting with `userProfile`.
 - **Push events to the game**: not sent until the bridge can deliver them.
 - **NAT type**: reported as 2 while a relay is reachable, 0 otherwise; no finer measurement.
 - **Relay only**: the tunnels can keep every path on the relay, so peers never learn a player's address, and a test covers it; no setting offers it to players yet.
