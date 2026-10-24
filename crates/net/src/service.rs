@@ -1123,7 +1123,7 @@ impl Service {
                 self.session_answers.entry(id.clone()).or_default().pushed();
                 self.session_gone(&id);
             }
-            Event::SignedOut | Event::Banned { .. } | Event::Unknown => {}
+            Event::SignedOut | Event::Banned { .. } | Event::Action { .. } | Event::Unknown => {}
             social => self.social_event(social),
         }
     }

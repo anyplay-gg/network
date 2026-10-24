@@ -19,8 +19,9 @@ The Rust reference is [`crates/api`](../crates/api). The cloud in [anyplay-gg/cl
 | `code_expired` | 400 | The sign-in code or the sign-up is too old, or had too many tries. |
 | `handle_invalid` | 400 | The handle breaks the rules below. |
 | `unauthorized` | 401 | The access token is missing, expired or revoked. Refresh, then retry once. |
-| `banned` | 403 | The account is banned. The body adds `until` (Unix seconds, absent for good). |
+| `banned` | 403 | The account is banned. The body adds `until` (Unix seconds, absent for good) and `ban` with the statement of reasons and an appeal token (see Moderation). |
 | `forbidden` | 403 | The account may not do this, for example because of a block. |
+| `restricted` | 403 | The account may not do this yet or for now. The body adds `restriction` (`new_account` or `muted`) and `until` (Unix seconds; absent for a mute for good). |
 | `not_found` | 404 | No such account, session or invitation, or one the caller may not see. |
 | `handle_taken` | 409 | Another account has this handle. |
 | `version_mismatch` | 409 | The game version or AnyPS5 build differs. The body adds `expected` with `version` and `build`. |
@@ -91,7 +92,7 @@ Accounts have no password. A device signs in with a code sent to the account's e
 | Request | Answer |
 |---|---|
 | `GET /v1/me` | `Me` |
-| `DELETE /v1/me` | 204. Deletes the account with its devices, friends, requests, blocks, reports, trophy records, profile, avatar and playtime. |
+| `DELETE /v1/me` | 204. Deletes the account with its devices, friends, requests, blocks, trophy records, profile, avatar and playtime. Reports the account filed lose their link to it; reports about it, the actions against it and the ban on its e-mail address stay until their retention ends (see Moderation). |
 | `GET /v1/me/export` | Everything the cloud stores about the account, as JSON, trophy records, privacy settings, profile, avatar and playtime included. |
 | `GET /v1/accounts/{id}` | `Account` |
 | `GET /v1/accounts?handle=<handle>` | `Account`; the lookup is exact apart from case. There is no search. |
@@ -111,6 +112,7 @@ Accounts have no password. A device signs in with a code sent to the account's e
 - A request to an account that already asked us makes both friends at once (`state: "friends"`).
 - A request to an account that blocked us answers `requested` and does nothing, so a block stays private.
 - Limits: 500 friends, 100 outgoing requests.
+- An account younger than the cloud's minimum age (24 hours by default) may not send a friend request: `restricted` with `restriction: "new_account"` and `until` set to the moment it may. The rule is the one for writing to strangers, and later messages to non-friends follow it. Accepting a waiting request, or answering it with a request of one's own, is not writing to a stranger and stays allowed. A muted account gets `restricted` with `restriction: "muted"`.
 
 ## Presence
 
@@ -187,6 +189,83 @@ A profile has a short text, up to 3 favourite titles, an avatar and the playtime
 
 `POST /v1/reports` with `{account, reason, details}` answers 204. `reason` is `cheating`, `harassment`, `spam`, `name` or `other`; `details` has at most 1,000 characters.
 
+- The cloud saves a snapshot of what was reported with the report (today the reported handle; later the messages or the profile text), so a report is evidence even when the content or the account is gone.
+- An account may have one open report about the same account at a time (`limit`), and files at most 20 reports a day and 5 in 10 minutes (`limit`, `rate_limited`). The numbers are settings of the cloud.
+
+## Moderation
+
+Reports go into a queue. A **moderator** reads the queue and takes an **action** with a reason; every action is written to an append-only **audit log**; the player concerned reads a **statement of reasons** and may **appeal** ([ADR 0013](../docs/adr/0013-moderators-are-accounts.md)).
+
+### Who may moderate
+
+A moderator is an account with the moderator role, which only the operator grants. A moderator calls the `/v1/moderation/...` paths below with their normal access token. The operator can call the same paths with the admin token as the bearer token: that is how the first moderator is named, and the operator acts under the name `operator`. A request without the role answers `forbidden`. A moderator may not act on themselves, and only the operator may act on another moderator.
+
+### The queue
+
+| Request | Body | Answer |
+|---|---|---|
+| `GET /v1/moderation/reports?status=open&limit=100` | | `[ReportView]`, oldest first when `status=open`, newest first otherwise |
+| `GET /v1/moderation/reports/{id}` | | `ReportView` |
+| `POST /v1/moderation/reports/{id}/dismiss` | `{reason}` | `ReportView`: no action |
+| `POST /v1/moderation/actions` | `ActionRequest` | `ActionView` |
+| `POST /v1/moderation/actions/{id}/lift` | `{reason}` | `ActionView`: takes the action back |
+| `GET /v1/moderation/actions?account={id}` | | `[ActionView]` about that account, newest first |
+| `GET /v1/moderation/appeals?status=open` | | `[AppealView]`, oldest first |
+| `POST /v1/moderation/appeals/{id}/decision` | `{outcome: "uphold" \| "reverse", reason}` | `AppealView` |
+| `GET /v1/moderation/log?before={id}&limit=100` | | `[AuditEntry]`, newest first |
+| `GET /v1/moderation/moderators` | | `[Moderator]` |
+| `POST /v1/moderation/moderators` | `{handle}` | `Moderator` (operator only) |
+| `DELETE /v1/moderation/moderators/{id}` | | 204 (operator only) |
+
+```text
+ReportView  { id, reporter, reported, reported_deleted, reason, details, content, created,
+              status, outcome, decided, decided_by, action }
+              status: "open" | "decided"; outcome: "dismissed" | "actioned"; reporter absent once deleted
+ActionRequest { account, kind, rule, reason, days, report }
+ActionView  { account, actor, statement }
+AppealView  { id, action, created, decided_by }      action: ActionView, whose statement holds the appeal
+Statement   { id, kind, rule, reason, created, until, lifted, from_report, automated, appeal }
+AppealInfo  { status, deadline, text, answer, decided }
+Actor       { id, handle }                           id absent for the operator
+```
+
+### Actions
+
+| `kind` | Effect | `days` |
+|---|---|---|
+| `warning` | A recorded notice. Nothing is restricted. | not allowed |
+| `mute` | No friend requests, and later no messages, until it ends. The account stays signed in. | required, 1 to 3650 |
+| `ban` | The account is signed out on every node and cannot sign in again; its e-mail address cannot sign up. | absent: for good |
+
+- `rule` is one of `cheating`, `harassment`, `spam`, `name`, `illegal`, `other`: the rule of the terms the action rests on. `reason` has 1 to 500 characters and is what the player reads, so it is written for them. It must not name the reporter.
+- With `report`, the action decides that report. A report is decided once; deciding it again answers `limit`. Other open reports about the account stay open for a moderator to dismiss.
+- A newer ban replaces an older one on the same account. A lifted action stays in the list with `lifted`.
+- `removal` of content (SOCIAL "Moderation") is not an action yet, because nothing a player writes is stored for others to read. It joins `kind` with the first such content.
+
+### What the player sees
+
+An action against a player produces a **statement of reasons**: what was done (`kind`, `until`), why (`reason`, `rule`), whether a report started it (`from_report`), whether software decided alone (`automated`, always `false` for now), and how to appeal (`appeal`). It names neither the reporter nor the moderator.
+
+- A warning or a mute arrives as the event `action` on the player's connection. A ban arrives as `banned` with `statement`, then the connection closes (code 4003).
+- `GET /v1/me/actions` answers `{actions: [Statement]}`, newest first, for every action the cloud still keeps.
+- A banned account cannot call the rest of the API, so the `banned` error of a sign-in or a refresh carries `ban: {statement, appeal_token}`. At sign-in the statement is only revealed after the e-mail code is entered, never to someone who merely knows the address. `appeal_token` is a bearer token for seven days. With it, or with the access token of a device that is still signed in, a banned person may call the two paths under `/v1/me/actions`.
+
+### Appeals
+
+`POST /v1/me/actions/{id}/appeal` with `{text}` (1 to 1,000 characters) answers the `Statement`, now with `appeal.status` `open`.
+
+- One appeal per action, free of charge, until `appeal.deadline`: six months after the action by default. A second one answers `limit`; one after the deadline answers `forbidden`.
+- A moderator decides it with `uphold` or `reverse` and a reason. When possible it is not the moderator who took the action: the cloud refuses the same moderator (or the operator, for an action of the operator) as long as another moderator exists (`forbidden`). Reversing lifts the action. The player gets the event `action` and reads `appeal.answer`.
+- Appeals are decided by people. The cloud never decides one by itself.
+
+### The audit log
+
+Every action, dismissal, lifting, appeal and decision, and every grant or withdrawal of the role, adds a line: time, actor, what, the account concerned with the handle it had then, the reason, the rule, and the report, action or appeal it belongs to. Nothing in the API changes or removes a line; the cloud deletes lines only when its retention period for the log ends.
+
+### Retention
+
+Reports, actions and appeals are kept while they matter and then deleted: an expired or lifted action and a decided report six months after the end or decision, an open report after a year, the log after three years. The numbers are settings of the cloud. A ban for good is kept until a moderator lifts it.
+
 ## Parties
 
 A **party** is up to 8 friends who stay together across games, with one chat. It belongs to no game, and an account is in at most one party. The leader invites; members leave when they like. The party's `revision` rises with every change, as a session's does.
@@ -253,7 +332,8 @@ Every message has a number `seq` that counts up by one in its conversation, star
 | `session` | `session` | A session this account is in changed (members, leader, properties). |
 | `session_gone` | `id` | This account is no longer in the session: it closed, or the leader removed it. |
 | `signed_out` | | This device was signed out or the account deleted. Forget the tokens. |
-| `banned` | `until` | The account was banned. |
+| `banned` | `until, statement` | The account was banned; `statement` is the statement of reasons when the cloud has one. The connection closes next. |
+| `action` | `statement` | A moderator warned or muted this account, or decided an appeal. |
 | `party` | `party` | The party this account is in changed. Keep the highest `revision` and drop an older copy. |
 | `party_gone` | `id` | This account is no longer in the party. |
 | `party_invitation` | `invitation` | The leader of a party invited this account. |
@@ -285,4 +365,6 @@ Every message has a number `seq` that counts up by one in its conversation, star
 | `PUT /v1/me/avatar` | 5 per account per hour, besides the limit below |
 | messages | 30 per account per minute |
 | conversations with strangers | 10 per account per hour |
+| `reports` | 20 per account per day and 5 per 10 minutes (settings of the cloud) |
+| appeals | 10 per account per hour |
 | everything else | 120 per account per minute |
