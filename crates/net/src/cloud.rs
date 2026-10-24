@@ -4,10 +4,11 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyplay_api::{
-    AccountId, ApiError, CodeAnswer, CodeRequest, CreateSession, Device, EmailAnswer, EmailRequest,
-    ErrorCode, FriendLists, FriendRequest, FriendRequestAnswer, Info, Invite, Invited, JoinSession,
-    Me, PresenceRequest, RefreshRequest, Relays, Report, Session, SignedIn, SignupRequest,
-    TicketRequest, Tokens, UpdateSession, path,
+    AccountId, AccountTrophies, ApiError, Cards, CodeAnswer, CodeRequest, CreateSession, Device,
+    EmailAnswer, EmailRequest, ErrorCode, FriendLists, FriendRequest, FriendRequestAnswer, Info,
+    Invite, Invited, JoinSession, Me, PresenceRequest, Privacy, Rarity, RefreshRequest, Relays,
+    Report, Session, SignedIn, SignupRequest, TicketRequest, Tokens, TrophiesAdded, Trophy,
+    TrophyUpload, UpdateSession, path,
 };
 use reqwest::{Method, StatusCode};
 use serde::Serialize;
@@ -386,6 +387,51 @@ impl Cloud {
     ) -> Result<Session, CloudError> {
         self.call(Method::PATCH, &path::fill(path::SESSION, id), Some(body))
             .await
+    }
+
+    /// Records trophies the player earned in a title. `title_id` goes into the path, so it must
+    /// pass [`anyplay_api::is_title_id`].
+    pub async fn upload_trophies(
+        &self,
+        title_id: &str,
+        trophies: Vec<Trophy>,
+    ) -> Result<TrophiesAdded, CloudError> {
+        self.call(
+            Method::PUT,
+            &path::fill(path::MY_TROPHIES, title_id),
+            Some(&TrophyUpload { trophies }),
+        )
+        .await
+    }
+
+    pub async fn trophies(&self, account: AccountId) -> Result<AccountTrophies, CloudError> {
+        self.call::<(), _>(
+            Method::GET,
+            &path::fill(path::ACCOUNT_TROPHIES, account),
+            None,
+        )
+        .await
+    }
+
+    /// How many players earned each trophy of a title. `title_id` must pass
+    /// [`anyplay_api::is_title_id`].
+    pub async fn rarity(&self, title_id: &str) -> Result<Rarity, CloudError> {
+        self.call::<(), _>(Method::GET, &path::fill(path::RARITY, title_id), None)
+            .await
+    }
+
+    pub async fn cards(&self, accounts: &[AccountId]) -> Result<Cards, CloudError> {
+        let list: Vec<String> = accounts.iter().map(|a| a.to_string()).collect();
+        let path = format!("{}?accounts={}", path::CARDS, list.join(","));
+        self.call::<(), _>(Method::GET, &path, None).await
+    }
+
+    pub async fn privacy(&self) -> Result<Privacy, CloudError> {
+        self.call::<(), _>(Method::GET, path::PRIVACY, None).await
+    }
+
+    pub async fn set_privacy(&self, privacy: &Privacy) -> Result<Privacy, CloudError> {
+        self.call(Method::PUT, path::PRIVACY, Some(privacy)).await
     }
 
     pub async fn invite(&self, id: &str, to: Vec<AccountId>) -> Result<Invited, CloudError> {

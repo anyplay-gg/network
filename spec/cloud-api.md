@@ -46,6 +46,11 @@ Session   { id, title_id, title, version, build, leader, max_members, visibility
 Member    { account, endpoint, relay, address, joined }
 Invitation{ id, from, session, title_id, title, version, expires }
 Relay     { url, token, expires }
+Trophy    { number, grade, earned }                grade: "bronze" | "silver" | "gold" | "platinum"
+TitleTrophies { title_id, trophies: [Trophy] }
+Count     { bronze, silver, gold, platinum }
+Card      { account, trophies }                    trophies: Count, or null when hidden
+Privacy   { trophies }                             "friends" | "everyone" | "nobody"
 ```
 
 - A **handle** has 3 to 16 characters from `A-Z a-z 0-9 _ -` and starts with a letter. Handles are unique without regard to case; the spelling of the owner is kept. Some handles are reserved (names of the network, of staff roles, and of platforms).
@@ -78,7 +83,7 @@ Accounts have no password. A device signs in with a code sent to the account's e
 |---|---|
 | `GET /v1/me` | `Me` |
 | `DELETE /v1/me` | 204. Deletes the account with its devices, friends, requests, blocks and reports. |
-| `GET /v1/me/export` | Everything the cloud stores about the account, as JSON. |
+| `GET /v1/me/export` | Everything the cloud stores about the account, as JSON, trophy records and privacy settings included. |
 | `GET /v1/accounts/{id}` | `Account` |
 | `GET /v1/accounts?handle=<handle>` | `Account`; the lookup is exact apart from case. There is no search. |
 
@@ -130,6 +135,24 @@ An invitation lives 15 minutes, or until its session closes.
 ## Relays
 
 `POST /v1/relays/tickets` with `{endpoint}` answers `{relays: [Relay]}`. Each `token` lets this endpoint, and only it, use that relay until `expires` (24 hours). The net service asks again before then. Relays check the token themselves; they never call the cloud ([ADR 0007](../docs/adr/0007-relays-check-signed-tickets.md)).
+
+## Trophies and privacy
+
+The cloud keeps a **trophy record** per trophy a player earned: the title, the trophy's number in the game, its grade and when ([ADR 0009](../docs/adr/0009-trophy-records-not-trophy-texts.md)). Names, descriptions and pictures are not part of it; each launcher shows them from its own copy of the game. Trophies are private by default: friends see them, nobody else ([ADR 0012](../docs/adr/0012-private-by-default.md)).
+
+| Request | Body | Answer |
+|---|---|---|
+| `PUT /v1/me/trophies/{title_id}` | `{trophies: [Trophy]}` | `{added}`: how many records are new |
+| `GET /v1/accounts/{id}/trophies` | | `{titles: [TitleTrophies]}`, or `not_found` when the account's trophies are hidden from the caller |
+| `GET /v1/titles/{title_id}/rarity` | | `{title_id, players, trophies: [{number, earned_by}]}` |
+| `GET /v1/cards?accounts=1,2,3` | | `{cards: [Card]}` for the accounts the caller may see, at most 100 |
+| `GET /v1/me/privacy` | | `Privacy` |
+| `PUT /v1/me/privacy` | `Privacy` | `Privacy` |
+
+- `number` is 0 to 2047 and `earned` is in Unix seconds. One upload carries at most 512 trophies. A trophy recorded already keeps its first `earned` and grade.
+- Who sees an account's trophies: the account itself always; its friends unless `trophies` is `nobody`; everyone else only with `everyone`. A block in either direction hides them.
+- `players` counts the accounts with at least one record for the title. Rarity is only given once 10 players have the title; below that `players` is 0 and `trophies` empty, so it cannot tell which trophies one person earned.
+- A gamer card's `trophies` counts the account's records by grade, or is null when its trophies are hidden from the caller.
 
 ## Reports
 
