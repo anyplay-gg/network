@@ -44,7 +44,7 @@ A separate process that the launcher starts and watches ([ADR 0004](adr/0004-net
 - **Account and device.** The refresh token is kept in the operating system's credential store.
 - **A lasting connection to the cloud** for presence, invitations, friend requests and session events.
 - **Translation.** It turns the platform-shaped web API requests from the bridge into the cloud's own API, with one handler per API group: sessions, matchmaking, user profiles, communication restrictions and the profanity filter first; leaderboards and title storage later. Anything unknown is refused and written to the observation log ([ADR 0001](adr/0001-bridge-forwards-net-service-translates.md)).
-- **Tunnels** on [iroh](https://www.iroh.computer/) 1.0: QUIC, hole punching, relays as the fallback, encrypted end to end ([ADR 0002](adr/0002-tunnels-on-iroh.md)).
+- **Tunnels** on [iroh](https://www.iroh.computer/) 1.0: QUIC, hole punching, relays as the fallback, encrypted end to end ([ADR 0002](adr/0002-tunnels-on-iroh.md)). Each time a tunnel settles on a direct or a relayed path, the service logs one line on standard error with target `anyplay::path`, the kind of path and running totals (`direct`, `relay`, `upgrades`). The line names no one and nothing leaves the PC: it measures our own test machines and probes. Measuring real players needs a report to the cloud, which the specification does not have.
 - **Version guard** before every join.
 
 ### Cloud ([anyplay-gg/cloud](https://github.com/anyplay-gg/cloud))
