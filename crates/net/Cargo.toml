@@ -23,6 +23,7 @@ anyplay-api = { path = "../api" }
 anyplay-bridge-protocol = { path = "../bridge-protocol" }
 anyplay-control = { path = "../control" }
 anyplay-proof = { path = "../proof" }
+anyplay-share = { path = "../share" }
 anyplay-voice = { path = "../voice" }
 bytes = "1"
 data-encoding = "2"
@@ -41,6 +42,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [dev-dependencies]
+anyplay-share-worker = { path = "../share-worker" }
 axum = { version = "0.8", features = ["ws"] }
 iroh-relay = { version = "1.4.1", features = ["server"] }
 rcgen = "0.14"

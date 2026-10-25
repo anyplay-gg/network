@@ -39,6 +39,7 @@ use crate::cloud::{Cloud, CloudError, now};
 use crate::credentials::{Saved, Store};
 use crate::events::{self, EventInput};
 use crate::observe::{self, Observer};
+use crate::screen::{self, WorkerSet};
 use crate::traffic::Traffic;
 use crate::tunnel::{self, Link, LinkChange, LinkTotals, RelayAccess, Tunnels};
 use crate::voice::{self, Audio, Hub};
@@ -60,6 +61,8 @@ pub struct Config {
     pub device_name: String,
     /// The microphones and speakers party voice uses.
     pub audio: Audio,
+    /// The share worker that captures, encodes, decodes and shows streams.
+    pub workers: WorkerSet,
 }
 
 type Continuation = Box<dyn FnOnce(&mut Service) + Send>;
@@ -73,6 +76,8 @@ enum Input {
     Link(LinkChange),
     /// A report of the voice hub of that generation.
     Voice(u64, voice::Report),
+    /// A report of the screen hub of that generation.
+    Screen(u64, screen::Output),
     Done(Continuation),
     Tick,
     Stop,
@@ -99,6 +104,14 @@ struct GameRun {
     intent_sent: bool,
     /// Sessions this game run created or joined; it leaves them when the game ends.
     sessions: HashSet<String>,
+}
+
+/// Share screen as it runs: the hub exists while the player is in a party.
+#[derive(Default)]
+struct ScreenSide {
+    hub: Option<screen::Hub>,
+    generation: u64,
+    view: screen::View,
 }
 
 /// Party voice as the player set it and as it runs.
@@ -171,6 +184,7 @@ pub struct Service {
     party_answers: Answers,
     party_invitations: HashMap<String, anyplay_api::PartyInvitation>,
     voice: VoiceSide,
+    screen: ScreenSide,
     conversation_answers: Answers,
     /// The mutes that limit the account, as the launcher was last told.
     restrictions: Vec<control::Restriction>,
@@ -264,6 +278,7 @@ impl Service {
             party_answers: Answers::default(),
             party_invitations: HashMap::new(),
             voice: VoiceSide::default(),
+            screen: ScreenSide::default(),
             conversation_answers: Answers::default(),
             restrictions: Vec::new(),
             restriction_answers: Answers::default(),
@@ -344,6 +359,11 @@ impl Service {
                     if generation == self.voice.generation && self.voice.hub.is_some() {
                         self.voice.report = Some(report);
                         self.voice_event();
+                    }
+                }
+                Input::Screen(generation, output) => {
+                    if generation == self.screen.generation && self.screen.hub.is_some() {
+                        self.screen_output(output);
                     }
                 }
                 Input::Done(continuation) => continuation(&mut self),
@@ -1041,6 +1061,46 @@ impl Service {
                     },
                 );
             }
+            // Share screen
+            Command::ScreenStart { source } => self.screen_start(id, source),
+            Command::ScreenStop => {
+                if let Some(hub) = &self.screen.hub {
+                    hub.stop_sharing("ended");
+                }
+                self.ok(id, Done {});
+            }
+            Command::ScreenWatch { account } => self.screen_watch(id, account),
+            Command::ScreenLeave => {
+                if let Some(hub) = &self.screen.hub {
+                    hub.leave();
+                }
+                self.ok(id, Done {});
+            }
+            Command::ScreenWorker { path } => match self.config.workers.set_path(&path) {
+                Ok(capabilities) => {
+                    let codecs = |list: Vec<anyplay_share::control::CodecCaps>| {
+                        list.into_iter()
+                            .map(|c| control::ScreenCodec {
+                                codec: c.codec,
+                                hardware: c.hardware,
+                                max_width: c.max_width,
+                                max_height: c.max_height,
+                                max_fps: c.max_fps,
+                            })
+                            .collect()
+                    };
+                    self.screen_event();
+                    self.ok(
+                        id,
+                        control::ScreenWorkerReady {
+                            encoders: codecs(capabilities.encode),
+                            decoders: codecs(capabilities.decode),
+                            capture: capabilities.capture,
+                        },
+                    );
+                }
+                Err(error) => self.fail(id, Failure::new(ErrorCode::NotFound.as_str(), error)),
+            },
             // Voice
             Command::Voice { on } => {
                 self.voice.enabled = on;
@@ -1965,6 +2025,166 @@ impl Service {
         self.party_cleared();
     }
 
+    // Share screen
+
+    /// Whether the screen hub should run: signed in with tunnels up and in a party.
+    fn screen_wanted(&self) -> bool {
+        self.me.is_some() && self.tunnels.is_some() && self.party.is_some()
+    }
+
+    /// The other members of the party that a stream may reach, by tunnel key.
+    fn screen_members(&self) -> screen::Members {
+        self.voice_members()
+            .into_iter()
+            .map(|(endpoint, member)| {
+                (
+                    endpoint,
+                    screen::Member {
+                        account: member.account,
+                        relay: member.relay,
+                    },
+                )
+            })
+            .collect()
+    }
+
+    /// Starts the hub when the player is in a party, follows the members, ends it otherwise.
+    fn screen_sync(&mut self) {
+        if !self.screen_wanted() {
+            if self.screen.hub.take().is_some() {
+                self.screen.generation += 1;
+                self.screen.view = screen::View::default();
+                self.screen_event();
+            }
+            return;
+        }
+        if let Some(hub) = &self.screen.hub {
+            hub.set_members(self.screen_members());
+            return;
+        }
+        let Some(tunnels) = self.tunnels.clone() else {
+            return;
+        };
+        self.screen.generation += 1;
+        let generation = self.screen.generation;
+        let (reports, mut rx) = mpsc::unbounded_channel();
+        let inbox = self.inbox.clone();
+        tokio::spawn(async move {
+            while let Some(output) = rx.recv().await {
+                if inbox.send(Input::Screen(generation, output)).is_err() {
+                    return;
+                }
+            }
+        });
+        self.screen.hub = Some(screen::Hub::start(
+            &tunnels,
+            self.config.workers.shared(),
+            self.screen_members(),
+            reports,
+        ));
+        self.screen_event();
+    }
+
+    fn screen_output(&mut self, output: screen::Output) {
+        match output {
+            screen::Output::View(view) => {
+                self.screen.view = view;
+                self.screen_event();
+            }
+            screen::Output::Notice { code, message } => {
+                self.event(control::Event::Notice {
+                    code: code.into(),
+                    message,
+                });
+            }
+        }
+    }
+
+    /// The `screen` event: the hub's view and what the player could do now.
+    fn screen_event(&self) {
+        let capabilities = self.config.workers.capabilities();
+        let others = self
+            .party
+            .as_ref()
+            .is_some_and(|party| party.members.len() > 1);
+        let can_share = self.screen.hub.is_some()
+            && self.game.is_some()
+            && others
+            && capabilities
+                .as_ref()
+                .is_some_and(|c| !c.encode.is_empty() && c.capture);
+        let can_watch = self.screen.hub.is_some()
+            && capabilities.as_ref().is_some_and(|c| !c.decode.is_empty());
+        self.event(control::Event::Screen {
+            can_share,
+            can_watch,
+            hosting: self.screen.view.hosting.clone(),
+            offers: self.screen.view.offers.clone(),
+            watching: self.screen.view.watching.clone(),
+        });
+    }
+
+    fn screen_start(&mut self, id: u64, source: control::ScreenSource) {
+        if self.me.is_none() {
+            self.fail(id, Failure::new(Failure::NOT_SIGNED_IN, "Sign in first."));
+            return;
+        }
+        let Some(title) = self.game.as_ref().map(|g| g.title.clone()) else {
+            self.fail(id, Failure::new(Failure::NO_GAME, "No game is running."));
+            return;
+        };
+        let Some(hub) = self.screen.hub.as_ref().map(|h| h.handle()) else {
+            self.fail(
+                id,
+                Failure::new(Failure::NOT_IN_PARTY, "Join a party to share your screen."),
+            );
+            return;
+        };
+        self.spawn(
+            async move { hub.start_sharing(title, source).await },
+            move |service, result| service.screen_answer(id, result),
+        );
+    }
+
+    fn screen_watch(&mut self, id: u64, account: AccountId) {
+        let Some(hub) = self.screen.hub.as_ref().map(|h| h.handle()) else {
+            self.fail(
+                id,
+                Failure::new(Failure::NOT_IN_PARTY, "Join a party to watch a screen."),
+            );
+            return;
+        };
+        self.spawn(
+            async move { hub.watch(account.0).await },
+            move |service, result| service.screen_answer(id, result),
+        );
+    }
+
+    fn screen_answer(&mut self, id: u64, result: Result<(), screen::Refusal>) {
+        match result {
+            Ok(()) => self.ok(id, Done {}),
+            Err(refusal) => {
+                let failure = match refusal {
+                    screen::Refusal::NoEncoder => {
+                        Failure::new(Failure::NO_ENCODER, "This PC cannot share its screen yet.")
+                    }
+                    screen::Refusal::NoDecoder => Failure::new(
+                        Failure::NO_DECODER,
+                        "This PC cannot show a shared screen yet.",
+                    ),
+                    screen::Refusal::Busy => {
+                        Failure::new(Failure::BUSY, "A shared screen is running already.")
+                    }
+                    screen::Refusal::NotFound => Failure::new(
+                        ErrorCode::NotFound.as_str(),
+                        "That member does not share a screen.",
+                    ),
+                };
+                self.fail(id, failure);
+            }
+        }
+    }
+
     // Voice
 
     /// Whether voice should run now: the player switched it on, is signed in with tunnels up,
@@ -1984,6 +2204,7 @@ impl Service {
     /// Brings voice in line with what is wanted: opens the devices and joins when the player is
     /// in a party with voice on, follows the party's members, leaves otherwise.
     fn voice_sync(&mut self) {
+        self.screen_sync();
         if !self.voice_wanted() {
             let was_on = self.voice.hub.take().is_some() || self.voice.opening;
             self.voice.opening = false;
@@ -2607,6 +2828,7 @@ impl Service {
             sessions: HashSet::new(),
         });
         self.push_presence();
+        self.screen_event();
         let Some(session) = join else {
             self.ok(id, GameStarted { env });
             return;
@@ -2660,6 +2882,10 @@ impl Service {
         let Some(game) = self.game.take() else {
             return;
         };
+        if let Some(hub) = &self.screen.hub {
+            hub.stop_sharing("game_ended");
+        }
+        self.screen_event();
         if let Some(cloud) = self.cloud.clone() {
             for session in game.sessions {
                 let cloud = cloud.clone();
