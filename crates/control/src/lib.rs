@@ -134,6 +134,21 @@ pub enum Command {
     UploadPlaytime {
         entries: Vec<anyplay_api::PlaytimeEntry>,
     },
+    /// A page of the feed: the player's own items and their friends', newest first. `before`
+    /// is a `next` of an earlier page; `limit` is at most 50.
+    Feed {
+        #[serde(default)]
+        before: Option<u64>,
+        #[serde(default)]
+        limit: Option<u32>,
+    },
+    /// Sets the player's reaction to a feed item, or takes it back when `reaction` is null.
+    /// (The item is named `item`: `id` is the number of the command.)
+    React {
+        item: u64,
+        #[serde(default)]
+        reaction: Option<anyplay_api::Reaction>,
+    },
     // Parties and messages
     /// The player's party, or null.
     Party,
@@ -747,6 +762,8 @@ pub enum Event {
     ConversationGone {
         id: String,
     },
+    /// The feed has news; fetch `feed`. Sent at most once every two seconds.
+    Feed,
     /// An event this version does not know.
     #[serde(other)]
     Unknown,
@@ -841,6 +858,46 @@ mod tests {
         assert_eq!(
             parse_command(r#"{"id":6,"do":"privacy"}"#),
             Ok((6, Command::Privacy))
+        );
+        assert_eq!(
+            parse_command(r#"{"id":3,"do":"feed","before":90,"limit":20}"#),
+            Ok((
+                3,
+                Command::Feed {
+                    before: Some(90),
+                    limit: Some(20)
+                }
+            ))
+        );
+        assert_eq!(
+            parse_command(r#"{"id":4,"do":"feed"}"#),
+            Ok((
+                4,
+                Command::Feed {
+                    before: None,
+                    limit: None
+                }
+            ))
+        );
+        assert_eq!(
+            parse_command(r#"{"id":5,"do":"react","item":77,"reaction":"gg"}"#),
+            Ok((
+                5,
+                Command::React {
+                    item: 77,
+                    reaction: Some(anyplay_api::Reaction::Gg)
+                }
+            ))
+        );
+        assert_eq!(
+            parse_command(r#"{"id":5,"do":"react","item":77,"reaction":null}"#),
+            Ok((
+                5,
+                Command::React {
+                    item: 77,
+                    reaction: None
+                }
+            ))
         );
         assert_eq!(
             parse_command(r#"{"id":9,"do":"profile","account":42}"#),

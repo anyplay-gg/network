@@ -51,8 +51,12 @@ Trophy    { number, grade, earned }                grade: "bronze" | "silver" | 
 TitleTrophies { title_id, trophies: [Trophy] }
 Count     { bronze, silver, gold, platinum }
 Card      { account, trophies, avatar }            trophies: Count, or null when hidden; avatar: hash, or absent
-Privacy   { trophies, about, favourites, avatar, playtime }   each "friends" | "everyone" | "nobody"
+Privacy   { trophies, about, favourites, avatar, playtime, feed }   each "friends" | "everyone" | "nobody"
 Profile   { account, about, favourites, avatar, playtime }    each part null when unset or hidden from the caller
+ProfilePage { ...Profile, trophies, links }        trophies: Count or null when hidden; links: [ProfileLink], possibly empty
+ProfileLink { provider, name }                     provider: "discord" | "steam"; name: what the provider shows, or absent
+FeedItem  { id, account, at, kind, ..., reactions, mine }   kind and its fields: see Feed
+Reactions { reactions, mine }                      reactions: { nice, gg, wow, same } counts; mine: a reaction or null
 PlaytimeEntry { title_id, day, minutes }           day: "YYYY-MM-DD" (UTC)
 TitlePlaytime { title_id, minutes }
 Party     { id, leader, members, max_members, conversation, created, revision }
@@ -242,7 +246,7 @@ A profile has a short text, up to 3 favourite titles, an avatar and the playtime
 
 | Request | Body | Answer |
 |---|---|---|
-| `GET /v1/accounts/{id}/profile` | | `Profile` with the parts the caller may see; the others are null |
+| `GET /v1/accounts/{id}/profile` | | `ProfilePage`: the `Profile` with the parts the caller may see (the others are null), the trophy counts by grade (null when hidden, as on a gamer card) and the connections the caller may see (`links`: a Discord or Steam account the player linked on the web, with the visibility they gave it) |
 | `PATCH /v1/me/profile` | `{about?, favourites?}` | the caller's `Profile`. A part that is left out stays; `""` or `[]` clears it |
 | `PUT /v1/me/avatar` | the picture, `Content-Type: image/png` or `image/jpeg` | `{avatar}`: the new hash |
 | `DELETE /v1/me/avatar` | | 204 |
@@ -253,6 +257,31 @@ A profile has a short text, up to 3 favourite titles, an avatar and the playtime
 - A part is null both when the account has not set it and when the caller may not see it, so a null tells a stranger nothing.
 - **Avatars.** The body is at most 1 MB (the one exception to the 64 KiB body limit) and must really be a PNG or JPEG, whatever it claims; a picture over 4,096 pixels on a side or that needs more than 64 MiB to decode is refused. The cloud decodes it, turns it upright by its EXIF orientation, crops it to a centred square, scales it to 256 by 256 pixels and encodes it again as PNG, so no metadata of the original survives. It is stored under the SHA-256 of the result (64 lowercase hex digits), which is the `avatar` in profiles and cards. The picture at `/v1/avatars/{hash}` never changes, so it is served with `Cache-Control: public, max-age=31536000, immutable` and an `ETag`. The hash is the only address; it is given out only to those who may see the avatar. A new avatar replaces the old one, which stops existing. Avatars are the player's own pictures, never taken from games.
 - **Playtime.** `day` is a real UTC date from 2000-01-01 to tomorrow, `minutes` is 0 to 1,440, one upload carries at most 512 entries, and an account keeps at most 20,000 days of titles. For each title and day the cloud keeps the highest `minutes` it has seen, so an upload can be sent again and never adds twice. `Profile.playtime` lists the total minutes per title, most played first.
+
+## Feed
+
+The feed lists what a player and their friends did on the network, newest first. It is a record of events, not a place to write: there are no comments and no free text, only [four reactions](../docs/adr/0022-the-feed-has-four-reactions-and-no-comments.md). Nothing in an item is game content: a title and a trophy are numbers, and a client shows their names from the player's own copy of the game.
+
+| Request | Body | Answer |
+|---|---|---|
+| `GET /v1/feed?before=&limit=` | | `{items: [FeedItem], next}`: the caller's own items and their friends', newest first. `limit` is 1 to 50 (30 if left out); `before` is the `next` of an earlier page. `next` is null on the last page |
+| `PUT /v1/feed/{id}/reaction` | `{reaction}` | `{reactions, mine}`: sets the caller's reaction to the item, replacing the one they had |
+| `DELETE /v1/feed/{id}/reaction` | | `{reactions, mine}` with the reaction taken back; also when there was none |
+
+An item carries `id`, the `account` it is about, `at`, the counts of the four reactions (`nice`, `gg`, `wow`, `same`) and the caller's own (`mine`, null for none), and one of these `kind`s:
+
+| `kind` | Fields | Recorded when |
+|---|---|---|
+| `trophy` | `title_id`, `number`, `grade`, `rarity` | a trophy record is new and was earned in the last 24 hours (an upload of a whole history makes no items); at most 5 items from one upload. `rarity` is the percent of the title's players who earned it with one decimal, null below 10 players (the rule of the rarity request) |
+| `friend` | `with` (an Account) | two accounts become friends: one item for each of them |
+| `first_played` | `title_id` | the account's presence shows a title it has never shown before |
+| `party` | `members` (Accounts, the leader first) | a party gets its second member. Only its members see the item |
+
+- **Who sees an item.** The account it is about; its friends unless its `feed` visibility is `nobody`; no one else, and nobody in either direction of a block. `everyone` shows what `friends` does for now: a stranger sees no feed. A `party` item is the exception: its members see it whatever the leader chose, unless blocked. Setting `feed` to `nobody` hides every item of the account from others at once, and the cloud records no new ones while it is set.
+- **Reactions.** Exactly `nice`, `gg`, `wow` and `same`; any other value is `bad_request`. An account has at most one reaction on an item and may change or take it back at any time. Only those who may see the item can react (`not_found` otherwise, as for an item that does not exist). Counts are totals; the cloud does not say who reacted. The owner of an item gets a `feed` event when someone reacts.
+- **Limits.** An account gets at most 100 new items a day; later events are not recorded. Reactions: 60 per account per minute.
+- **Retention.** The cloud deletes items, with their reactions, 90 days after they were recorded (a setting of the cloud). Deleting an account deletes its items and its reactions on other accounts' items.
+- **News.** The cloud sends `feed` on the event connection to the friends of an account that has a new item, and to the members for a party item.
 
 ## Reports
 
@@ -418,6 +447,7 @@ Every message has a number `seq` that counts up by one in its conversation, star
 | `read` | `conversation, account, seq` | A member read up to `seq`. |
 | `conversation` | `id` | A conversation is new or its members changed. Fetch it. |
 | `conversation_gone` | `id` | This account is no longer in the conversation. |
+| `feed` | | A feed has news (a friend's new item, or a reaction to one of this account's). Fetch `GET /v1/feed`. It carries nothing; a client fetches at most every two seconds. |
 
 - After `welcome`, and after every reconnect, a client reads what it may have missed: `GET /v1/party` and `GET /v1/party/invitations`, and `GET /v1/conversations` with the messages after the numbers it holds. News is a pointer or a numbered state and may be lost; reading the state is always right.
 - The cloud pings every 20 seconds and closes a connection that does not answer.
@@ -445,6 +475,7 @@ Every message has a number `seq` that counts up by one in its conversation, star
 | conversations with strangers | 10 per account per hour |
 | friend requests of a new account | 10 in its first day (`new_account_friend_requests_per_day`) |
 | `PUT /v1/me/run-reports/{title_id}` | 30 per account per hour |
+| `PUT/DELETE /v1/feed/{id}/reaction` | 60 per account per minute |
 | `reports` | 20 per account per day and 5 per 10 minutes (settings of the cloud) |
 | appeals | 10 per account per hour |
 | everything else | 120 per account per minute |

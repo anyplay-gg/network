@@ -91,8 +91,10 @@ A **restriction** has a `kind` and, when they apply, `until`, `rule`, `reason`, 
 | `cards` | `accounts` | `{cards}` |
 | `privacy` | | the player's `Privacy` |
 | `set_privacy` | `privacy` | the new `Privacy` |
-| `profile` | `account` | `Profile`: the parts the player may see of that account |
+| `profile` | `account` | `ProfilePage`: the `Profile` with the parts the player may see of that account, their trophy counts (null when hidden) and the connections they show (`links`) |
 | `upload_playtime` | `entries` | `{changed}` |
+| `feed` | `before`, `limit` | `{items, next}`: a page of the [feed](cloud-api.md#feed), newest first; both fields may be left out |
+| `react` | `item`, `reaction` | `{reactions, mine}`; `reaction` is `nice`, `gg`, `wow` or `same`, or null to take the reaction back. `not_found` when the player cannot see the item. (The item is named `item`: `id` is the number of the command.) |
 | `party` | | `{party}`: the player's `Party`, or null |
 | `party_invite` | `accounts` | `{sent}`: friends are invited; a party is made when the player is in none |
 | `party_answer` | `invitation` (its `id`), `accept` | `{party}` when accepted, else `{}` |
@@ -161,6 +163,7 @@ A **restriction** has a `kind` and, when they apply, `until`, `rule`, `reason`, 
 | `conversation` | `id` | a conversation is new or its members changed |
 | `conversation_gone` | `id` | the player is no longer in the conversation |
 | `screen` | `can_share`, `can_watch`, `hosting`, `offers`, `watching` | share screen changed; while a stream runs its numbers at most twice a second |
+| `feed` | | the feed has news; fetch `feed`. The net service sends at most one every two seconds, with one trailing event for news inside that time |
 
 - `restrictions` lists only the mutes that have not ended or been lifted; a warning limits nothing and is not listed, a new account's limit comes with the `restricted` failure. The net service sends it only when the list changed. A restriction with `until` in the past is over: the launcher drops it at that time without waiting for an event.
 - To appeal: a mute is appealed with the `appeal` command. A ban signs the account out, so it is appealed on the account web: the launcher starts `browser_sign_in`, and the cloud's sign-in ends on the page with the statement and the form (after a ban the player proves who they are there, as in [ADR 0015](../docs/adr/0015-moderators-are-accounts.md)).
