@@ -166,7 +166,7 @@ The name is random for each share and the mapping is readable only by the user w
 Video travels as QUIC datagrams ([RFC 9221](https://www.rfc-editor.org/rfc/rfc9221)), which the connection's congestion controller governs, and is never retransmitted: a late picture is worse than a lost one. The packetiser cuts each encoded frame into data packets of at most `max_datagram_size - 20` bytes (the size the connection reports, at least 1000), and adds parity packets.
 
 - **Loss protection** is Reed-Solomon over GF(256) across the packets of one frame, a systematic code, so a frame that arrives whole needs no decoding. A group has at most 255 packets, data and parity together; a larger frame is cut into groups of equal size. Parity is `ceil(data × r)` packets with `r` set by the rate controller from the loss it measures: 0 while loss stays below 0.5% over 2 seconds, then rising in steps of 5% to at most 30%. A key frame gets at least 10% parity when `r` is above 0. Reed-Solomon is old, free of patents, and what Moonlight's open protocol also uses; RaptorQ is more efficient but carries patent declarations.
-- **A frame that cannot be completed** after its group's parity is used is dropped, and the receiver asks for a key frame (control message `key`) at most once every 500 ms. Until the key frame arrives the viewer shows the last complete picture, never a damaged one. After 2 seconds of this it shows that the connection is poor.
+- **A frame that cannot be completed** after its group's parity is used is dropped, and the receiver asks for a key frame (control message `key`) at most once every 500 ms. Until the key frame arrives the viewer shows the last complete picture, never a damaged one. A frame that is still incomplete 100 ms after its first packet is given up, and a complete frame waits at most 20 ms for an older one that is missing, so a late packet delays nothing for long. After a gap only a key frame is shown, and the stream starts with one. After 2 seconds of this it shows that the connection is poor.
 - **A frame that waits too long.** On the host, an encoded frame that has waited more than 150 ms in the send queue is discarded and the next frame is a key frame. Capture drops frames, not the encoder's output, while the queue holds more than one frame.
 - **Not used in version 0:** reference-frame invalidation and gradual intra refresh. Both are better than key frames after loss and depend on the encoder; phase 4 looks at them.
 
@@ -189,7 +189,7 @@ All numbers are big-endian.
 | 18 | 2 | parity | parity packets in the group, 0 to 254, with `data + parity ≤ 255` |
 | 20 | 1 to … | payload | bytes of the encoded frame, or parity over them |
 
-A receiver refuses, without a reply, a datagram that is shorter than 21 bytes, has another version, a flag bit set that must be 0, `index ≥ data + parity`, `groups` 0 or above 8, or a payload of another length than its group's other packets (the last data packet of a group may be shorter; parity packets have the length of the longest data packet). It keeps at most 4 frames in reassembly and 16 MiB in total; older ones are dropped.
+The bytes of the encoded frame are preceded by their length as 4 bytes (big-endian), at the start of the first data packet of the first group, so that a receiver knows the exact size even when the short last packet is lost. A receiver refuses, without a reply, a datagram that is shorter than 21 bytes, has another version, a flag bit set that must be 0, `index ≥ data + parity`, `groups` 0 or above 8, or a payload of another length than its group's other packets (the last data packet of a group may be shorter; parity packets have the length of the longest data packet). It keeps at most 4 frames in reassembly and 16 MiB in total; older ones are dropped.
 
 ### Audio datagram
 
@@ -231,7 +231,7 @@ The dialing side opens one bidirectional stream right after the handshake. Each 
 | `hello` | both | `version`, `role` (`host` or `guest`), `encode`, `decode` | Opens the stream. The lists have `{codec, hardware, max_width, max_height, max_fps}`. |
 | `config` | host | `epoch`, `codec`, `width`, `height`, `fps`, `kbps`, `mode` | A new stream setup. Sent at the start and on every change of codec, size or mode. |
 | `request` | guest | `mode` | The guest would like this mode. |
-| `report` | guest | `frame` (highest frame received), `received`, `lost`, `recovered`, `delay_trend_us`, `queue_ms`, `decoded_fps`, `shown_fps` | Every 100 ms: what the rate controller needs. |
+| `report` | guest | `frame` (highest frame received), `received`, `lost`, `recovered` (packet counts since the last report), `delay_trend_us`, `queue_ms`, `decoded_fps`, `shown_fps` | Every 100 ms: what the rate controller needs. |
 | `key` | guest | `epoch`, `frame` | A key frame is needed from `frame` on. |
 | `ping` / `pong` | both | `t0`, `t1`, `t2` | Four timestamps, to measure the round trip and the clocks' difference. |
 | `stop` | both | `reason` | The sender is ending the share. |

@@ -209,6 +209,25 @@ pub enum Command {
         kind: DeviceKind,
         name: Option<String>,
     },
+    // Share screen
+    /// Starts streaming the game the player is playing to the party's members, who each choose
+    /// whether to watch. Watch only: no input comes back.
+    ScreenStart {
+        #[serde(default)]
+        source: ScreenSource,
+    },
+    /// Ends the stream the player shares.
+    ScreenStop,
+    /// Watches the stream a party member shares (one at a time).
+    ScreenWatch {
+        account: AccountId,
+    },
+    /// Stops watching.
+    ScreenLeave,
+    /// Tells the net service where the verified share worker is.
+    ScreenWorker {
+        path: String,
+    },
     Conversations,
     /// Opens the conversation with one account, or a group with several.
     OpenConversation {
@@ -432,6 +451,10 @@ impl Failure {
     pub const NOT_SIGNED_IN: &'static str = "not_signed_in";
     pub const NO_GAME: &'static str = "no_game";
     pub const BAD_STATE: &'static str = "bad_state";
+    pub const NOT_IN_PARTY: &'static str = "not_in_party";
+    pub const NO_ENCODER: &'static str = "no_encoder";
+    pub const NO_DECODER: &'static str = "no_decoder";
+    pub const BUSY: &'static str = "busy";
 
     pub fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
         Self {
@@ -578,6 +601,103 @@ pub struct Opened {
 /// An answer without fields.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Done {}
+
+/// What a shared screen shows.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScreenSource {
+    /// The window of the game the player is playing, and nothing else. The default.
+    #[default]
+    Game,
+    /// A moving test picture with a frame counter in its pixels, for tests and for measuring.
+    TestPattern,
+}
+
+/// How far a shared screen has come, on either side.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScreenPhase {
+    /// The worker or the connection is starting.
+    Connecting,
+    /// Pictures flow.
+    Live,
+    /// Connected, but nothing has arrived for 5 seconds.
+    Stalled,
+}
+
+/// What a stream looks like at the moment: zero where not known yet.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScreenStats {
+    pub width: u32,
+    pub height: u32,
+    pub fps: u32,
+    pub kbps: u32,
+}
+
+/// One party member as the host's stream sees them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScreenViewer {
+    pub account: AccountId,
+    /// The member chose to watch; otherwise they only know the stream is on.
+    pub watching: bool,
+    /// The connection to this member and the path it takes; null when there is none.
+    pub link: Option<Link>,
+    /// Round trip on that connection in milliseconds, when measured.
+    pub rtt_ms: Option<u32>,
+    /// Packets lost on the way to this member over the last seconds, in percent.
+    pub loss_percent: u8,
+}
+
+/// The stream the player shares.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScreenHosting {
+    pub phase: ScreenPhase,
+    pub title: String,
+    pub codec: Option<String>,
+    #[serde(flatten)]
+    pub stats: ScreenStats,
+    pub viewers: Vec<ScreenViewer>,
+}
+
+/// A party member who shares a stream the player may watch.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScreenOffer {
+    pub account: AccountId,
+    pub title: String,
+    pub link: Option<Link>,
+}
+
+/// The stream the player watches.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScreenWatching {
+    pub account: AccountId,
+    pub title: String,
+    pub phase: ScreenPhase,
+    pub link: Option<Link>,
+    pub rtt_ms: Option<u32>,
+    #[serde(flatten)]
+    pub stats: ScreenStats,
+    /// Pictures shown per second.
+    pub shown_fps: u32,
+}
+
+/// The answer to `screen_worker`: what the worker found it can do.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScreenWorkerReady {
+    pub encoders: Vec<ScreenCodec>,
+    pub decoders: Vec<ScreenCodec>,
+    pub capture: bool,
+}
+
+/// One codec a worker can encode or decode.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScreenCodec {
+    pub codec: String,
+    pub hardware: bool,
+    pub max_width: u32,
+    pub max_height: u32,
+    pub max_fps: u32,
+}
 
 /// The answer to `party` and `party_answer`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -746,6 +866,18 @@ pub enum Event {
         mode: VoiceMode,
         me: VoiceLevel,
         peers: Vec<VoicePeer>,
+    },
+    /// Share screen: what the player shares, who offers a stream to them, and what they watch.
+    /// Sent when something changes, and while a stream runs its numbers at most twice a second.
+    Screen {
+        /// The player could start a stream now: signed in, in a party, a game runs, and the
+        /// worker can capture and encode.
+        can_share: bool,
+        /// The player could watch a stream: the worker can decode and show.
+        can_watch: bool,
+        hosting: Option<ScreenHosting>,
+        offers: Vec<ScreenOffer>,
+        watching: Option<ScreenWatching>,
     },
     /// Every conversation and request with its newest number, after sign-in and after every
     /// reconnect. Compare each `last` with the number you hold and fetch the messages after it.
@@ -1097,6 +1229,92 @@ mod tests {
             parse_command(&command_line(12, &set)),
             Ok((12, set.clone()))
         );
+    }
+
+    #[test]
+    fn screen_commands_are_lines() {
+        assert_eq!(
+            parse_command(r#"{"id":1,"do":"screen_start"}"#),
+            Ok((
+                1,
+                Command::ScreenStart {
+                    source: ScreenSource::Game
+                }
+            ))
+        );
+        assert_eq!(
+            parse_command(r#"{"id":2,"do":"screen_start","source":"test_pattern"}"#),
+            Ok((
+                2,
+                Command::ScreenStart {
+                    source: ScreenSource::TestPattern
+                }
+            ))
+        );
+        assert_eq!(
+            parse_command(r#"{"id":3,"do":"screen_watch","account":9}"#),
+            Ok((
+                3,
+                Command::ScreenWatch {
+                    account: AccountId(9)
+                }
+            ))
+        );
+        assert_eq!(
+            parse_command(r#"{"id":4,"do":"screen_stop"}"#),
+            Ok((4, Command::ScreenStop))
+        );
+        assert_eq!(
+            parse_command(r#"{"id":5,"do":"screen_leave"}"#),
+            Ok((5, Command::ScreenLeave))
+        );
+        assert_eq!(
+            parse_command(r#"{"id":6,"do":"screen_worker","path":"C:/w/anyplay-share.exe"}"#),
+            Ok((
+                6,
+                Command::ScreenWorker {
+                    path: "C:/w/anyplay-share.exe".into()
+                }
+            ))
+        );
+    }
+
+    #[test]
+    fn the_screen_event_is_one_line_and_not_taken_for_an_answer() {
+        let event = Event::Screen {
+            can_share: true,
+            can_watch: true,
+            hosting: Some(ScreenHosting {
+                phase: ScreenPhase::Live,
+                title: "Astro".into(),
+                codec: Some("h264".into()),
+                stats: ScreenStats {
+                    width: 1280,
+                    height: 720,
+                    fps: 60,
+                    kbps: 4000,
+                },
+                viewers: vec![ScreenViewer {
+                    account: AccountId(7),
+                    watching: true,
+                    link: Some(Link::Direct),
+                    rtt_ms: Some(24),
+                    loss_percent: 0,
+                }],
+            }),
+            offers: vec![ScreenOffer {
+                account: AccountId(8),
+                title: "Gran".into(),
+                link: None,
+            }],
+            watching: None,
+        };
+        let output = Output::Event(event);
+        let text = output_line(&output);
+        assert!(text.starts_with("{\"event\":\"screen\",\"can_share\":true,"));
+        assert!(text.contains("\"width\":1280,\"height\":720,\"fps\":60,\"kbps\":4000"));
+        assert_eq!(text.matches('\n').count(), 1);
+        assert_eq!(parse_output(&text), Some(output));
     }
 
     #[test]

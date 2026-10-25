@@ -182,6 +182,8 @@ dependencies = [
  "anyplay-bridge-protocol",
  "anyplay-control",
  "anyplay-proof",
+ "anyplay-share",
+ "anyplay-share-worker",
  "anyplay-voice",
  "axum",
  "bytes",
@@ -226,6 +228,29 @@ dependencies = [
  "rand 0.10.3",
  "sha2 0.10.9",
  "subtle",
+]
+
+[[package]]
+name = "anyplay-share"
+version = "0.0.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "anyplay-share-worker"
+version = "0.0.0"
+dependencies = [
+ "anyplay-control",
+ "anyplay-net",
+ "anyplay-share",
+ "iroh",
+ "iroh-relay",
+ "rcgen",
+ "rustls",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]

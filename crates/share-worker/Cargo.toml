@@ -1,0 +1,29 @@
+[package]
+name = "anyplay-share-worker"
+description = "The share worker of the AnyPlay network: captures, encodes, decodes and shows a shared screen for the net service"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lib]
+name = "anyplay_share_worker"
+
+[[bin]]
+name = "anyplay-share"
+path = "src/main.rs"
+
+[dependencies]
+anyplay-share = { path = "../share" }
+serde_json.workspace = true
+
+[dev-dependencies]
+anyplay-control = { path = "../control" }
+anyplay-net = { path = "../net" }
+iroh = "1.4.1"
+iroh-relay = { version = "1.4.1", features = ["server"] }
+rcgen = "0.14"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+tokio = { version = "1.54", features = ["rt-multi-thread", "macros", "net", "sync", "time"] }

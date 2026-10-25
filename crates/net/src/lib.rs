@@ -13,10 +13,12 @@ pub mod cloud;
 pub mod credentials;
 pub mod events;
 pub mod observe;
+pub mod screen;
 pub mod service;
 pub mod traffic;
 pub mod tunnel;
 pub mod voice;
+pub mod worker_process;
 
 pub use service::{Config, run};
 

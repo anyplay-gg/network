@@ -1,0 +1,13 @@
+[package]
+name = "anyplay-share"
+description = "Share play for the AnyPlay network: wire formats, packetiser with loss protection, reassembler and rate controller, without sockets or codecs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true

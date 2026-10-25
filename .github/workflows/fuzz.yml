@@ -10,6 +10,7 @@ on:
       - "crates/api/**"
       - "crates/bridge-protocol/**"
       - "crates/control/**"
+      - "crates/share/**"
       - "crates/voice/**"
       - "fuzz/**"
       - ".github/workflows/fuzz.yml"
@@ -32,7 +33,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [bridge_message, bridge_stream, traffic_header, control_line, voice_frame]
+        target:
+          - bridge_message
+          - bridge_stream
+          - traffic_header
+          - control_line
+          - voice_frame
+          - share_video_datagram
+          - share_audio_datagram
+          - share_reassembler
+          - share_control_line
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
