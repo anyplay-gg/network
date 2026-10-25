@@ -8,6 +8,7 @@
 mod addresses;
 mod answers;
 pub mod bridge;
+pub mod broadcast;
 pub mod browser;
 pub mod cloud;
 pub mod credentials;
