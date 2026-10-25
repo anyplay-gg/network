@@ -92,6 +92,10 @@ _Avoid_: Lobby, room, party
 A request from one player to a friend to join their session.
 _Avoid_: Invite link (that is a launcher deep link)
 
+**Join code**:
+A short random token the cloud issues to a player so that people outside their friends can ask to join. It stands for the player, opens the session they offer or else the party they lead, and expires or can be revoked. Redeeming it makes an ordinary invitation.
+_Avoid_: Invite link (the link that carries a code is a join link), session code
+
 **Join intent**:
 The instruction the net service holds for a game that is starting, naming the session it should enter.
 _Avoid_: Launch argument, deep link

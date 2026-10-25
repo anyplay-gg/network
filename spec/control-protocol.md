@@ -98,6 +98,9 @@ A **restriction** has a `kind` and, when they apply, `until`, `rule`, `reason`, 
 | `party_kick` | `account` | `{}` (leader) |
 | `party_leader` | `account` | `{}` (leader) |
 | `party_move` | `session` | `{sent}`: invites the other members into the leader's session (leader) |
+| `join_code` | | `{code, url, expires}`: a new [join code](cloud-api.md#join-codes) for the player; `not_found` when there is nothing to join |
+| `join_code_revoke` | | `{}` |
+| `join_redeem` | `code` | `{kind, invitation}`: the invitation the code made, to be shown like any other (`kind` is `session` or `party`) |
 | `voice` | `on` | `{}` |
 | `push_to_talk` | `talking` | `{}` |
 | `voice_mode` | `mode`: `push_to_talk` or `voice_activity` | `{}` |
@@ -123,6 +126,7 @@ A **restriction** has a `kind` and, when they apply, `until`, `rule`, `reason`, 
 - `invite` invites friends to the session the player is in.
 - `profile` only reads. A player edits their profile, avatar and visibility on the cloud's web site, which uses the HTTP API directly ([cloud API](cloud-api.md#profiles-avatars-and-playtime)); the launcher shows what `profile` and `cards` answer. `upload_playtime` can be sent again with the same entries; the cloud keeps the highest minutes per title and day.
 - The party and message commands are the [cloud API](cloud-api.md#parties) one to one, with the errors of its requests. `party_answer` and `party_leave` update the held party before the answer.
+- The join commands are the [cloud API](cloud-api.md#join-codes) one to one, with the errors of its requests. `join_redeem` takes the code alone or a whole link (`anyps5://v1/join/<code>`, `https://…/join/<code>`) and reads the code out of it; text that holds no code is `bad_request`. The invitation also arrives as the usual `invitation` or `party_invitation` event. Neither command joins anything.
 - The voice commands work on [party voice](voice.md). `voice` with `on` true switches it on: from then on, whenever the player is in a party and signed in with tunnels up, the net service opens the microphone and speakers, joins the party's voice and tells the party it takes part. Switched off, or without a party, the devices are closed: the microphone is never open otherwise. The setting lasts until `voice` is sent again or the service ends; a new service starts with voice off, so the launcher sends `voice` after `hello` if the player wants it. The answer does not wait for the devices: if they cannot be opened, the net service switches voice off again, sends a `notice` `voice_device` with the reason and a `voice` event with `enabled` false.
 - `push_to_talk` is the key being down (`talking` true) or up. In `voice_activity` mode it has no effect. `voice_mode`, `peer_volume` and `peer_mute` are remembered by account for as long as the service runs, also while voice is off or the member is away, and apply when voice starts. Volume is in percent of what was sent, 100 normally.
 - `voice_devices` lists the names the system has and which are chosen. `set_voice_device` chooses by one of those names (or null for the default) and, while voice runs, closes the devices and opens them again, so the connections to the members are made again too. A service built without sound devices lists none and fails to open any; release builds have them.
