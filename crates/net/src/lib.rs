@@ -19,6 +19,7 @@ pub mod service;
 pub mod traffic;
 pub mod tunnel;
 mod typing;
+pub mod user_profile;
 pub mod voice;
 pub mod webapi;
 pub mod worker_process;
