@@ -10,7 +10,7 @@ The cloud in [anyplaynet/cloud](https://github.com/anyplaynet/cloud) implements 
 - Times are Unix seconds. Account and device IDs are integers between 1 and 2^53 - 1.
 - The portal and the API share one origin (the cloud's `public_url`). The portal calls the API with `fetch`, on the same origin. The cloud sends no CORS headers: no other site can read an answer.
 - A request that needs a signed-in player carries the browser's session cookie. There are no bearer tokens here; the cloud answers `unauthorized` to a request without a live session.
-- Objects that also exist in `/v1` keep their shape and are named in [Cloud API](cloud-api.md): `Me`, `Account`, `Profile`, `ProfileUpdate`, `Privacy`, `Count`, `FriendLists`, `FriendRequest`.
+- Objects that also exist in `/v1` keep their shape and are named in [Cloud API](cloud-api.md): `Me` (with `appear_offline`), `AppearOffline`, `Account`, `Profile`, `ProfileUpdate`, `Privacy`, `Count`, `FriendLists`, `FriendRequest`.
 
 ## Browser session and security
 
@@ -242,6 +242,8 @@ The player's own parts. Only fields the cloud has exist: the text, the favourite
 | `PATCH /me/profile` | `ProfileUpdate` | `Profile`. A part left out stays; an empty text or list clears it. The text has at most 160 characters without links; at most 3 favourites (title IDs). |
 | `GET /me/privacy` | | `Privacy`: for each of `trophies`, `about`, `favourites`, `avatar`, `playtime` and `feed` (the player's activity in the [feed](cloud-api.md#feed)), who sees it: `friends` (the default), `everyone` or `nobody`. |
 | `PUT /me/privacy` | `Privacy` | `Privacy`. The rules are those of `PUT /v1/me/privacy`: a part left out takes the default, `friends`, so a client sends all six. |
+| `GET /me/appear-offline` | | `AppearOffline`: `{appear_offline}`, false by default. `Me.appear_offline` in `GET /account` says the same. |
+| `PUT /me/appear-offline` | `AppearOffline` | `AppearOffline`. While it is true friends see the player as offline everywhere ([Appearing offline](cloud-api.md#appearing-offline)); the player sees themselves as online in the portal and gets an "Appearing offline" hint. Sent on its own: it is not part of `Privacy`, so a client that sets it does not send the six audiences. |
 | `PUT /me/avatar` | the picture | `{avatar}`: the hash. The body is a PNG or JPEG of at most 1 MB with `Content-Type: image/png` or `image/jpeg`; the cloud makes a square of it. The picture is at `GET /v1/avatars/{hash}` (no token; the hash is the right to see it). |
 | `DELETE /me/avatar` | `{}` | `{ok: true}`. |
 | `GET /me/trophies` | | `TrophySummary`. |

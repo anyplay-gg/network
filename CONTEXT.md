@@ -86,6 +86,10 @@ Another account that both sides agreed to connect with.
 What friends can see about an account right now: online or not, which game, and whether its session can be joined.
 _Avoid_: Status, activity
 
+**Appearing offline**:
+A setting of an account that makes its presence read as offline to every other account, while the player stays signed in and can still play, join, message and be invited. The player sees themselves as online, with a hint. It is not a block and not a way to go offline.
+_Avoid_: Invisible, hidden, stealth mode, do not disturb
+
 ### Playing together
 
 **Session**:

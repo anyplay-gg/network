@@ -148,6 +148,17 @@ pub struct Me {
     pub handle: String,
     pub email: String,
     pub created: u64,
+    /// The account appears offline to every other account (ADR 0028). False when a cloud does
+    /// not send it.
+    #[serde(default)]
+    pub appear_offline: bool,
+}
+
+/// The setting that makes an account appear offline, alone: the body of
+/// `PUT /v1/me/appear-offline` and its answer.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AppearOffline {
+    pub appear_offline: bool,
 }
 
 /// The tokens of one signed-in device.
@@ -1248,6 +1259,11 @@ pub enum Event {
     /// A feed has news: a friend did something, or someone reacted to an item of this account.
     /// It carries nothing; fetch `GET /v1/feed`.
     Feed,
+    /// The account's own appear-offline setting changed, on another device or in the portal.
+    /// Sent to this account's devices only.
+    AppearOffline {
+        appear_offline: bool,
+    },
     /// An event this version does not know.
     #[serde(other)]
     Unknown,
@@ -2178,6 +2194,29 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&Event::SignedOut).unwrap(),
             r#"{"type":"signed_out"}"#
+        );
+        assert_eq!(
+            serde_json::from_str::<Event>(r#"{"type":"appear_offline","appear_offline":true}"#)
+                .unwrap(),
+            Event::AppearOffline {
+                appear_offline: true
+            }
+        );
+    }
+
+    #[test]
+    fn appear_offline_is_off_unless_the_cloud_says_so() {
+        let me: Me = serde_json::from_str(
+            r#"{"id":1,"handle":"Lumen","email":"l@example.org","created":5}"#,
+        )
+        .unwrap();
+        assert!(!me.appear_offline);
+        assert_eq!(
+            serde_json::to_string(&AppearOffline {
+                appear_offline: true
+            })
+            .unwrap(),
+            r#"{"appear_offline":true}"#
         );
     }
 

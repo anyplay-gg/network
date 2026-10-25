@@ -107,6 +107,11 @@ pub enum Command {
     RelayOnly {
         on: bool,
     },
+    /// Makes the account appear offline to every other account, or shows it again. Answers
+    /// `{appear_offline}`; the `state` event follows.
+    SetAppearOffline {
+        on: bool,
+    },
     UploadTrophies {
         title_id: String,
         trophies: Vec<anyplay_api::Trophy>,
@@ -837,6 +842,9 @@ pub struct SignedIn {
     pub id: AccountId,
     pub handle: String,
     pub email: String,
+    /// The account appears offline to others; the player still sees themselves as online.
+    #[serde(default)]
+    pub appear_offline: bool,
 }
 
 /// How the tunnel to another member runs.
@@ -1076,6 +1084,10 @@ mod tests {
         assert_eq!(
             parse_command(r#"{"id":2,"do":"relay_only","on":true}"#),
             Ok((2, Command::RelayOnly { on: true }))
+        );
+        assert_eq!(
+            parse_command(r#"{"id":3,"do":"set_appear_offline","on":true}"#),
+            Ok((3, Command::SetAppearOffline { on: true }))
         );
         assert_eq!(
             parse_command(
