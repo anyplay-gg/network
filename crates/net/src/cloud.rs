@@ -683,7 +683,7 @@ impl Cloud {
         self.call(
             Method::POST,
             &path::fill(path::SESSION_INVITATIONS, id),
-            Some(&Invite { to }),
+            Some(&Invite { to, call: false }),
         )
         .await
     }
@@ -717,9 +717,34 @@ impl Cloud {
     }
 
     /// Invites friends; the cloud makes a party when the player is in none.
-    pub async fn invite_to_party(&self, to: Vec<AccountId>) -> Result<Invited, CloudError> {
-        self.call(Method::POST, path::PARTY_INVITATIONS, Some(&Invite { to }))
+    pub async fn invite_to_party(
+        &self,
+        to: Vec<AccountId>,
+        call: bool,
+    ) -> Result<Invited, CloudError> {
+        self.call(
+            Method::POST,
+            path::PARTY_INVITATIONS,
+            Some(&Invite { to, call }),
+        )
+        .await
+    }
+
+    /// The calls nobody answered, newest first.
+    pub async fn missed_calls(&self) -> Result<anyplay_api::MissedCalls, CloudError> {
+        self.call::<(), _>(Method::GET, path::CALLS_MISSED, None)
             .await
+    }
+
+    /// Marks the missed calls of one caller, or of all, as seen.
+    pub async fn calls_seen(&self, from: Option<AccountId>) -> Result<(), CloudError> {
+        match from {
+            Some(from) => {
+                self.empty(Method::DELETE, &path::fill(path::CALLS_MISSED_FROM, from))
+                    .await
+            }
+            None => self.empty(Method::DELETE, path::CALLS_MISSED).await,
+        }
     }
 
     pub async fn party_invitations(&self) -> Result<PartyInvitations, CloudError> {
@@ -990,6 +1015,7 @@ mod tests {
             party: "PARTY0001".into(),
             members: 2,
             expires: 1_800_000_000,
+            call: false,
         })))
     }
 

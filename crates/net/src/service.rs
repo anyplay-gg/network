@@ -1154,6 +1154,22 @@ impl Service {
                 self.voice_event();
                 self.ok(id, Done {});
             }
+            Command::MicMute { muted } => {
+                self.voice.settings.mic_muted = muted;
+                if let Some(hub) = &self.voice.hub {
+                    hub.set_mic_muted(muted);
+                }
+                self.voice_event();
+                self.ok(id, Done {});
+            }
+            Command::Deafen { deafened } => {
+                self.voice.settings.deafened = deafened;
+                if let Some(hub) = &self.voice.hub {
+                    hub.set_deafened(deafened);
+                }
+                self.voice_event();
+                self.ok(id, Done {});
+            }
             Command::PeerVolume { account, percent } => {
                 if percent > MAX_PEER_VOLUME_PERCENT {
                     self.fail(
@@ -1233,6 +1249,9 @@ impl Service {
             // Parties and messages
             social @ (Command::Party
             | Command::PartyInvite { .. }
+            | Command::MissedCalls
+            | Command::CallsSeen { .. }
+            | Command::PartyLink { .. }
             | Command::PartyAnswer { .. }
             | Command::PartyLeave
             | Command::PartyKick { .. }
@@ -1741,10 +1760,34 @@ impl Service {
                     party: party.map(launcher_party),
                 }
             }),
-            Command::PartyInvite { accounts } => self.request(
+            Command::PartyInvite { accounts, call } => self.request(
                 id,
-                async move { cloud.invite_to_party(accounts).await },
+                async move { cloud.invite_to_party(accounts, call).await },
                 |_, invited| Invited { sent: invited.sent },
+            ),
+            Command::MissedCalls => self.request(
+                id,
+                async move { cloud.missed_calls().await },
+                |_, missed| missed,
+            ),
+            Command::CallsSeen { account } => self.request(
+                id,
+                async move { cloud.calls_seen(account).await },
+                |_, ()| Done {},
+            ),
+            Command::PartyLink { url } => self.request(
+                id,
+                async move {
+                    let body = anyplay_api::UpdateParty {
+                        leader: None,
+                        discord: Some(url),
+                    };
+                    cloud.update_party(&body).await
+                },
+                |service, party| {
+                    service.party_changed(party);
+                    Done {}
+                },
             ),
             Command::PartyAnswer {
                 id: invitation,
@@ -1793,6 +1836,7 @@ impl Service {
                 async move {
                     let body = anyplay_api::UpdateParty {
                         leader: Some(account),
+                        discord: None,
                     };
                     cloud.update_party(&body).await
                 },
@@ -1958,6 +2002,13 @@ impl Service {
                 self.event(control::Event::PartyInvitation { invitation });
             }
             Event::PartyInvitationGone { id } => self.drop_party_invitation(&id),
+            Event::MissedCall { call } => self.event(control::Event::MissedCall { call }),
+            Event::MissedCallGone { account } => {
+                self.event(control::Event::MissedCallGone { account });
+            }
+            Event::CallEnded { account, reason } => {
+                self.event(control::Event::CallEnded { account, reason });
+            }
             Event::Message { conversation, seq } => {
                 self.event(control::Event::Message { conversation, seq });
             }
@@ -2071,6 +2122,19 @@ impl Service {
                             service.event(control::Event::PartyInvitation { invitation });
                         }
                     }
+                }
+            },
+        );
+        self.spawn(
+            {
+                let cloud = cloud.clone();
+                async move { cloud.missed_calls().await }
+            },
+            |service, result| match result {
+                Ok(missed) => service.event(control::Event::MissedCalls(missed)),
+                Err(CloudError::Offline(_)) => {}
+                Err(error) => {
+                    service.failure(&error);
                 }
             },
         );
@@ -2396,6 +2460,8 @@ impl Service {
                 anyplay_voice::TalkMode::PushToTalk => control::VoiceMode::PushToTalk,
                 anyplay_voice::TalkMode::VoiceActivity => control::VoiceMode::VoiceActivity,
             },
+            muted: self.voice.settings.mic_muted,
+            deafened: self.voice.settings.deafened,
             me: report.map(|r| level(r.me)).unwrap_or_default(),
             peers: report
                 .map(|r| {
@@ -3740,6 +3806,7 @@ mod party_voice_tests {
             conversation: "c".into(),
             created: 0,
             revision: 1,
+            discord: None,
         }
     }
 

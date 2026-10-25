@@ -96,7 +96,10 @@ A **restriction** has a `kind` and, when they apply, `until`, `rule`, `reason`, 
 | `feed` | `before`, `limit` | `{items, next}`: a page of the [feed](cloud-api.md#feed), newest first; both fields may be left out |
 | `react` | `item`, `reaction` | `{reactions, mine}`; `reaction` is `nice`, `gg`, `wow` or `same`, or null to take the reaction back. `not_found` when the player cannot see the item. (The item is named `item`: `id` is the number of the command.) |
 | `party` | | `{party}`: the player's `Party`, or null |
-| `party_invite` | `accounts` | `{sent}`: friends are invited; a party is made when the player is in none |
+| `party_invite` | `accounts`, `call` (default false) | `{sent}`: friends are invited; a party is made when the player is in none. With `call` they are rung: the invitation lives 30 seconds |
+| `party_link` | `url` | `{}`: the leader sets the party's Discord link; the empty string removes it. `bad_request` for a link that is not a Discord one |
+| `missed_calls` | | `{missed}` |
+| `calls_seen` | `account` (null: all) | `{}` |
 | `party_answer` | `invitation` (its `id`), `accept` | `{party}` when accepted, else `{}` |
 | `party_leave` | | `{}` |
 | `party_kick` | `account` | `{}` (leader) |
@@ -106,6 +109,8 @@ A **restriction** has a `kind` and, when they apply, `until`, `rule`, `reason`, 
 | `join_code_revoke` | | `{}` |
 | `join_redeem` | `code` | `{kind, invitation}`: the invitation the code made, to be shown like any other (`kind` is `session` or `party`) |
 | `voice` | `on` | `{}` |
+| `mic_mute` | `muted` | `{}`: mutes the player's own microphone in party voice, whatever the mode |
+| `deafen` | `deafened` | `{}`: nobody is heard, and the microphone is silenced too |
 | `push_to_talk` | `talking` | `{}` |
 | `voice_mode` | `mode`: `push_to_talk` or `voice_activity` | `{}` |
 | `peer_volume` | `account`, `percent` (0 to 200) | `{}`; `bad_request` above 200 |
@@ -157,7 +162,11 @@ A **restriction** has a `kind` and, when they apply, `until`, `rule`, `reason`, 
 | `restrictions` | `restrictions` | what limits the signed-in account now: a list of restrictions, empty when nothing does. Sent after the account goes online, when a moderator mutes or warns it, when an appeal is filed or decided, and after a `restricted` failure the list did not contain |
 | `banned` | `restriction` | the account was banned (the event connection saw it, or a request answered `banned`); the account is signed out. A `notice` with the code `banned` is sent too, for launchers that predate this event |
 | `party` | `party` or null | the party the player is in changed, began or ended; a copy with an older revision is dropped before it gets here |
-| `voice` | `state`, `enabled`, `mode`, `me`, `peers` | the voice state changed, or while voice runs a level or a link changed (at most ten a second) |
+| `missed_calls` | `missed` | after sign-in and after every reconnect: every call nobody answered |
+| `missed_call` | `call` | a friend called and the player did not answer |
+| `missed_call_gone` | `account` | the missed calls from that account were seen |
+| `call_ended` | `account`, `reason` | a call the player placed ended unanswered (`declined`, `no_answer`) |
+| `voice` | `state`, `enabled`, `mode`, `muted`, `deafened`, `me`, `peers` | the voice state changed, or while voice runs a level or a link changed (at most ten a second) |
 | `party_invitation` | `invitation` | the leader of a party invited the player |
 | `party_invitation_gone` | `id` | an invitation expired, was answered or used up |
 | `conversations` | `conversations`, `requests` | after sign-in and after every reconnect |
@@ -174,6 +183,7 @@ A **restriction** has a `kind` and, when they apply, `until`, `rule`, `reason`, 
 - `cloud` is `offline`, `connecting` or `online`. `account` is `{id, handle, email}` or null. `pending` is `code` (an e-mail is out), `handle` (the account needs a handle), `browser` (the system browser has the sign-in) or null.
 - `friends` carries the whole lists each time, with each friend's presence as in the cloud API. The net service sends at most four of them per second.
 - `message` carries no text: the launcher keeps the highest number it has for each conversation and calls `messages` with `after`. The `conversations` event after a reconnect carries every conversation's newest number (`last`), so what arrived while the connection was down is fetched the same way.
+- `muted` and `deafened` in the `voice` event say what `mic_mute` and `deafen` set (both false after the service starts, and remembered while it runs). Both silence `me`: its `speaking` is false.
 - `voice.state` is `off` (switched off, no party, or the devices could not be opened), `connecting` (switched on in a party: the devices are opening, or members who take part are not reached yet) or `on` (the devices run and at least one member who takes part is reached, or none takes part). `enabled` is whether the player switched voice on, which stays true across parties. `mode` is `push_to_talk` or `voice_activity`. `me` is `{level, speaking}` for the player's own microphone after the gate. `peers` has one entry for each other member of the party: `{account, level, speaking, link}`, with `link` `connecting`, `direct` or `relay` for the voice connection to that member and null when there is none (they have voice off, or have not been reached). `level` is the recent loudness in percent (0 to 100) before the player's volume setting; `speaking` is what a speaking indicator should show. While voice is off, `me` is silent and `peers` is empty. While voice runs, the net service reports levels and links only when they changed.
 - The `party` event and the party answers leave out the members' tunnel keys and relays (`endpoint` is `""`, `relay` null), as `session` does; each member's `voice` says who takes part in voice.
 - `session` is the cloud's `Session` without `build`, `properties` and the members' `endpoint`, and with one more field per member: `link`, which is `connecting`, `direct` or `relay` for the other players and null for the player.

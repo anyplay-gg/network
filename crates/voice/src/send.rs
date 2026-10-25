@@ -28,6 +28,8 @@ pub(crate) struct Sender {
     vad: Vad,
     mode: TalkMode,
     talking: bool,
+    /// The player muted the microphone: the gate stays shut.
+    silenced: bool,
     was_open: bool,
     sequence: u16,
     timestamp: u32,
@@ -61,6 +63,7 @@ impl Sender {
             vad: Vad::new(config.vad),
             mode: config.mode,
             talking: false,
+            silenced: false,
             was_open: false,
             sequence: 0,
             timestamp: 0,
@@ -76,6 +79,10 @@ impl Sender {
 
     pub(crate) fn set_talking(&mut self, talking: bool) {
         self.talking = talking;
+    }
+
+    pub(crate) fn set_silenced(&mut self, silenced: bool) {
+        self.silenced = silenced;
     }
 
     pub(crate) fn level(&self) -> Level {
@@ -124,10 +131,11 @@ impl Sender {
         };
 
         let level = rms(frame);
-        let open = match self.mode {
+        let heard = match self.mode {
             TalkMode::PushToTalk => self.talking,
             TalkMode::VoiceActivity => self.vad.update(probability, to_db(level)),
         };
+        let open = heard && !self.silenced;
         self.level = Level {
             rms: level,
             speaking: open,

@@ -437,6 +437,56 @@ fn push_to_talk_sends_only_while_down_and_ends_with_the_flag() {
 }
 
 #[test]
+fn a_muted_microphone_sends_nothing_whatever_the_gate_says() {
+    let signal = voiced(48_000, 0.5, 0.5);
+    let (device, hw) = MemoryDevice::new(48_000, 48_000);
+    let mut e = Engine::new(no_ns(), Box::new(device)).unwrap();
+    e.set_talking(true);
+    e.set_mic_muted(true);
+    hw.feed_capture(&signal);
+    e.pump();
+    assert!(e.outgoing().is_empty(), "muted: nothing leaves");
+    assert!(!e.levels().me.speaking);
+
+    e.set_mic_muted(false);
+    hw.feed_capture(&signal);
+    e.pump();
+    assert_eq!(e.outgoing().len(), 25, "unmuted: the gate decides again");
+    assert!(e.levels().me.speaking);
+}
+
+#[test]
+fn deafened_silences_the_speakers_and_the_microphone_but_not_the_buffers() {
+    let signal = voiced(48_000, 1.0, 0.5);
+    let mut rig = Rig::new(no_ns());
+    rig.receiver.set_deafened(true);
+    rig.run(&signal, true, &mut clean);
+    assert!(
+        rig.played.iter().all(|s| s.abs() < 1e-6),
+        "deafened: nothing is played"
+    );
+    // The frames still arrived, so hearing resumes at once.
+    assert!(rig.delivered > 40);
+    rig.receiver.set_deafened(false);
+    let mut again = Rig::new(no_ns());
+    again.run(&signal, true, &mut clean);
+    assert!(again.played.iter().any(|s| s.abs() > 0.05));
+
+    // A deafened player is not heard either.
+    let (device, hw) = MemoryDevice::new(48_000, 48_000);
+    let mut e = Engine::new(no_ns(), Box::new(device)).unwrap();
+    e.set_talking(true);
+    e.set_deafened(true);
+    hw.feed_capture(&signal);
+    e.pump();
+    assert!(e.outgoing().is_empty());
+    e.set_deafened(false);
+    hw.feed_capture(&signal);
+    e.pump();
+    assert!(!e.outgoing().is_empty());
+}
+
+#[test]
 fn silence_while_the_key_is_down_costs_almost_nothing() {
     let (device, hw) = MemoryDevice::new(48_000, 48_000);
     let mut e = Engine::new(

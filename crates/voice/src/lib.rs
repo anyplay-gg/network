@@ -205,6 +205,8 @@ pub struct Engine {
     playback_rate: u32,
     scratch: Vec<f32>,
     outgoing: Vec<Vec<u8>>,
+    muted: bool,
+    deafened: bool,
 }
 
 impl Engine {
@@ -230,6 +232,8 @@ impl Engine {
             playback_rate,
             scratch: Vec::new(),
             outgoing: Vec::new(),
+            muted: false,
+            deafened: false,
             device,
         })
     }
@@ -237,6 +241,19 @@ impl Engine {
     /// Push-to-talk: whether the key is down. Has no effect in [`TalkMode::VoiceActivity`].
     pub fn set_talking(&mut self, talking: bool) {
         self.sender.set_talking(talking);
+    }
+
+    /// Mutes the player's own microphone: nothing is sent while it is true, whatever the mode.
+    pub fn set_mic_muted(&mut self, muted: bool) {
+        self.muted = muted;
+        self.sender.set_silenced(self.muted || self.deafened);
+    }
+
+    /// Deafens the player: nobody is heard, and the microphone is silenced too. The members'
+    /// frames still arrive and are dropped unplayed, so hearing resumes at once.
+    pub fn set_deafened(&mut self, deafened: bool) {
+        self.deafened = deafened;
+        self.sender.set_silenced(self.muted || self.deafened);
     }
 
     pub fn set_mode(&mut self, mode: TalkMode) {
@@ -359,7 +376,7 @@ impl Engine {
     fn mix_frame(&mut self) -> [f32; FRAME_SAMPLES] {
         let mut frame = [0.0f32; FRAME_SAMPLES];
         for p in self.peers.values_mut() {
-            if p.next_frame(&mut frame) {
+            if p.next_frame(&mut frame) && !self.deafened {
                 self.mixer.add(&frame, p.volume);
             }
         }
