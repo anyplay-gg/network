@@ -7,11 +7,12 @@ use anyplay_api::{
     AccountId, AccountLink, AccountTrophies, AddToConversation, Added, ApiError, AppealRequest,
     BrowserTokenRequest, Cards, CodeAnswer, CodeRequest, Conversation, Conversations,
     CreateConversation, CreateSession, Device, EmailAnswer, EmailRequest, ErrorCode, FriendLists,
-    FriendRequest, FriendRequestAnswer, Info, Invite, Invited, JoinSession, MarkRead, Me, Message,
-    Messages, MoveParty, Party, PartyEndpoint, PartyInvitations, PlaytimeAdded, PlaytimeEntry,
-    PlaytimeUpload, PresenceRequest, Privacy, Profile, Rarity, RefreshRequest, Relays, Report,
-    SendMessage, Session, SignedIn, SignupRequest, Statement, Statements, TicketRequest, Tokens,
-    TrophiesAdded, Trophy, TrophyUpload, UpdateParty, UpdateSession, path,
+    FriendRequest, FriendRequestAnswer, Info, Invite, Invited, JoinCode, JoinSession, MarkRead, Me,
+    Message, Messages, MoveParty, Party, PartyEndpoint, PartyInvitations, PlaytimeAdded,
+    PlaytimeEntry, PlaytimeUpload, PresenceRequest, Privacy, Profile, Rarity, Redeemed,
+    RefreshRequest, Relays, Report, SendMessage, Session, SignedIn, SignupRequest, Statement,
+    Statements, TicketRequest, Tokens, TrophiesAdded, Trophy, TrophyUpload, UpdateParty,
+    UpdateSession, path,
 };
 use anyplay_proof::{DeviceKey, Subject};
 use reqwest::{Method, StatusCode};
@@ -696,6 +697,29 @@ impl Cloud {
             .await
     }
 
+    // Join codes
+
+    /// A new join code for the player; an earlier one stops working.
+    pub async fn join_code(&self) -> Result<JoinCode, CloudError> {
+        self.call(Method::POST, path::JOIN_CODES, Some(&serde_json::json!({})))
+            .await
+    }
+
+    /// Revokes the player's join code. Harmless when there is none.
+    pub async fn revoke_join_code(&self) -> Result<(), CloudError> {
+        self.empty(Method::DELETE, path::JOIN_CODE_CURRENT).await
+    }
+
+    /// Turns a join code (already read out of any link) into an invitation.
+    pub async fn redeem_join_code(&self, code: &str) -> Result<Redeemed, CloudError> {
+        self.call::<(), _>(
+            Method::POST,
+            &path::fill(path::JOIN_CODE_REDEEM, code),
+            None,
+        )
+        .await
+    }
+
     /// Invites the party into a session of the leader's.
     pub async fn move_party(&self, session: &str) -> Result<Invited, CloudError> {
         let body = MoveParty {
@@ -820,7 +844,7 @@ mod tests {
     use super::*;
     use axum::extract::State;
     use axum::http::HeaderMap;
-    use axum::routing::post;
+    use axum::routing::{delete, post};
 
     /// What the fake cloud saw of each refresh: the key sent in the body and whether the proof
     /// was made by the key it knows.
@@ -872,10 +896,47 @@ mod tests {
         }))
     }
 
+    async fn join_code_route() -> axum::Json<JoinCode> {
+        axum::Json(JoinCode {
+            code: "k3x9m2pqra".into(),
+            url: "https://anyplaynet.com/join/k3x9m2pqra".into(),
+            expires: 1_800_000_000,
+        })
+    }
+
+    async fn revoke_route() -> axum::http::StatusCode {
+        axum::http::StatusCode::NO_CONTENT
+    }
+
+    /// Answers a party invitation for one code and `not_found` for any other.
+    async fn redeem_route(
+        axum::extract::Path(code): axum::extract::Path<String>,
+    ) -> Result<axum::Json<Redeemed>, (axum::http::StatusCode, axum::Json<serde_json::Value>)> {
+        if code != "k3x9m2pqra" {
+            return Err((
+                axum::http::StatusCode::NOT_FOUND,
+                axum::Json(serde_json::json!({"error": "not_found", "message": "No such code."})),
+            ));
+        }
+        Ok(axum::Json(Redeemed::Party(anyplay_api::PartyInvitation {
+            id: "INV00001".into(),
+            from: anyplay_api::Account {
+                id: anyplay_api::AccountId(2),
+                handle: "lumen".into(),
+            },
+            party: "PARTY0001".into(),
+            members: 2,
+            expires: 1_800_000_000,
+        })))
+    }
+
     async fn fake_cloud() -> (String, Shared) {
         let seen = Shared::default();
         let app = axum::Router::new()
             .route(path::AUTH_REFRESH, post(refresh_route))
+            .route(path::JOIN_CODES, post(join_code_route))
+            .route(path::JOIN_CODE_CURRENT, delete(revoke_route))
+            .route(path::JOIN_CODE_REDEEM, post(redeem_route))
             .with_state(seen.clone());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
@@ -935,6 +996,27 @@ mod tests {
         cloud.resume(1, "refresh-0".into(), DeviceKey::from_secret(&key.secret()));
         cloud.refresh().await.unwrap();
         assert_eq!(seen.lock().unwrap().calls, vec![(None, true)]);
+    }
+
+    #[tokio::test]
+    async fn join_codes_are_issued_revoked_and_redeemed() {
+        crate::install_crypto();
+        let (base, _) = fake_cloud().await;
+        let (sink, _) = recording_sink();
+        let cloud = Cloud::new(&base, sink);
+        cloud.resume(1, "refresh-0".into(), None);
+
+        let code = cloud.join_code().await.unwrap();
+        assert_eq!(code.code, "k3x9m2pqra");
+        assert!(code.url.ends_with("/join/k3x9m2pqra"));
+        cloud.revoke_join_code().await.unwrap();
+
+        match cloud.redeem_join_code("k3x9m2pqra").await.unwrap() {
+            Redeemed::Party(invitation) => assert_eq!(invitation.party, "PARTY0001"),
+            other => panic!("expected a party invitation, got {other:?}"),
+        }
+        let error = cloud.redeem_join_code("zzzzzzzzzz").await.unwrap_err();
+        assert!(error.is(ErrorCode::NotFound));
     }
 
     #[tokio::test]

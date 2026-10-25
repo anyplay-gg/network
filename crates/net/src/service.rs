@@ -1090,6 +1090,9 @@ impl Service {
             | Command::PartyKick { .. }
             | Command::PartyLeader { .. }
             | Command::PartyMove { .. }
+            | Command::JoinCode
+            | Command::JoinCodeRevoke
+            | Command::JoinRedeem { .. }
             | Command::Conversations
             | Command::OpenConversation { .. }
             | Command::Messages { .. }
@@ -1661,6 +1664,31 @@ impl Service {
                     |_, invited| Invited { sent: invited.sent },
                 );
             }
+            Command::JoinCode => {
+                self.request(id, async move { cloud.join_code().await }, |_, code| code)
+            }
+            Command::JoinCodeRevoke => self.request(
+                id,
+                async move { cloud.revoke_join_code().await },
+                |_, ()| Done {},
+            ),
+            Command::JoinRedeem { code } => {
+                let Some(code) = anyplay_api::join_code_from_text(&code) else {
+                    self.fail(
+                        id,
+                        Failure::new(ErrorCode::BadRequest.as_str(), "That is not a join code."),
+                    );
+                    return;
+                };
+                self.request(
+                    id,
+                    async move { cloud.redeem_join_code(&code).await },
+                    |service, redeemed| {
+                        service.hold_redeemed(&redeemed);
+                        redeemed
+                    },
+                );
+            }
             Command::Conversations => self.request(
                 id,
                 async move { cloud.conversations().await },
@@ -1826,6 +1854,22 @@ impl Service {
         }
         self.voice.announced = None;
         self.voice_sync();
+    }
+
+    /// Holds the invitation a redeemed join code made, as if it had arrived as an event, so that
+    /// `answer_invitation` and `party_answer` find it. The cloud also sends the event, which the
+    /// launcher sees; nothing is announced here.
+    fn hold_redeemed(&mut self, redeemed: &anyplay_api::Redeemed) {
+        match redeemed {
+            anyplay_api::Redeemed::Session(invitation) => {
+                self.invitations
+                    .insert(invitation.id.clone(), invitation.clone());
+            }
+            anyplay_api::Redeemed::Party(invitation) => {
+                self.party_invitations
+                    .insert(invitation.id.clone(), invitation.clone());
+            }
+        }
     }
 
     fn drop_party_invitation(&mut self, id: &str) {

@@ -753,6 +753,27 @@ mod tests {
     use super::*;
 
     #[test]
+    fn the_join_commands_are_lines_of_their_own() {
+        assert_eq!(
+            command_line(3, &Command::JoinCode),
+            "{\"id\":3,\"do\":\"join_code\"}\n"
+        );
+        assert_eq!(
+            parse_command(r#"{"id":4,"do":"join_code_revoke"}"#),
+            Ok((4, Command::JoinCodeRevoke))
+        );
+        let redeem = Command::JoinRedeem {
+            code: "anyps5://v1/join/k3x9m2pqra".into(),
+        };
+        let line = command_line(5, &redeem);
+        assert_eq!(
+            line,
+            "{\"id\":5,\"do\":\"join_redeem\",\"code\":\"anyps5://v1/join/k3x9m2pqra\"}\n"
+        );
+        assert_eq!(parse_command(line.trim_end()), Ok((5, redeem)));
+    }
+
+    #[test]
     fn a_command_is_one_line_with_its_number_and_name() {
         let line = command_line(
             7,
@@ -1019,8 +1040,7 @@ mod tests {
                 "{\"event\":\"voice\",\"state\":\"on\",\"enabled\":true,\"mode\":\"push_to_talk\",",
                 "\"me\":{\"level\":25,\"speaking\":true},\"peers\":[",
                 "{\"account\":7,\"level\":0,\"speaking\":false,\"link\":\"relay\"},",
-                "{\"account\":8,\"level\":0,\"speaking\":false,\"link\":null}]}
-"
+                "{\"account\":8,\"level\":0,\"speaking\":false,\"link\":null}]}\n"
             )
         );
         assert_eq!(parse_output(&text), Some(output));
@@ -1037,8 +1057,7 @@ mod tests {
             output_line(&Output::Answer(devices)),
             concat!(
                 "{\"id\":3,\"ok\":{\"input\":[\"Mic\"],\"output\":[\"Speakers\"],",
-                "\"selected_input\":null,\"selected_output\":\"Speakers\"}}
-"
+                "\"selected_input\":null,\"selected_output\":\"Speakers\"}}\n"
             )
         );
     }
@@ -1078,8 +1097,7 @@ mod tests {
         )));
         assert_eq!(
             answer,
-            "{\"id\":7,\"ok\":{\"url\":\"https://cloud.example/web/authorize?x=1\"}}
-"
+            "{\"id\":7,\"ok\":{\"url\":\"https://cloud.example/web/authorize?x=1\"}}\n"
         );
         let state = Output::Event(Event::State {
             cloud: Cloud::Offline,
