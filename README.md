@@ -2,7 +2,7 @@
 
 Online play for games that run on [AnyPS5](https://github.com/boykopovar/AnyPS5): accounts, friends, presence, sessions, invitations, and encrypted connections between players over the internet. Players open no ports and need no shared LAN. The network never talks to Sony's servers.
 
-**Status: in development.** The net service, the fake game and the tunnel probe run. In the end-to-end tests of [anyplay-gg/cloud](https://github.com/anyplay-gg/cloud), two players sign in, become friends, open a session and exchange game packets through a tunnel, directly and through a relay. No real game plays online yet: the bridge in AnyPS5 is under review, and the formats of games are learned one by one ([docs/gaps.md](docs/gaps.md)). Start with the [design](docs/DESIGN.md); the words are in [CONTEXT.md](CONTEXT.md) and the decisions in [docs/adr](docs/adr). Questions and ideas: the [AnyPlay Discord](https://discord.gg/nSHbHBRdS).
+**Status: in development.** The net service, the fake game and the tunnel probe run. In the end-to-end tests of [anyplay-gg/cloud](https://github.com/anyplay-gg/cloud), two players sign in, become friends, open a session and exchange game packets through a tunnel, directly and through a relay. No real game plays online yet: the bridge in AnyPS5 is under review, and the formats of games are learned one by one ([docs/gaps.md](docs/gaps.md)). Start with the [design](docs/DESIGN.md); the words are in [CONTEXT.md](CONTEXT.md) and the decisions in [docs/adr](docs/adr). Questions and ideas: the [AnyPlay Discord](https://discord.gg/9zYqf8fEsh).
 
 ## The idea
 
