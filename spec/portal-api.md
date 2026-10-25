@@ -240,8 +240,8 @@ The player's own parts. Only fields the cloud has exist: the text, the favourite
 |---|---|---|
 | `GET /me/profile` | | `Profile` of the player, all parts they have set. |
 | `PATCH /me/profile` | `ProfileUpdate` | `Profile`. A part left out stays; an empty text or list clears it. The text has at most 160 characters without links; at most 3 favourites (title IDs). |
-| `GET /me/privacy` | | `Privacy`: for each of `trophies`, `about`, `favourites`, `avatar`, `playtime`, who sees it: `friends` (the default), `everyone` or `nobody`. |
-| `PUT /me/privacy` | `Privacy` | `Privacy`. |
+| `GET /me/privacy` | | `Privacy`: for each of `trophies`, `about`, `favourites`, `avatar`, `playtime` and `feed` (the player's activity in the [feed](cloud-api.md#feed)), who sees it: `friends` (the default), `everyone` or `nobody`. |
+| `PUT /me/privacy` | `Privacy` | `Privacy`. The rules are those of `PUT /v1/me/privacy`: a part left out takes the default, `friends`, so a client sends all six. |
 | `PUT /me/avatar` | the picture | `{avatar}`: the hash. The body is a PNG or JPEG of at most 1 MB with `Content-Type: image/png` or `image/jpeg`; the cloud makes a square of it. The picture is at `GET /v1/avatars/{hash}` (no token; the hash is the right to see it). |
 | `DELETE /me/avatar` | `{}` | `{ok: true}`. |
 | `GET /me/trophies` | | `TrophySummary`. |
