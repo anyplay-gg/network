@@ -146,6 +146,10 @@ _Avoid_: Integration, social login (a connection is not a way to sign in)
 The net service's signed-in state with Discord, made when a player connects Discord in the launcher: it shows the player's game and party on Discord and brings their Discord friends to the screen. It lives in the net service, holds a refresh token only in the credential store, and ends when the player disconnects. Not a connection, which is the portal's link.
 _Avoid_: Discord login, Discord account link (that is the connection)
 
+**Notification device**:
+A browser that the player turned notifications on for in the portal, stored as a Web Push subscription with the kinds it wants (friend request, invitation, message). A notification names who it is from and never holds the text of a message. Per browser, off until the player turns it on, at most ten per account.
+_Avoid_: Push token (a subscription is an address and keys of the browser's own push service)
+
 **Gamer card**:
 The short form of a profile that friends see in their list: avatar, handle, what they play, trophy count. It holds nothing else, so it stays small.
 
