@@ -7,12 +7,15 @@
 //! anyplay-share --role host|guest [--link 127.0.0.1:PORT] [--token TOKEN]
 //!               [--source game|test_pattern] [--title TITLE] [--window HWND] [--pid PID]...
 //!               [--headless]
+//! anyplay-share --clips SECONDS [--title TITLE] [--window HWND] [--pid PID]...
 //! ```
 //!
 //! `--link` and `--token` default to `ANYPLAY_SHARE_ENDPOINT` and `ANYPLAY_SHARE_TOKEN`.
 //! `--title` is the game's title: the viewer names its window after it. The streamer captures
 //! the window the launcher named (`--window`), else the largest window of the game's processes
 //! (`--pid`, repeated), and only without any process a window whose title contains `--title`.
+//! `--clips` keeps the last SECONDS of the game's window and saves them on command (no link,
+//! no network; JSON lines on standard input and output, see spec/clips.md).
 //! `--headless` draws no window on the viewer's side (tests on a machine without a desktop).
 
 use std::process::ExitCode;
@@ -33,6 +36,7 @@ fn main() -> ExitCode {
     let mut window: Option<i64> = None;
     let mut headless = false;
     let mut pids: Vec<u32> = Vec::new();
+    let mut clips: Option<u32> = None;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--capabilities" => {
@@ -49,6 +53,7 @@ fn main() -> ExitCode {
                     _ => None,
                 }
             }
+            "--clips" => clips = args.next().and_then(|v| v.parse().ok()),
             "--link" => link = args.next(),
             "--token" => token = args.next(),
             "--source" => source = args.next().unwrap_or_default(),
@@ -58,6 +63,9 @@ fn main() -> ExitCode {
             "--pid" => pids.extend(args.next().and_then(|v| v.parse::<u32>().ok())),
             _ => {}
         }
+    }
+    if let Some(seconds) = clips {
+        return run_clips(seconds, &title, window, pids);
     }
     let (Some(role), Some(link), Some(token)) = (role, link, token) else {
         eprintln!("usage: anyplay-share --role host|guest --link ADDR --token TOKEN");
@@ -126,4 +134,59 @@ fn sink(title: &str, headless: bool) -> Box<dyn FrameSink> {
 #[cfg(not(windows))]
 fn sink(_title: &str, _headless: bool) -> Box<dyn FrameSink> {
     Box::new(anyplay_share_worker::viewer::NullSink)
+}
+
+/// Clips mode: records the game's window into a ring and answers the launcher's commands.
+fn run_clips(seconds: u32, title: &str, window: Option<i64>, pids: Vec<u32>) -> ExitCode {
+    use anyplay_share_worker::clips::{Command, Event, recorder};
+    use std::io::{BufRead, Write};
+    use std::sync::mpsc;
+
+    let (event_tx, event_rx) = mpsc::channel::<Event>();
+    let printer = std::thread::spawn(move || {
+        let mut out = std::io::stdout();
+        for event in event_rx {
+            let _ = writeln!(out, "{}", event.to_line());
+            let _ = out.flush();
+        }
+    });
+    let end = |reason: &str, detail: String| {
+        eprintln!("clips: {detail}");
+        let _ = event_tx.send(Event::Ended {
+            reason: reason.to_owned(),
+        });
+    };
+    let mut setup = recorder::Setup::new(seconds);
+    let encoder = match anyplay_share_worker::clips_encoder(&mut setup) {
+        Ok(encoder) => encoder,
+        Err(why) => {
+            end("no_encoder", why);
+            drop(event_tx);
+            let _ = printer.join();
+            return ExitCode::FAILURE;
+        }
+    };
+    let source = match frame_source("game", title, window, pids) {
+        Ok(source) => source,
+        Err(why) => {
+            end("no_window", why);
+            drop(event_tx);
+            let _ = printer.join();
+            return ExitCode::FAILURE;
+        }
+    };
+    let (command_tx, command_rx) = mpsc::channel::<Command>();
+    // Standard input closing (the launcher ended) is a quit.
+    std::thread::spawn(move || {
+        for line in std::io::stdin().lock().lines().map_while(Result::ok) {
+            if let Ok(command) = serde_json::from_str::<Command>(&line)
+                && command_tx.send(command).is_err()
+            {
+                break;
+            }
+        }
+    });
+    recorder::run(setup, source, encoder, command_rx, event_tx);
+    let _ = printer.join();
+    ExitCode::SUCCESS
 }

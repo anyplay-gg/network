@@ -9,6 +9,7 @@
 //! (where pictures go: a window, or a counter in tests).
 
 pub mod capture;
+pub mod clips;
 pub mod host;
 #[cfg(windows)]
 pub mod mf;
@@ -103,6 +104,37 @@ fn note_encoder(encoder: &mf::MfEncoder) {
             "software"
         }
     );
+}
+
+/// The encoder for clips: a hardware H.264 encoder, never the system's software one, because a
+/// clip recorder runs for as long as the game does and must not take its processor. Lowers
+/// `setup` to what the encoder gives.
+pub fn clips_encoder(setup: &mut clips::recorder::Setup) -> Result<Box<dyn VideoEncoder>, String> {
+    #[cfg(windows)]
+    {
+        let start = Start {
+            epoch: 0,
+            codec: "h264".into(),
+            width: setup.width,
+            height: setup.height,
+            fps: setup.fps,
+            kbps: setup.kbps,
+            parity_percent: 0,
+            max_payload: 0,
+        };
+        let lowered = mf::Limits::HARDWARE.clamp(&start);
+        let encoder = mf::MfEncoder::open(lowered, mf::Kind::Hardware)?;
+        note_encoder(&encoder);
+        setup.width = lowered.width;
+        setup.height = lowered.height;
+        setup.fps = lowered.fps;
+        Ok(Box::new(encoder))
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = setup;
+        Err("clips are not built for this system yet".into())
+    }
 }
 
 /// The decoder for the codec a streamer chose; none when this PC does not have it.

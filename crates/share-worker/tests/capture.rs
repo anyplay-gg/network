@@ -191,3 +191,46 @@ fn a_software_encoder_alone_is_enough_to_stream() {
     }
     assert!(got);
 }
+
+/// The worker program in clips mode, against a window of this process: it reports `ready`, keeps
+/// the window's pictures, saves an MP4 file on `save` and ends on `quit`. Without a hardware
+/// encoder it ends with `no_encoder`, which is also an answer the spec allows, so the test stops.
+#[test]
+#[ignore = "needs a desktop that is shown"]
+fn the_clips_worker_saves_the_window_as_an_mp4_file() {
+    use std::io::{BufRead, BufReader, Write};
+    use std::process::{Command, Stdio};
+
+    let _window = TestWindow::open("A window to clip");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_anyplay-share"))
+        .args(["--clips", "15", "--pid", &std::process::id().to_string()])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("the worker starts");
+    let mut input = child.stdin.take().unwrap();
+    let mut lines = BufReader::new(child.stdout.take().unwrap()).lines();
+    let first = lines.next().expect("an event").expect("a line");
+    if first.contains("no_encoder") {
+        eprintln!("no hardware H.264 encoder here: {first}");
+        let _ = child.wait();
+        return;
+    }
+    assert!(first.contains("\"event\":\"ready\""), "{first}");
+    std::thread::sleep(Duration::from_secs(5));
+    let path = std::env::temp_dir().join(format!("anyplay-clip-test-{}.mp4", std::process::id()));
+    let command = serde_json::json!({"do": "save", "path": path.to_string_lossy()});
+    writeln!(input, "{command}").unwrap();
+    let saved = lines.next().expect("an event").expect("a line");
+    assert!(saved.contains("\"event\":\"saved\""), "{saved}");
+    writeln!(input, r#"{{"do":"quit"}}"#).unwrap();
+    assert!(child.wait().unwrap().success());
+
+    let data = std::fs::read(&path).expect("the clip exists");
+    let _ = std::fs::remove_file(&path);
+    let size = data.len() as u64;
+    let reader = mp4::Mp4Reader::read_header(std::io::Cursor::new(data), size).expect("an MP4");
+    let track = reader.tracks().get(&1).expect("a video track");
+    assert!(track.sample_count() >= 60, "{}", track.sample_count());
+    assert!(reader.duration().as_secs_f64() >= 3.0);
+}
