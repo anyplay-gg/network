@@ -2,7 +2,7 @@
 
 The API between the net service and a cloud. Version 1 of the paths, still a draft: it changes without notice until the first public cloud runs.
 
-The Rust reference is [`crates/api`](../crates/api). The cloud in [anyplay-gg/cloud](https://github.com/anyplay-gg/cloud) implements it. Nothing here knows the platform's formats; the net service translates those ([ADR 0001](../docs/adr/0001-bridge-forwards-net-service-translates.md)). The web portal in the player's browser uses a separate API on the browser's session cookie: [Portal API](portal-api.md).
+The Rust reference is [`crates/api`](../crates/api). The cloud in [anyplaynet/cloud](https://github.com/anyplaynet/cloud) implements it. Nothing here knows the platform's formats; the net service translates those ([ADR 0001](../docs/adr/0001-bridge-forwards-net-service-translates.md)). The web portal in the player's browser uses a separate API on the browser's session cookie: [Portal API](portal-api.md).
 
 ## Conventions
 

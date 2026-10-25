@@ -2,7 +2,7 @@
 
 What the network does not do yet, part by part. Each line says what is missing and what closes it. See [OBSERVING.md](OBSERVING.md) for how formats are learned.
 
-## Bridge (anyplay-gg/AnyPS5)
+## Bridge (anyplaynet/AnyPS5)
 
 - **Sign-in, identity, NAT and web API forwarding**: drafted on `feat/net-bridge`, under review (board task T2).
 - **Push event delivery**: missing. The signature of the game's push callback is not known. Closes with an observation of a game that registers one.
@@ -27,13 +27,13 @@ What the network does not do yet, part by part. Each line says what is missing a
 - **Matchmaking, leaderboards, cloud saves**: not started (phase 5).
 - **Fuzzing beyond the parsers**: the parsers of both protocols are fuzzed every night ([fuzz](../fuzz/README.md)); what the net service does with the messages they read, and what it reads from the cloud, is tested with fixed cases only.
 
-## Cloud (anyplay-gg/cloud)
+## Cloud (anyplaynet/cloud)
 
-- **News between nodes**: presence, sessions and invitations are in the store, which every node of a cloud shares, but the nodes do not tell each other about changes yet, so a cloud runs as one node. Closes with stage 2 of the [cloud architecture](https://github.com/anyplay-gg/cloud/blob/main/docs/ARCHITECTURE.md) (NATS).
+- **News between nodes**: presence, sessions and invitations are in the store, which every node of a cloud shares, but the nodes do not tell each other about changes yet, so a cloud runs as one node. Closes with stage 2 of the [cloud architecture](https://github.com/anyplaynet/cloud/blob/main/docs/ARCHITECTURE.md) (NATS).
 - **Parental consent**: players under the age of consent cannot sign up.
 - **Sign-in with Apple, Google or Discord**: not offered; e-mail code and passkey, in the browser ([ADR 0016](adr/0016-accounts-are-managed-on-the-web.md), which says where it would fit).
 
-## Launcher (anyplay-gg/launcher)
+## Launcher (anyplaynet/launcher)
 
 - **No default cloud**: until AnyPlay's own cloud runs, release builds name none and the player enters one.
 - **Game launch on Linux** with the bridge is untested.

@@ -77,4 +77,4 @@ A queue of reports with the reported content attached, actions with a stated rea
 | S5 Share play | streaming a game to a friend, taking over a pad | a friend without the game plays a level of it; the [plan](share-play-plan.md) splits it into watch, hand over and play together, each with numbers |
 | S6 Web and sign-in | web profiles, passkeys, Apple, Google and Discord sign-in, moderation queue | a public profile opens in a browser; a player signs in with a passkey |
 
-The infrastructure work in [anyplay-gg/cloud](https://github.com/anyplay-gg/cloud/blob/main/docs/ARCHITECTURE.md) runs beside these phases; every feature here is built for the cluster from its first line.
+The infrastructure work in [anyplaynet/cloud](https://github.com/anyplaynet/cloud/blob/main/docs/ARCHITECTURE.md) runs beside these phases; every feature here is built for the cluster from its first line.

@@ -6,7 +6,7 @@ Status: **observed**. The net service answers every request of this group with s
 
 | Game | Build | Run | Account |
 |---|---|---|---|
-| Minecraft Dungeons II | AnyPS5 with the bridge in observation mode ([anyplay-gg/AnyPS5#1](https://github.com/anyplay-gg/AnyPS5/pull/1)), relinked for Windows | about 130 s, ended by a GPU fault outside the network libraries | signed out: `sceNpGetAccountIdA` returned `0x80550006` |
+| Minecraft Dungeons II | AnyPS5 with the bridge in observation mode ([anyplaynet/AnyPS5#1](https://github.com/anyplaynet/AnyPS5/pull/1)), relinked for Windows | about 130 s, ended by a GPU fault outside the network libraries | signed out: `sceNpGetAccountIdA` returned `0x80550006` |
 
 ## Requests
 

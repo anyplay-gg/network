@@ -2,7 +2,7 @@
 
 The JSON API that the web portal talks to: a single-page app that the cloud serves from its own origin, where players sign in, manage their account, and see friends, trophies and profiles. Version 1, still a draft: it changes without notice until the first public cloud runs.
 
-The cloud in [anyplay-gg/cloud](https://github.com/anyplay-gg/cloud) implements it (`crates/cloud/src/web/api`). It is not the API of the net service ([Cloud API](cloud-api.md), `/v1`, bearer tokens) and not the platform web API that games call ([`web-api/`](web-api/README.md)). The decision is in [ADR 0018](../docs/adr/0018-the-portal-is-a-single-page-app-on-the-clouds-origin.md); the pages it replaces are the account web of [ADR 0016](../docs/adr/0016-accounts-are-managed-on-the-web.md).
+The cloud in [anyplaynet/cloud](https://github.com/anyplaynet/cloud) implements it (`crates/cloud/src/web/api`). It is not the API of the net service ([Cloud API](cloud-api.md), `/v1`, bearer tokens) and not the platform web API that games call ([`web-api/`](web-api/README.md)). The decision is in [ADR 0018](../docs/adr/0018-the-portal-is-a-single-page-app-on-the-clouds-origin.md); the pages it replaces are the account web of [ADR 0016](../docs/adr/0016-accounts-are-managed-on-the-web.md).
 
 ## Conventions
 
@@ -127,7 +127,7 @@ email ──► code ──┬──► done
 passkey ─────────────► done | handoff | terms | banned
 ```
 
-The steps are the state machine of the HTML pages ([`flow.rs`](https://github.com/anyplay-gg/cloud/blob/main/crates/cloud/src/web/flow.rs)): the same functions answer both.
+The steps are the state machine of the HTML pages ([`flow.rs`](https://github.com/anyplaynet/cloud/blob/main/crates/cloud/src/web/flow.rs)): the same functions answer both.
 
 ### Hand-off to the app
 
