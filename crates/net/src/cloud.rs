@@ -6,13 +6,14 @@ use std::time::Duration;
 use anyplay_api::{
     AccountId, AccountLink, AccountTrophies, AddToConversation, Added, ApiError, AppealRequest,
     BrowserTokenRequest, Cards, CodeAnswer, CodeRequest, Conversation, Conversations,
-    CreateConversation, CreateSession, Device, EmailAnswer, EmailRequest, ErrorCode, FriendLists,
-    FriendRequest, FriendRequestAnswer, Info, Invite, Invited, JoinCode, JoinSession, MarkRead, Me,
-    Message, Messages, MoveParty, Party, PartyEndpoint, PartyInvitations, PlaytimeAdded,
-    PlaytimeEntry, PlaytimeUpload, PresenceRequest, Privacy, ProfilePage, Rarity, ReactionRequest,
-    Reactions, Redeemed, RefreshRequest, Relays, Report, RunReport, RunSummary, SendMessage,
-    Session, SignedIn, SignupRequest, Statement, Statements, TicketRequest, Tokens, TrophiesAdded,
-    Trophy, TrophyUpload, UpdateParty, UpdateSession, path,
+    CreateConversation, CreateSession, Device, DiscordCodeExchange, DiscordRefresh, DiscordTokens,
+    EmailAnswer, EmailRequest, ErrorCode, FriendLists, FriendRequest, FriendRequestAnswer, Info,
+    Invite, Invited, JoinCode, JoinSession, MarkRead, Me, Message, Messages, MoveParty, Party,
+    PartyEndpoint, PartyInvitations, PlaytimeAdded, PlaytimeEntry, PlaytimeUpload, PresenceRequest,
+    Privacy, ProfilePage, Rarity, ReactionRequest, Reactions, Redeemed, RefreshRequest, Relays,
+    Report, RunReport, RunSummary, SendMessage, Session, SignedIn, SignupRequest, Statement,
+    Statements, TicketRequest, Tokens, TrophiesAdded, Trophy, TrophyUpload, UpdateParty,
+    UpdateSession, path,
 };
 use anyplay_proof::{DeviceKey, Subject};
 use reqwest::{Method, StatusCode};
@@ -698,6 +699,26 @@ impl Cloud {
             endpoint: endpoint.to_owned(),
         };
         self.call(Method::POST, path::RELAY_TICKETS, Some(&body))
+            .await
+    }
+
+    // Discord
+
+    /// Trades the SDK's authorisation code for Discord's tokens. The cloud keeps nothing.
+    pub async fn discord_token(
+        &self,
+        exchange: &DiscordCodeExchange,
+    ) -> Result<DiscordTokens, CloudError> {
+        self.call(Method::POST, path::ME_DISCORD_TOKEN, Some(exchange))
+            .await
+    }
+
+    /// Trades a refresh token for new tokens; the refresh token is replaced at each use.
+    pub async fn discord_refresh(&self, refresh: &str) -> Result<DiscordTokens, CloudError> {
+        let body = DiscordRefresh {
+            refresh: refresh.to_owned(),
+        };
+        self.call(Method::POST, path::ME_DISCORD_REFRESH, Some(&body))
             .await
     }
 

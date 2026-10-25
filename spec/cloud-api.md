@@ -28,6 +28,7 @@ The Rust reference is [`crates/api`](../crates/api). The cloud in [anyplay-gg/cl
 | `full` | 409 | The session has no free place. |
 | `limit` | 409 | A per-account limit is reached (friends, requests, sessions). |
 | `too_large` | 413 | The body or the session properties are too large. |
+| `grant_refused` | 400 | Discord refused the code or the refresh token of a Discord SDK request. |
 | `rate_limited` | 429 | Too many requests. `Retry-After` says how many seconds to wait. |
 | `internal` | 500 | The cloud failed. |
 
@@ -500,6 +501,24 @@ Every message has a number `seq` that counts up by one in its conversation, star
   - One address can name two players in two different sessions. A client in several sessions at once keeps a single address per peer across them (the net service does).
   - Clients from before session addresses keep working: they read `welcome.address` and `members[].address` and nothing else.
 
+## Discord Social SDK
+
+The net service runs Discord's Social SDK ([ADR 0022](../docs/adr/0022-discord-social-sdk.md)). The SDK's authorisation gives it a one-time code; the cloud is the confidential client that trades the code for tokens with the Discord application's secret, so no secret is shipped. **The cloud keeps nothing**: no token, no Discord ID, no friend, and no log line with any of them. Both requests need an access token and answer `no-store`.
+
+| Request | Body | Answer |
+|---|---|---|
+| `POST /v1/me/discord/token` | `{code, code_verifier, redirect_uri}` | `DiscordTokens` |
+| `POST /v1/me/discord/refresh` | `{refresh}` | `DiscordTokens` |
+
+```text
+DiscordTokens { access, refresh, expires_in, scope }   expires_in: seconds; scope: space-separated
+```
+
+- `token` makes an OAuth 2.0 authorization-code request to Discord with PKCE (`code_verifier` is the verifier of the challenge the SDK was started with: 43 to 128 of `A-Z a-z 0-9 - . _ ~`). `redirect_uri` must be `http://127.0.0.1/callback` or the portal's Discord callback (`<origin>/web/links/discord/callback`); both are registered with the Discord application. `bad_request` otherwise, without asking Discord.
+- `refresh` makes a refresh-token request. Discord replaces the refresh token at each use, so the net service saves the new one from every answer. Access tokens last about seven days.
+- When the account has a Discord connection ([portal API](portal-api.md#connections)), the Discord account behind a fresh token must be the connected one. If it is not, the cloud revokes the tokens at Discord and answers `forbidden`. An account without a connection may connect any Discord account; the cloud still creates no connection.
+- Errors: `grant_refused` (400) when Discord refuses the code or the refresh token (used, expired, wrong verifier, revoked): the net service drops its kept token and asks the player again. `rate_limited` when the account or Discord is throttled. `internal` when Discord cannot be reached or the cloud's own Discord credentials are wrong. `not_found` when the cloud has no Discord application.
+
 ## Information
 
 `GET /v1/info` needs no account and answers `{name, version, signup, privacy, terms, web}`. `signup` is `open` or `closed`; `privacy` and `terms` are URLs or null; `web` is the origin of the account web, and absent when the cloud has none.
@@ -519,6 +538,7 @@ Every message has a number `seq` that counts up by one in its conversation, star
 | `PUT /v1/me/run-reports/{title_id}` | 30 per account per hour |
 | `PUT/DELETE /v1/feed/{id}/reaction` | 60 per account per minute |
 | `join-codes` | 10 new codes and 30 redemptions per account per hour |
+| `me/discord/token` and `me/discord/refresh` | 10 per account per hour, together |
 | `reports` | 20 per account per day and 5 per 10 minutes (settings of the cloud) |
 | appeals | 10 per account per hour |
 | everything else | 120 per account per minute |

@@ -13,6 +13,9 @@ publish = false
 # by default because on Linux it needs the ALSA headers (libasound2-dev) to build. Without it the
 # service runs, and voice answers that this build has no sound devices.
 devices = ["anyplay-voice/devices"]
+# Discord's Social SDK, loaded at run time (ADR 0022). Needs DISCORD_SDK_DIR at build time; see
+# docs/discord-plan.md. Without it the service reports Discord as unavailable.
+discord-sdk = ["anyplay-discord/sdk"]
 
 [[bin]]
 name = "anyplay-net"
@@ -22,6 +25,7 @@ path = "src/main.rs"
 anyplay-api = { path = "../api" }
 anyplay-bridge-protocol = { path = "../bridge-protocol" }
 anyplay-control = { path = "../control" }
+anyplay-discord = { path = "../discord" }
 anyplay-proof = { path = "../proof" }
 anyplay-share = { path = "../share" }
 anyplay-voice = { path = "../voice" }

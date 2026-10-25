@@ -26,6 +26,22 @@ impl std::fmt::Debug for Saved {
     }
 }
 
+/// What the net service keeps of a Discord connection: the refresh token, and whose it is. A
+/// token kept for one AnyPlay account is never used for another.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SavedDiscord {
+    pub account: anyplay_api::AccountId,
+    pub refresh: String,
+}
+
+impl std::fmt::Debug for SavedDiscord {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SavedDiscord")
+            .field("account", &self.account)
+            .finish_non_exhaustive()
+    }
+}
+
 /// One cloud's saved sign-in.
 #[derive(Clone, Debug)]
 pub enum Store {
@@ -55,7 +71,11 @@ impl Store {
     }
 
     pub fn load(&self) -> Option<Saved> {
-        let text = match self {
+        serde_json::from_str(&self.read()?).ok()
+    }
+
+    fn read(&self) -> Option<String> {
+        match self {
             Store::System { user } => keyring::Entry::new(SERVICE, user)
                 .and_then(|entry| entry.get_password())
                 .map_err(|error| {
@@ -63,17 +83,46 @@ impl Store {
                         tracing::warn!("credential store: {error}");
                     }
                 })
-                .ok()?,
-            Store::File(path) => std::fs::read_to_string(path).ok()?,
-        };
-        serde_json::from_str(&text).ok()
+                .ok(),
+            Store::File(path) => std::fs::read_to_string(path).ok(),
+        }
+    }
+
+    /// The store of the Discord connection beside this one: its own entry or file, so a
+    /// sign-in and a Discord refresh token never overwrite each other.
+    pub fn discord(&self) -> Store {
+        match self {
+            Store::System { user } => Store::System {
+                user: format!("discord:{user}"),
+            },
+            Store::File(path) => {
+                let name = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("signin");
+                let name = name.strip_prefix("signin-").unwrap_or(name);
+                Store::File(path.with_file_name(format!("discord-{name}")))
+            }
+        }
+    }
+
+    pub fn load_discord(&self) -> Option<SavedDiscord> {
+        serde_json::from_str(&self.read()?).ok()
+    }
+
+    pub fn save_discord(&self, saved: Option<&SavedDiscord>) {
+        self.write(saved.map(|s| serde_json::to_string(s).unwrap_or_default()));
     }
 
     /// Keeps `saved`, or removes what was kept when it is `None`.
     pub fn save(&self, saved: Option<&Saved>) {
-        let result = match (self, saved) {
-            (Store::System { user }, Some(saved)) => keyring::Entry::new(SERVICE, user)
-                .and_then(|entry| entry.set_password(&to_json(saved)))
+        self.write(saved.map(to_json));
+    }
+
+    fn write(&self, text: Option<String>) {
+        let result = match (self, text) {
+            (Store::System { user }, Some(text)) => keyring::Entry::new(SERVICE, user)
+                .and_then(|entry| entry.set_password(&text))
                 .map_err(|e| e.to_string()),
             (Store::System { user }, None) => keyring::Entry::new(SERVICE, user)
                 .and_then(|entry| entry.delete_credential())
@@ -82,7 +131,7 @@ impl Store {
                     other => Err(other),
                 })
                 .map_err(|e| e.to_string()),
-            (Store::File(path), Some(saved)) => write_private(path, &to_json(saved)),
+            (Store::File(path), Some(text)) => write_private(path, &text),
             (Store::File(path), None) => match std::fs::remove_file(path) {
                 Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
                     Err(error.to_string())
@@ -159,6 +208,24 @@ mod tests {
         };
         let text = format!("{saved:?}");
         assert!(!text.contains("secret"), "{text}");
+    }
+
+    #[test]
+    fn the_discord_token_has_its_own_slot_and_never_prints() {
+        let dir = tempfile::tempdir().unwrap();
+        let signin = Store::open(dir.path(), "https://a.example", true);
+        let discord = signin.discord();
+        assert_eq!(discord.load_discord(), None);
+        let saved = SavedDiscord {
+            account: anyplay_api::AccountId(7),
+            refresh: "secret-refresh".into(),
+        };
+        discord.save_discord(Some(&saved));
+        assert_eq!(discord.load_discord(), Some(saved.clone()));
+        assert_eq!(signin.load(), None, "the sign-in slot is untouched");
+        assert!(!format!("{saved:?}").contains("secret"));
+        discord.save_discord(None);
+        assert_eq!(discord.load_discord(), None);
     }
 
     #[test]

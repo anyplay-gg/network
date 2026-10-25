@@ -82,6 +82,9 @@ A **restriction** has a `kind` and, when they apply, `until`, `rule`, `reason`, 
 | `invite` | `accounts` | `{sent}` |
 | `answer_invitation` | `invitation` (its `id`), `accept` | `{session, title_id}` when accepted, else `{}` |
 | `dialog` | `dialog` (the `id` of the `invite_dialog` event), `accounts` (null when the player closed the picker) | `{}` |
+| `discord_status` | | `{state, user, friends}`: see the `discord` event |
+| `discord_connect` | | `{}` at once; the `discord` event follows. `not_signed_in`, and `bad_state` when this build has no Discord SDK |
+| `discord_disconnect` | | `{}`: ends the connection and forgets the kept refresh token |
 | `relay_only` | `on` | `{}` |
 | `upload_trophies` | `title_id`, `trophies` | `{added}` |
 | `trophies` | `account` | `{titles}`, or the error `not_found` when they are hidden |
@@ -145,6 +148,7 @@ A **restriction** has a `kind` and, when they apply, `until`, `rule`, `reason`, 
 - `push_to_talk` is the key being down (`talking` true) or up. In `voice_activity` mode it has no effect. `voice_mode`, `peer_volume` and `peer_mute` are remembered by account for as long as the service runs, also while voice is off or the member is away, and apply when voice starts. Volume is in percent of what was sent, 100 normally.
 - `voice_devices` lists the names the system has and which are chosen. `set_voice_device` chooses by one of those names (or null for the default) and, while voice runs, closes the devices and opens them again, so the connections to the members are made again too. A service built without sound devices lists none and fails to open any; release builds have them.
 - Share screen (watch only, to the party, no cloud involved) is specified in [its own file](screen-share.md#control-protocol-additions): the `screen_*` commands and the `screen` event. `screen_start` fails with `no_game`, `not_signed_in`, `not_in_party`, `no_encoder` or `busy`; `screen_watch` with `not_found`, `busy` or `no_decoder`. The event carries `hosting` (the player's own stream with one entry per member it reaches), `offers` (streams the player may watch) and `watching`, and no field of it is named `id`.
+- The Discord commands and event are phase 0 of [ADR 0022](../docs/adr/0022-discord-social-sdk.md). `state` is `unavailable` (no SDK in this build, or the library is missing or refused to load: nothing else changes), `signed_out`, `connecting` (the SDK asks the player, the cloud trades the code, or the SDK connects) or `connected`. `user` is `{id, name}` while connected (`id` is a decimal string, `name` the display name) and `friends` the number of Discord friends; both are null otherwise, and the friends themselves never leave the net service. `discord_connect` uses the refresh token the service kept in the credential store for this account, and only asks the player (Discord's overlay, app or browser) when there is none or Discord refuses it; the cloud keeps nothing ([cloud API](cloud-api.md#discord-social-sdk)). A failure comes as a `notice` with the code `discord_failed`.
 - Share play adds commands and events, drafted in the [share play spec](share-play.md#control-protocol-additions). They are not implemented.
 - `relay_only` keeps every tunnel on a relay, so other players never learn the PC's addresses, or lets them go direct again. Running tunnels start again and the peers reconnect, so the launcher sends it while no game runs. `anyplay-net --relay-only` starts with it on.
 
@@ -153,6 +157,7 @@ A **restriction** has a `kind` and, when they apply, `until`, `rule`, `reason`, 
 | `event` | Fields | When |
 |---|---|---|
 | `state` | `cloud`, `account`, `pending` | after `hello` and whenever one of them changes |
+| `discord` | `state`, `user`, `friends` | after `hello` and whenever the Discord state changes |
 | `friends` | `friends`, `incoming`, `outgoing`, `blocked` | after sign-in and whenever a list or a friend's presence changes |
 | `invitation` | `invitation` | a friend invited the player |
 | `invitation_gone` | `id` | an invitation expired, was answered or its session closed |
