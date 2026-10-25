@@ -59,7 +59,7 @@ Role names stay `host` and `guest` on the wire, as in share play; this file says
 
 ## Capture
 
-On Linux the worker asks the desktop portal's ScreenCast for one window: the player picks it in the system's dialog each time a stream starts, no choice is remembered, and the portal hands the worker a PipeWire stream of that window alone. The portal cannot be told which window is the game's, so `window` and `pids` are not used there. Cancelling the dialog ends the stream before it starts, and so does picking a screen: some pickers offer screens whatever is asked for, and only a window is shared.
+On Linux the worker asks the desktop portal's ScreenCast for one window: the player picks it in the system's dialog each time a stream starts, no choice is remembered, and the portal hands the worker a PipeWire stream of that window alone. The portal cannot be told which window is the game's, so `window` and `pids` are not used there. Cancelling the dialog ends the stream before it starts, and so does picking a screen: some pickers offer screens whatever is asked for, and only a window is shared. A dialog left open for 2 minutes is given up the same way. The worker takes at most 30 pictures a second from the compositor, what its software encoder sends. Until the window has drawn its first picture the worker keeps taking the net service's messages, so a stop gets through.
 
 On Windows the streamer's worker takes the picture of one window with Windows Graphics Capture. Which window is decided in this order, and a window of a process the launcher did not start is never taken while it has named some:
 
@@ -101,7 +101,7 @@ For the [control protocol](control-protocol.md#share-screen). The Rust reference
 | `screen_stop` | | `{}` | |
 | `screen_watch` | `account` | `{}` | `not_found` (that member offers no stream), `busy` (already watching), `no_decoder` |
 | `screen_leave` | | `{}` | |
-| `screen_worker` | `path` | `{encoders, decoders, capture}` | `not_found` (no file), `bad_request` (not a worker that speaks this protocol) |
+| `screen_worker` | `path` | `{encoders, decoders, capture, libraries}` | `not_found` (no file), `bad_request` (not a worker that speaks this protocol) |
 
 | `event` | Fields | When |
 |---|---|---|
@@ -111,6 +111,7 @@ For the [control protocol](control-protocol.md#share-screen). The Rust reference
 - `offers` has `{account, title, link}` for each member whose stream the player may watch and is not watching.
 - `watching` is null or `{account, title, phase, link, rtt_ms, width, height, fps, kbps, shown_fps}`. `phase` is `connecting`, `live` or `stalled` on both sides.
 - `can_share` is true when a stream could start now (see Start). `can_watch` is true when the worker can decode and show. Both are false until a worker is installed, so a launcher with neither and nothing to show draws nothing.
+- `libraries` in the `screen_worker` answer names each codec library the worker loads while it runs instead of carrying it (Cisco's OpenH264 on Linux), `{name, state, detail}`, and is absent where it loads none (Windows). `state` is `ready`, `off` (the launcher started the net service with `ANYPLAY_OPENH264=off`, the player's switch), `missing` (not installed), `refused` (a file that is not a known build; `detail` names it and its SHA-256) or `failed` (a file that could not be read, or a known build that would not load). The launcher shows it beside its switch for the library.
 - The launcher says the path in words from `link` and `rtt_ms`: "Direct, 24 ms", "Through a relay, 80 ms".
 - The launcher never sees tunnel keys, rings or datagrams.
 

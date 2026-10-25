@@ -3,20 +3,26 @@
 //! The worker builds none of OpenH264. It loads Cisco's own build of the library, and only a
 //! build whose SHA-256 the `openh264` crate (BSD-2-Clause) knows, because Cisco's licence for the
 //! codec's patents covers that binary and nothing compiled from its source. The library is found
-//! at `ANYPLAY_OPENH264`, else beside the worker under Cisco's file name; without it this system
-//! encodes and decodes nothing, and `can_share` and `can_watch` stay false.
+//! at `ANYPLAY_OPENH264`, else beside the worker under Cisco's file name; `ANYPLAY_OPENH264=off`
+//! turns it off. Without it this system encodes and decodes nothing, `can_share` and `can_watch`
+//! stay false, and `--capabilities` says why (`libraries`).
 //!
 //! The encoder is the spec's software encoder: at most 720p30, constant bit rate, no B-frames
 //! (Baseline profile), one IDR on request and a safety IDR every 600 frames, BT.709 in limited
 //! range. Pictures go in through the same BGRA to NV12 fitting as on Windows
 //! (`anyplay_share::pixels`), so a Linux stream and a Windows stream look the same.
 
-use std::ffi::c_void;
-use std::path::PathBuf;
+use std::ffi::{OsString, c_void};
+use std::fs::File;
+use std::io::ErrorKind;
+use std::os::fd::AsRawFd;
+use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use std::time::Instant;
 
 use anyplay_share::codec::{CodecError, EncodedFrame, Frame, VideoDecoder, VideoEncoder};
 use anyplay_share::control::CodecCaps;
+use anyplay_share::link::{CodecLibrary, LibraryState};
 use anyplay_share::pixels;
 use openh264::OpenH264API;
 use openh264::Timestamp;
@@ -26,6 +32,7 @@ use openh264::encoder::{
     RateControlMode, UsageType, VuiConfig,
 };
 use openh264::formats::{YUVBuffer, YUVSource};
+use openh264_sys2::Error as LoadError;
 
 use crate::limits::{EncoderSetup, Limits};
 
@@ -45,26 +52,109 @@ pub fn library_name() -> &'static str {
     }
 }
 
-/// The library to load: `ANYPLAY_OPENH264`, else Cisco's file beside the worker.
-pub fn library() -> Option<PathBuf> {
-    if let Some(path) = std::env::var_os(LIBRARY_ENV).filter(|p| !p.is_empty()) {
-        return Some(PathBuf::from(path));
+/// The value of `ANYPLAY_OPENH264` that turns OpenH264 off: the player's switch in the launcher.
+pub const OFF: &str = "off";
+/// The library's name in `--capabilities`.
+pub const LIBRARY: &str = "openh264";
+
+/// Where the library comes from.
+#[derive(Debug, PartialEq, Eq)]
+enum Source {
+    Off,
+    File(PathBuf),
+    Missing,
+}
+
+/// `ANYPLAY_OPENH264` when it is set and not empty (`off`, or the file), else Cisco's file
+/// beside the worker.
+fn source_of(env: Option<OsString>, beside: Option<PathBuf>) -> Source {
+    match env {
+        Some(value) if value == OFF => Source::Off,
+        Some(value) if !value.is_empty() => Source::File(value.into()),
+        _ => beside
+            .filter(|path| path.is_file())
+            .map_or(Source::Missing, Source::File),
     }
-    let beside = std::env::current_exe().ok()?.parent()?.join(library_name());
-    beside.is_file().then_some(beside)
 }
 
-/// Loads the library, refusing any file that is not a known build of Cisco's.
+fn source() -> Source {
+    let beside = std::env::current_exe()
+        .ok()
+        .and_then(|exe| Some(exe.parent()?.join(library_name())));
+    source_of(std::env::var_os(LIBRARY_ENV), beside)
+}
+
+fn status(state: LibraryState, detail: Option<String>) -> CodecLibrary {
+    CodecLibrary {
+        name: LIBRARY.into(),
+        state,
+        detail,
+    }
+}
+
+/// Loads the library from an open file, refusing any file that is not a known build of Cisco's.
+/// The hash check and the loader both read the file through this process's handle on it
+/// (`/proc/self/fd`), so a file put at the same path after it was opened is never loaded.
+fn load(file: &File, shown: &Path) -> Result<OpenH264API, CodecLibrary> {
+    let held = PathBuf::from(format!("/proc/self/fd/{}", file.as_raw_fd()));
+    OpenH264API::from_blob_path(&held).map_err(|e| match e {
+        LoadError::InvalidHash(sha256) => status(
+            LibraryState::Refused,
+            Some(format!(
+                "{} is not a known build of Cisco's (SHA-256 {sha256})",
+                shown.display()
+            )),
+        ),
+        other => status(
+            LibraryState::Failed,
+            Some(format!("{}: {other}", shown.display())),
+        ),
+    })
+}
+
+/// The library, or how it stands when there is none to use.
+/// The library file that loaded first, kept open for the worker's life and used for every later
+/// load. glibc hands back a library it already has by the name it was loaded under, whatever file
+/// that name points at now; with this file held, its `/proc/self/fd` name never points at another.
+static LOADED: OnceLock<(File, PathBuf)> = OnceLock::new();
+
+fn open_api() -> Result<OpenH264API, CodecLibrary> {
+    let path = match source() {
+        Source::Off => return Err(status(LibraryState::Off, None)),
+        Source::Missing => return Err(status(LibraryState::Missing, None)),
+        Source::File(path) => path,
+    };
+    if let Some((file, shown)) = LOADED.get() {
+        return load(file, shown);
+    }
+    let file = File::open(&path).map_err(|e| {
+        let state = if e.kind() == ErrorKind::NotFound {
+            LibraryState::Missing
+        } else {
+            LibraryState::Failed
+        };
+        status(state, Some(format!("{}: {e}", path.display())))
+    })?;
+    let api = load(&file, &path)?;
+    // Another thread may have loaded first; then this file is dropped, and its library goes with
+    // the API made from it.
+    let _ = LOADED.set((file, path));
+    Ok(api)
+}
+
 fn api() -> Result<OpenH264API, String> {
-    let path = library().ok_or("Cisco's OpenH264 library is not installed")?;
-    OpenH264API::from_blob_path(&path).map_err(|e| format!("OpenH264 at {}: {e}", path.display()))
+    open_api().map_err(|status| match (status.state, status.detail) {
+        (_, Some(detail)) => format!("OpenH264: {detail}"),
+        (LibraryState::Off, None) => "OpenH264 is turned off".into(),
+        _ => "Cisco's OpenH264 library is not installed".into(),
+    })
 }
 
-/// What OpenH264 gives on this PC: nothing without the library, else the software encoder's
-/// limits and a decoder up to 1080p60.
-pub fn capabilities() -> (Vec<CodecCaps>, Vec<CodecCaps>) {
-    if api().is_err() {
-        return (Vec::new(), Vec::new());
+/// What OpenH264 gives on this PC and how its library stands: nothing without the library,
+/// else the software encoder's limits and a decoder up to 1080p60.
+pub fn capabilities() -> (Vec<CodecCaps>, Vec<CodecCaps>, CodecLibrary) {
+    if let Err(status) = open_api() {
+        return (Vec::new(), Vec::new(), status);
     }
     let caps = |limits: Limits| CodecCaps {
         codec: CODEC_NAME.into(),
@@ -73,7 +163,11 @@ pub fn capabilities() -> (Vec<CodecCaps>, Vec<CodecCaps>) {
         max_height: limits.height,
         max_fps: limits.fps,
     };
-    (vec![caps(Limits::SOFTWARE)], vec![caps(Limits::HARDWARE)])
+    (
+        vec![caps(Limits::SOFTWARE)],
+        vec![caps(Limits::HARDWARE)],
+        status(LibraryState::Ready, None),
+    )
 }
 
 /// NV12 (Y, then U and V interleaved) to I420 (Y, then all U, then all V), both tight.
@@ -307,12 +401,102 @@ mod tests {
         assert!(i420_to_nv12((&y[..9], &u, &v), 4, 2, (6, 3, 3)).is_none());
     }
 
+    #[test]
+    fn the_library_comes_from_the_variable_else_beside_the_worker_and_off_turns_it_off() {
+        let dir = scratch("source");
+        let beside = dir.join(library_name());
+        let nowhere = dir.join("nowhere.so");
+        std::fs::write(&beside, b"x").unwrap();
+        let env = |value: &str| Some(OsString::from(value));
+
+        assert_eq!(source_of(env("off"), Some(beside.clone())), Source::Off);
+        assert_eq!(
+            source_of(env("/opt/h264.so"), Some(beside.clone())),
+            Source::File("/opt/h264.so".into())
+        );
+        assert_eq!(
+            source_of(env(""), Some(beside.clone())),
+            Source::File(beside.clone())
+        );
+        assert_eq!(source_of(None, Some(beside.clone())), Source::File(beside));
+        assert_eq!(source_of(None, Some(nowhere)), Source::Missing);
+        assert_eq!(source_of(None, None), Source::Missing);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_file_that_is_not_cisco_s_build_is_refused_and_named() {
+        let dir = scratch("refused");
+        let path = dir.join(library_name());
+        std::fs::write(&path, b"not a library").unwrap();
+        let refused = load(&File::open(&path).unwrap(), &path)
+            .err()
+            .expect("an unknown file must not load");
+        assert_eq!(refused.name, LIBRARY);
+        assert_eq!(refused.state, LibraryState::Refused);
+        let detail = refused.detail.unwrap();
+        assert!(detail.contains(&path.display().to_string()), "{detail}");
+        assert!(
+            detail.contains(&sha256_of(&dir, b"not a library")),
+            "{detail}"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn the_file_checked_is_the_file_opened_even_when_the_path_is_replaced() {
+        let dir = scratch("swap");
+        let path = dir.join(library_name());
+        std::fs::write(&path, b"the file that was opened").unwrap();
+        let opened = File::open(&path).unwrap();
+        let other = dir.join("other.so");
+        std::fs::write(&other, b"a file put there later").unwrap();
+        std::fs::rename(&other, &path).unwrap();
+
+        let detail = load(&opened, &path).err().unwrap().detail.unwrap();
+        assert!(
+            detail.contains(&sha256_of(&dir, b"the file that was opened")),
+            "{detail}"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// The hash the loader reports for some bytes, read from a file of their own.
+    fn sha256_of(dir: &Path, bytes: &[u8]) -> String {
+        let path = dir.join("hash-me");
+        std::fs::write(&path, bytes).unwrap();
+        let detail = load(&File::open(&path).unwrap(), &path)
+            .err()
+            .unwrap()
+            .detail
+            .unwrap();
+        let sha256 = detail.rsplit("SHA-256 ").next().unwrap();
+        sha256.trim_end_matches(')').to_owned()
+    }
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("anyplay-openh264-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
     /// Cisco's library, when this machine has it (`ANYPLAY_OPENH264` or beside the test
     /// binary). The round trip below skips without it, as the Windows one does without an
-    /// encoder.
+    /// encoder; with `ANYPLAY_OPENH264` set (CI sets it) a library that does not load fails.
     fn have_library() -> bool {
         match api() {
             Ok(_) => true,
+            // Only a file named in the variable must load; empty and `off` skip like no file.
+            Err(why)
+                if matches!(
+                    source_of(std::env::var_os(LIBRARY_ENV), None),
+                    Source::File(_)
+                ) =>
+            {
+                panic!("{LIBRARY_ENV} is set, but: {why}")
+            }
             Err(why) => {
                 eprintln!("skipped: {why}");
                 false
@@ -337,6 +521,8 @@ mod tests {
         });
         let mut encoder = OhEncoder::open(setup).unwrap();
         let mut decoder = OhDecoder::open().unwrap();
+        // Both came from the one file held open, so its name stayed that file's.
+        assert!(LOADED.get().is_some(), "the loaded library's file is held");
         let mut pattern = anyplay_share::testcodec::TestPattern::default();
         let mut shown = 0;
         let mut keys = 0;

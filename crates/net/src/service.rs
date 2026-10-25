@@ -1227,6 +1227,15 @@ impl Service {
                             encoders: codecs(capabilities.encode),
                             decoders: codecs(capabilities.decode),
                             capture: capabilities.capture,
+                            libraries: capabilities
+                                .libraries
+                                .into_iter()
+                                .map(|library| control::ScreenLibrary {
+                                    name: library.name,
+                                    state: library.state.as_str().into(),
+                                    detail: library.detail,
+                                })
+                                .collect(),
                         },
                     );
                 }

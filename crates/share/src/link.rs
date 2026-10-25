@@ -25,6 +25,49 @@ pub struct Capabilities {
     /// It can capture the game's window.
     #[serde(default)]
     pub capture: bool,
+    /// The codec libraries it loads while it runs (OpenH264 on Linux) and how each stands.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub libraries: Vec<CodecLibrary>,
+}
+
+/// A codec library the worker loads while it runs instead of carrying it, and whether it could.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CodecLibrary {
+    /// Which library: `openh264`.
+    pub name: String,
+    pub state: LibraryState,
+    /// More about the state when there is more to say: the file, the error, the hash it refused.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+}
+
+/// How a codec library stands.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LibraryState {
+    /// Loaded: its codecs are in `encode` and `decode`.
+    Ready,
+    /// The player turned it off.
+    Off,
+    /// Not installed.
+    Missing,
+    /// A file is there, but not a build the worker may load (its hash is not a known one).
+    Refused,
+    /// A file that could not be read, or a known build that would not load.
+    Failed,
+}
+
+impl LibraryState {
+    /// The state's name on the wire.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            LibraryState::Ready => "ready",
+            LibraryState::Off => "off",
+            LibraryState::Missing => "missing",
+            LibraryState::Refused => "refused",
+            LibraryState::Failed => "failed",
+        }
+    }
 }
 
 /// A new setup for a running worker: the streamer's worker starts encoding with it and the
@@ -334,5 +377,37 @@ mod tests {
             ToWorker::from_frame(&Frame::new(KIND_RATE, vec![1, 2])),
             None
         );
+    }
+
+    #[test]
+    fn capabilities_name_their_codec_library_and_older_ones_still_read() {
+        let old: Capabilities =
+            serde_json::from_str(r#"{"encode":[],"decode":[],"capture":true}"#).unwrap();
+        assert!(old.libraries.is_empty());
+        assert!(!serde_json::to_string(&old).unwrap().contains("libraries"));
+
+        let now = Capabilities {
+            libraries: vec![CodecLibrary {
+                name: "openh264".into(),
+                state: LibraryState::Refused,
+                detail: Some("not a known build".into()),
+            }],
+            ..old
+        };
+        let json = serde_json::to_string(&now).unwrap();
+        assert!(json.contains(
+            r#""libraries":[{"name":"openh264","state":"refused","detail":"not a known build"}]"#
+        ));
+        assert_eq!(serde_json::from_str::<Capabilities>(&json).unwrap(), now);
+        for state in [
+            LibraryState::Ready,
+            LibraryState::Off,
+            LibraryState::Missing,
+            LibraryState::Refused,
+            LibraryState::Failed,
+        ] {
+            let wire = serde_json::to_string(&state).unwrap();
+            assert_eq!(wire, format!("\"{}\"", state.as_str()));
+        }
     }
 }

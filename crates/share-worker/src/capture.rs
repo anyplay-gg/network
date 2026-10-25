@@ -173,7 +173,7 @@ mod windows_source {
     };
     use windows_capture::window::Window;
 
-    use crate::host::FrameSource;
+    use crate::host::{FrameSource, Next};
 
     /// The newest picture, and whether the capture has ended.
     #[derive(Default)]
@@ -265,28 +265,32 @@ mod windows_source {
     }
 
     impl FrameSource for WindowSource {
-        fn next_frame(&mut self) -> Option<Frame> {
+        fn next_frame(&mut self) -> Next {
             let (lock, ready) = &*self.shared;
             let mut slot = lock.lock().unwrap_or_else(|e| e.into_inner());
-            loop {
-                if let Some(frame) = slot.frame.take() {
-                    self.last = Some(frame.clone());
-                    return Some(frame);
-                }
-                if slot.ended {
-                    return None;
-                }
-                // Nothing new: the window did not change. The last picture goes again, with the
-                // time of now, so that the stream does not stall.
-                if let Some(last) = &mut self.last {
-                    last.timestamp_us = self.started.elapsed().as_micros() as u32;
-                    return Some(last.clone());
-                }
-                // Nothing yet: wait for the first picture.
+            if slot.frame.is_none() && !slot.ended && self.last.is_none() {
+                // Nothing yet: wait a little for the first picture, then let the caller take
+                // its messages.
                 slot = ready
                     .wait_timeout(slot, Duration::from_millis(250))
                     .unwrap_or_else(|e| e.into_inner())
                     .0;
+            }
+            if let Some(frame) = slot.frame.take() {
+                self.last = Some(frame.clone());
+                return Next::Picture(frame);
+            }
+            if slot.ended {
+                return Next::Ended;
+            }
+            // Nothing new: the window did not change. The last picture goes again, with the time
+            // of now, so that the stream does not stall.
+            match &mut self.last {
+                Some(last) => {
+                    last.timestamp_us = self.started.elapsed().as_micros() as u32;
+                    Next::Picture(last.clone())
+                }
+                None => Next::NotYet,
             }
         }
     }
@@ -315,7 +319,7 @@ mod pipewire_source {
     use pw::spa::pod::Pod;
 
     use super::{PixelOrder, pack_bgra};
-    use crate::host::FrameSource;
+    use crate::host::{FrameSource, Next};
     use crate::portal::PortalWindow;
 
     /// The newest picture, and whether the stream has ended.
@@ -533,9 +537,13 @@ mod pipewire_source {
         Ok(())
     }
 
-    /// The formats the worker takes: 32-bit RGB in either order, any size, at most 60 pictures a
-    /// second (the most a stream takes; more would only be copied and dropped). No DMA-BUF
-    /// modifiers are offered, so the compositor sends pictures in shared memory.
+    /// The most pictures a second taken from the compositor: what Linux's only encoder, OpenH264
+    /// in software, sends (more would only be copied and dropped).
+    const MAX_FPS: u32 = crate::limits::Limits::SOFTWARE.fps;
+
+    /// The formats the worker takes: 32-bit RGB in either order, any size, at most [`MAX_FPS`]
+    /// pictures a second. No DMA-BUF modifiers are offered, so the compositor sends pictures in
+    /// shared memory.
     fn format_param() -> Option<Vec<u8>> {
         let object = pw::spa::pod::object!(
             pw::spa::utils::SpaTypes::ObjectParamFormat,
@@ -584,9 +592,15 @@ mod pipewire_source {
                 Choice,
                 Range,
                 Fraction,
-                pw::spa::utils::Fraction { num: 60, denom: 1 },
+                pw::spa::utils::Fraction {
+                    num: MAX_FPS,
+                    denom: 1
+                },
                 pw::spa::utils::Fraction { num: 0, denom: 1 },
-                pw::spa::utils::Fraction { num: 60, denom: 1 }
+                pw::spa::utils::Fraction {
+                    num: MAX_FPS,
+                    denom: 1
+                }
             ),
         );
         pw::spa::pod::serialize::PodSerializer::serialize(
@@ -598,27 +612,32 @@ mod pipewire_source {
     }
 
     impl FrameSource for PipeWireSource {
-        fn next_frame(&mut self) -> Option<Frame> {
+        fn next_frame(&mut self) -> Next {
             let (lock, ready) = &*self.shared;
             let mut slot = lock.lock().unwrap_or_else(|e| e.into_inner());
-            loop {
-                if let Some(frame) = slot.frame.take() {
-                    self.last = Some(frame.clone());
-                    return Some(frame);
-                }
-                if slot.ended {
-                    return None;
-                }
-                // Nothing new: the window did not change. The last picture goes again, with the
-                // time of now, so that the stream does not stall.
-                if let Some(last) = &mut self.last {
-                    last.timestamp_us = self.started.elapsed().as_micros() as u32;
-                    return Some(last.clone());
-                }
+            if slot.frame.is_none() && !slot.ended && self.last.is_none() {
+                // Nothing yet: wait a little for the first picture, then let the caller take
+                // its messages.
                 slot = ready
                     .wait_timeout(slot, Duration::from_millis(250))
                     .unwrap_or_else(|e| e.into_inner())
                     .0;
+            }
+            if let Some(frame) = slot.frame.take() {
+                self.last = Some(frame.clone());
+                return Next::Picture(frame);
+            }
+            if slot.ended {
+                return Next::Ended;
+            }
+            // Nothing new: the window did not change. The last picture goes again, with the time
+            // of now, so that the stream does not stall.
+            match &mut self.last {
+                Some(last) => {
+                    last.timestamp_us = self.started.elapsed().as_micros() as u32;
+                    Next::Picture(last.clone())
+                }
+                None => Next::NotYet,
             }
         }
     }
@@ -631,6 +650,74 @@ mod pipewire_source {
             if let Some(thread) = self.thread.take() {
                 let _ = thread.join();
             }
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use pw::spa::pod::{ChoiceValue, Value, deserialize::PodDeserializer};
+        use pw::spa::utils::{Choice, ChoiceEnum, Fraction};
+
+        #[test]
+        fn the_compositor_is_asked_for_no_more_pictures_than_the_encoder_sends() {
+            let bytes = format_param().unwrap();
+            let Ok((_, Value::Object(format))) = PodDeserializer::deserialize_any_from(&bytes)
+            else {
+                panic!("the format is not an object");
+            };
+            let rate = format
+                .properties
+                .iter()
+                .find(|p| {
+                    p.key == pw::spa::param::format::FormatProperties::VideoFramerate.as_raw()
+                })
+                .map(|p| &p.value);
+            let Some(Value::Choice(ChoiceValue::Fraction(Choice(
+                _,
+                ChoiceEnum::Range { default, max, .. },
+            )))) = rate
+            else {
+                panic!("no frame rate range: {rate:?}");
+            };
+            let most = Fraction {
+                num: crate::limits::Limits::SOFTWARE.fps,
+                denom: 1,
+            };
+            assert_eq!((*default, *max), (most, most));
+        }
+
+        /// A source whose stream has given nothing yet.
+        fn waiting() -> PipeWireSource {
+            PipeWireSource {
+                shared: Arc::default(),
+                stop: None,
+                thread: None,
+                last: None,
+                started: Instant::now(),
+                _window: None,
+            }
+        }
+
+        #[test]
+        fn before_the_first_picture_the_source_answers_not_yet_after_a_short_wait() {
+            let mut source = waiting();
+            let asked = Instant::now();
+            assert!(matches!(source.next_frame(), Next::NotYet));
+            assert!(asked.elapsed() < Duration::from_secs(1));
+
+            let picture = Frame {
+                width: 2,
+                height: 2,
+                timestamp_us: 0,
+                bgra: vec![0; 16],
+            };
+            source.shared.0.lock().unwrap().frame = Some(picture);
+            assert!(matches!(source.next_frame(), Next::Picture(_)));
+            // Nothing new: the last picture again, not "not yet".
+            assert!(matches!(source.next_frame(), Next::Picture(_)));
+            end(&source.shared);
+            assert!(matches!(source.next_frame(), Next::Ended));
         }
     }
 }
@@ -660,7 +747,7 @@ mod tests {
     fn the_capture_ends_when_its_stream_goes_away() {
         use std::time::{Duration, Instant};
 
-        use crate::host::FrameSource;
+        use crate::host::{FrameSource, Next};
 
         // A live test picture published as a PipeWire node, as a window's stream is.
         let name = format!("anyplay-capture-test-{}", std::process::id());
@@ -687,14 +774,16 @@ mod tests {
             panic!("the test picture's node did not appear");
         };
         let mut source = super::pipewire_source::PipeWireSource::open_local(node).unwrap();
-        let first = source.next_frame().expect("a picture");
+        let first = source
+            .wait_frame(Duration::from_secs(5))
+            .expect("a picture");
         assert_eq!((first.width, first.height), (320, 240));
 
         // The window closes: its node goes away, and so must the capture.
         publisher.kill().unwrap();
         let _ = publisher.wait();
         let deadline = Instant::now() + Duration::from_secs(3);
-        while source.next_frame().is_some() {
+        while !matches!(source.next_frame(), Next::Ended) {
             assert!(
                 Instant::now() < deadline,
                 "the capture went on after its stream went away"

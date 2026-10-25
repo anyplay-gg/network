@@ -10,10 +10,35 @@ use anyplay_share::testcodec::TestPattern;
 
 use crate::Port;
 
+/// What a source gives when asked for a picture.
+#[derive(Debug)]
+pub enum Next {
+    Picture(Frame),
+    /// No picture yet since the start (a window that has not drawn); the source waited a
+    /// little and the caller asks again after taking its messages.
+    NotYet,
+    /// The source has ended (the window closed).
+    Ended,
+}
+
 /// Where pictures come from.
 pub trait FrameSource {
-    /// The next picture, or `None` when the source has ended (the window closed).
-    fn next_frame(&mut self) -> Option<Frame>;
+    /// The next picture. Never blocks for long: before the first picture it answers
+    /// [`Next::NotYet`] after a short wait, so that a stop still gets through.
+    fn next_frame(&mut self) -> Next;
+
+    /// Waits up to `limit` for a picture: `None` when the source ended or none came in time.
+    fn wait_frame(&mut self, limit: Duration) -> Option<Frame> {
+        let deadline = Instant::now() + limit;
+        loop {
+            match self.next_frame() {
+                Next::Picture(frame) => return Some(frame),
+                Next::Ended => return None,
+                Next::NotYet if Instant::now() >= deadline => return None,
+                Next::NotYet => {}
+            }
+        }
+    }
 }
 
 /// The test pattern as a source: 320 by 180, the frame number in its pixels.
@@ -21,8 +46,8 @@ pub trait FrameSource {
 pub struct PatternSource(pub TestPattern);
 
 impl FrameSource for PatternSource {
-    fn next_frame(&mut self) -> Option<Frame> {
-        Some(self.0.next_frame())
+    fn next_frame(&mut self) -> Next {
+        Next::Picture(self.0.next_frame())
     }
 }
 
@@ -158,9 +183,14 @@ pub fn run_with(mut source: Box<dyn FrameSource>, mut make_encoder: EncoderFacto
             // Far behind: do not rush a burst of pictures to catch up.
             next = now;
         }
-        let Some(frame) = source.next_frame() else {
-            let _ = to_service.send(FromWorker::Ended("the picture source ended".into()));
-            return;
+        let frame = match source.next_frame() {
+            Next::Picture(frame) => frame,
+            // Back to the messages: a stop gets through while the window has not drawn.
+            Next::NotYet => continue,
+            Next::Ended => {
+                let _ = to_service.send(FromWorker::Ended("the picture source ended".into()));
+                return;
+            }
         };
         let encoded = match encoder.encode(&frame, state.key_wanted) {
             Ok(encoded) => encoded,
@@ -206,5 +236,56 @@ pub fn run_with(mut source: Box<dyn FrameSource>, mut make_encoder: EncoderFacto
                 return;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::mpsc;
+
+    use anyplay_share::testcodec::TestEncoder;
+
+    use super::*;
+
+    /// A window that never draws.
+    struct NeverDraws;
+
+    impl FrameSource for NeverDraws {
+        fn next_frame(&mut self) -> Next {
+            std::thread::sleep(Duration::from_millis(20));
+            Next::NotYet
+        }
+    }
+
+    #[test]
+    fn a_stop_gets_through_while_the_window_has_not_drawn() {
+        let (to_worker, from_service) = mpsc::channel();
+        let (to_service, _from_worker) = mpsc::channel();
+        let (done_tx, done) = mpsc::channel();
+        std::thread::spawn(move || {
+            let port = Port {
+                from_service,
+                to_service,
+            };
+            run(Box::new(NeverDraws), Box::new(TestEncoder::new(60)), port);
+            let _ = done_tx.send(());
+        });
+        let start = Start {
+            epoch: 0,
+            codec: "test".into(),
+            width: 320,
+            height: 180,
+            fps: 30,
+            kbps: 1000,
+            parity_percent: 0,
+            max_payload: 1200,
+        };
+        to_worker.send(ToWorker::Start(start)).unwrap();
+        std::thread::sleep(Duration::from_millis(200));
+        to_worker.send(ToWorker::Stop).unwrap();
+        done.recv_timeout(Duration::from_secs(2))
+            .expect("the stop got through");
+        // Held until here: a hang-up would end the loop too, and is not what is tested.
+        drop(to_worker);
     }
 }

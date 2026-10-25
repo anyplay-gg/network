@@ -58,11 +58,14 @@ pub fn test_codec_caps() -> CodecCaps {
 /// it is built (Windows, Linux).
 pub fn capabilities() -> Capabilities {
     #[cfg(windows)]
-    let (mut encode, mut decode) = mf::capabilities();
+    let ((mut encode, mut decode), libraries) = (mf::capabilities(), Vec::new());
     #[cfg(target_os = "linux")]
-    let (mut encode, mut decode) = oh264::capabilities();
+    let (mut encode, mut decode, libraries) = {
+        let (encode, decode, openh264) = oh264::capabilities();
+        (encode, decode, vec![openh264])
+    };
     #[cfg(not(any(windows, target_os = "linux")))]
-    let (mut encode, mut decode) = (Vec::new(), Vec::new());
+    let (mut encode, mut decode, libraries) = (Vec::new(), Vec::new(), Vec::new());
     // After the real codecs: the net service prefers the first both sides have.
     encode.push(test_codec_caps());
     decode.push(test_codec_caps());
@@ -70,6 +73,7 @@ pub fn capabilities() -> Capabilities {
         encode,
         decode,
         capture: cfg!(any(windows, target_os = "linux")),
+        libraries,
     }
 }
 
