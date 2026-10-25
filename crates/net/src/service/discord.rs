@@ -23,6 +23,9 @@ pub(super) struct DiscordSide {
     busy: bool,
     /// What the launcher was last told.
     told: Option<DiscordInfo>,
+    /// Saves and deletions of the refresh token, done one after the other in the order they were
+    /// asked, by a thread of their own (the credential store blocks).
+    writer: Option<std::sync::mpsc::Sender<Option<SavedDiscord>>>,
 }
 
 impl DiscordSide {
@@ -33,6 +36,7 @@ impl DiscordSide {
             snapshot,
             busy: false,
             told: None,
+            writer: None,
         }
     }
 
@@ -80,10 +84,27 @@ impl Service {
         self.store.as_ref().map(|store| store.discord())
     }
 
-    fn discord_forget_token(&self) {
-        if let Some(store) = self.discord_store() {
-            std::thread::spawn(move || store.save_discord(None));
+    /// Keeps the refresh token, or forgets it when `None`. Changes are applied in order.
+    fn discord_persist(&mut self, saved: Option<SavedDiscord>) {
+        if self.discord.writer.is_none() {
+            let Some(store) = self.discord_store() else {
+                return;
+            };
+            let (tx, rx) = std::sync::mpsc::channel::<Option<SavedDiscord>>();
+            std::thread::spawn(move || {
+                for saved in rx {
+                    store.save_discord(saved.as_ref());
+                }
+            });
+            self.discord.writer = Some(tx);
         }
+        if let Some(writer) = &self.discord.writer {
+            let _ = writer.send(saved);
+        }
+    }
+
+    fn discord_forget_token(&mut self) {
+        self.discord_persist(None);
     }
 
     pub(super) fn discord_connect(&mut self, id: u64) {
@@ -169,13 +190,10 @@ impl Service {
         tokens: anyplay_api::DiscordTokens,
     ) {
         self.discord.busy = false;
-        if let Some(store) = self.discord_store() {
-            let saved = SavedDiscord {
-                account,
-                refresh: tokens.refresh.clone(),
-            };
-            std::thread::spawn(move || store.save_discord(Some(&saved)));
-        }
+        self.discord_persist(Some(SavedDiscord {
+            account,
+            refresh: tokens.refresh.clone(),
+        }));
         if let Err(error) = self.discord.social.connect(&tokens.access) {
             self.discord_notice(&error.to_string());
         }
