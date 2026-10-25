@@ -393,7 +393,7 @@ A **party** is up to 8 friends who stay together across games, with one chat. It
 
 ## Join codes
 
-A **join code** lets someone who is not a friend, a Discord friend for example, ask to join a player's game. It is a short random token that the cloud issues to an account and that stands for that account, not for a session or a party ([ADR 0022](../docs/adr/0022-a-join-link-asks-it-never-joins.md)). The launcher puts it in a link, `<web>/join/<code>`, that the player's Discord profile shows as a button. The link never starts anything by itself: the page offers to open the launcher, the launcher redeems the code, and what comes back is an ordinary invitation that the player accepts or declines.
+A **join code** lets someone who is not a friend, a Discord friend for example, ask to join a player's game. It is a short random token that the cloud issues to an account and that stands for that account, not for a session or a party ([ADR 0023](../docs/adr/0023-a-join-link-asks-it-never-joins.md)). The launcher puts it in a link, `<web>/join/<code>`, that the player's Discord profile shows as a button. The link never starts anything by itself: the page offers to open the launcher, the launcher redeems the code, and what comes back is an ordinary invitation that the player accepts or declines.
 
 | Request | Body | Answer |
 |---|---|---|
