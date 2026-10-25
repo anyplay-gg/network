@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 use std::net::Ipv4Addr;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use iroh::endpoint::{Connection, presets};
 use iroh::{
@@ -18,6 +18,14 @@ use tokio::task::JoinHandle;
 
 use crate::traffic::{LARGEST_STREAMED_DATAGRAM, Traffic};
 use crate::{screen, voice};
+
+/// A connection that held at least this long counts as good: the next dial starts over at
+/// `FIRST_PAUSE`.
+const GOOD_CONNECTION: Duration = Duration::from_secs(10);
+/// The wait before the first redial, doubled after every connection that failed or ended early.
+const FIRST_PAUSE: Duration = Duration::from_millis(500);
+/// The longest wait between two dials.
+const LONGEST_PAUSE: Duration = Duration::from_secs(30);
 
 /// The protocol inside every tunnel.
 pub const ALPN: &[u8] = b"anyplay/tunnel/0";
@@ -330,7 +338,7 @@ impl Tunnels {
 
     /// Dials `id` until a tunnel stands or the peer is no longer wanted.
     async fn dial(self, id: EndpointId) {
-        let mut pause = Duration::from_millis(500);
+        let mut pause = FIRST_PAUSE;
         loop {
             let relay = {
                 let state = self.lock();
@@ -347,21 +355,24 @@ impl Tunnels {
                 .await
             {
                 Ok(Ok(connection)) => {
-                    if self.adopt(id, connection.clone()) {
-                        let ended = self.clone().watch(id, connection).await;
-                        if !ended {
-                            return;
-                        }
-                        pause = Duration::from_millis(500);
-                        continue;
+                    if !self.adopt(id, connection.clone()) {
+                        return;
                     }
-                    return;
+                    let since = Instant::now();
+                    if !self.clone().watch(id, connection).await {
+                        return;
+                    }
+                    // A connection that ends at once (the other side does not list this one
+                    // yet) must not be redialed in a tight loop.
+                    if since.elapsed() >= GOOD_CONNECTION {
+                        pause = FIRST_PAUSE;
+                    }
                 }
                 Ok(Err(error)) => tracing::debug!("dial {}: {error}", id.fmt_short()),
                 Err(_) => tracing::debug!("dial {}: no answer", id.fmt_short()),
             }
             tokio::time::sleep(pause).await;
-            pause = (pause * 2).min(Duration::from_secs(30));
+            pause = (pause * 2).min(LONGEST_PAUSE);
         }
     }
 

@@ -289,3 +289,78 @@ async fn a_relay_only_tunnel_carries_game_traffic_through_the_relay() {
     a.tunnels.close().await;
     b.tunnels.close().await;
 }
+
+/// Two sides, the first one dials (the smaller endpoint ID dials).
+async fn dialer_and_acceptor(relay: &support::relay::TestRelay) -> (Side, Side) {
+    let one = side(relay, true).await;
+    let two = side(relay, true).await;
+    if one.tunnels.id() < two.tunnels.id() {
+        (one, two)
+    } else {
+        (two, one)
+    }
+}
+
+/// Connections that end at once are redialed with a growing pause, not in a tight loop.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_tunnel_that_ends_at_once_is_redialed_with_a_growing_pause() {
+    let relay = support::relay::start().await;
+    let (mut dialer, acceptor) = dialer_and_acceptor(&relay).await;
+    // The acceptor does not list the dialer, so it closes every connection as soon as it
+    // arrives.
+    dialer.tunnels.set_peers(HashMap::from([(
+        acceptor.tunnels.id(),
+        peer(2, B, &acceptor),
+    )]));
+
+    // Every connection that ends reports `Connecting` again; the first report is the start.
+    let window = tokio::time::sleep(Duration::from_secs(4));
+    tokio::pin!(window);
+    let mut ends = 0u32;
+    loop {
+        tokio::select! {
+            _ = &mut window => break,
+            change = dialer.changes.recv() => {
+                if change.expect("changes").link == Link::Connecting {
+                    ends += 1;
+                }
+            }
+        }
+    }
+    println!("{ends} connection reports in 4 s");
+    // Attempts at about 0, 0.5, 1.5 and 3.5 s.
+    assert!(
+        (1..=7).contains(&ends),
+        "{ends} connection reports in 4 s, a growing pause allows about 5"
+    );
+    dialer.tunnels.close().await;
+    acceptor.tunnels.close().await;
+}
+
+/// A connection that held for a while is redialed after the first, short pause.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_tunnel_that_held_for_a_while_is_redialed_quickly() {
+    let relay = support::relay::start().await;
+    let (mut dialer, mut acceptor) = dialer_and_acceptor(&relay).await;
+    let listed = |of: &Side, account, address| HashMap::from([(of.tunnels.id(), peer(account, address, of))]);
+    dialer.tunnels.set_peers(listed(&acceptor, 2, B));
+    acceptor.tunnels.set_peers(listed(&dialer, 1, A));
+    linked(&mut dialer.changes).await;
+    linked(&mut acceptor.changes).await;
+
+    // Hold it past the good-connection mark, then end it from the acceptor's side.
+    tokio::time::sleep(Duration::from_millis(10_500)).await;
+    acceptor.tunnels.set_peers(HashMap::new());
+    acceptor.tunnels.set_peers(listed(&dialer, 1, A));
+    while acceptor.changes.try_recv().is_ok() {}
+    while dialer.changes.try_recv().is_ok() {}
+    let ended = std::time::Instant::now();
+    linked(&mut dialer.changes).await;
+    let took = ended.elapsed();
+    assert!(
+        took < Duration::from_millis(2500),
+        "redial took {took:?} after a good connection"
+    );
+    dialer.tunnels.close().await;
+    acceptor.tunnels.close().await;
+}
