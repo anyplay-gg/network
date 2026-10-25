@@ -1,0 +1,16 @@
+name: merge-notify
+
+# What reached main, posted to Discord (anyplaynet/.github, merge-notify.yml).
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  notify:
+    uses: anyplaynet/.github/.github/workflows/merge-notify.yml@main
+    secrets:
+      webhook: ${{ secrets.DISCORD_MERGES_WEBHOOK }}
