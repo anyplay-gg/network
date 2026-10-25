@@ -22,6 +22,7 @@ Status: **offered**, with a body shape that is a guess until a game we own has a
 ## What the game did
 
 - **"Not offered"** (status 0): the game showed error E011-9 and asked again, about 10 times a second.
+- **200 `{"restricted":false}`** with `Content-Type: application/json`, the net service's default (`f522c5d`), given through the overrides file with the same shape: the game read the 20-byte body (`sceNpWebApi2ReadData`, then a read of 0 bytes), asked 7 times in about 2 seconds, stopped, and went on. Next it asked `userProfile` for the player's friends and own profile, which are not offered, and then called its publisher's own service directory over HTTPS. The host screen then showed error E000-1, which belongs to the publisher's service, not to this group.
 
 ## What the net service answers
 
@@ -58,6 +59,6 @@ The body shape is unknown. Point the net service at a JSON file with `ANYPLAY_NE
 
 ## Unknown
 
-- The body fields, status and headers the game accepts, and whether it reads the body at all.
+- Which other body fields, statuses and headers the game accepts. It reads the body, and `{"restricted":false}` with status 200 is enough to pass; other shapes have not been tried.
 - Whether the game sends the same request for other users (friends, session members) and what it wants then.
 - What the game does when the answer is "restricted".
