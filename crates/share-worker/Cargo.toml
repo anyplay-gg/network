@@ -26,7 +26,6 @@ mp4 = "0.14"
 # Capture of one window, and a window for the viewer. All of it ships with the system or is
 # MIT or Apache-2.0 (docs/adr/0027).
 [target.'cfg(windows)'.dependencies]
-minifb = "0.28"
 windows = { version = "0.62", features = [
     "Win32_Foundation",
     "Win32_Graphics_Dwm",
@@ -37,6 +36,16 @@ windows = { version = "0.62", features = [
     "Win32_UI_WindowsAndMessaging",
 ] }
 windows-capture = "2"
+
+# Linux: the desktop portal's ScreenCast (the player picks the game's window in the system's
+# own dialog) through ashpd (MIT), on a small tokio runtime of its own.
+[target.'cfg(target_os = "linux")'.dependencies]
+ashpd = { version = "0.13", default-features = false, features = ["tokio", "screencast"] }
+tokio = { version = "1.54", features = ["rt"] }
+
+# The viewer's window (MIT or Apache-2.0), on Windows and on Linux (X11 and Wayland).
+[target.'cfg(any(windows, target_os = "linux"))'.dependencies]
+minifb = "0.28"
 
 [dev-dependencies]
 anyplay-control = { path = "../control" }

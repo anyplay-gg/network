@@ -13,9 +13,11 @@ pub mod clips;
 pub mod host;
 #[cfg(windows)]
 pub mod mf;
+#[cfg(target_os = "linux")]
+pub mod portal;
 pub mod socket;
 pub mod viewer;
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 pub mod window;
 
 use std::sync::mpsc;
