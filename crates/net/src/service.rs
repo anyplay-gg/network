@@ -3178,9 +3178,24 @@ impl Service {
             relay,
         };
         let party = host.party;
+        // The game this session is for. The answer may come after that game ended or after
+        // another one began; then the session belongs to no game and is left at once.
+        let game_token = self.game.as_ref().map(|g| g.token.clone());
         self.spawn(
             async move { cloud.create_session(&body).await },
             move |service, result| match result {
+                Ok(session)
+                    if game_token.is_none()
+                        || service.game.as_ref().map(|g| &g.token) != game_token.as_ref() =>
+                {
+                    service.leave_orphan(session.id);
+                    service.ok(id, GameStarted { env, session: None });
+                }
+                Ok(session) if session.kind != SessionKind::Lan => {
+                    service.host_failed("The cloud does not support Play Together yet.");
+                    service.leave_orphan(session.id);
+                    service.ok(id, GameStarted { env, session: None });
+                }
                 Ok(session) => {
                     let session_id = session.id.clone();
                     if let Some(game) = &mut service.game {
@@ -3206,6 +3221,13 @@ impl Service {
                 }
             },
         );
+    }
+
+    /// Leaves a session that was opened for a game that is gone.
+    fn leave_orphan(&mut self, session: String) {
+        if let Some(cloud) = self.cloud.clone() {
+            self.spawn(async move { cloud.leave(&session).await }, |_, _| {});
+        }
     }
 
     fn host_failed(&mut self, message: &str) {
