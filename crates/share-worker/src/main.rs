@@ -120,7 +120,7 @@ fn frame_source(
 
 /// The viewer's window: "title" and, until the game's sound is carried, a note that there is
 /// none.
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 fn sink(title: &str, headless: bool) -> Box<dyn FrameSink> {
     if headless {
         return Box::new(anyplay_share_worker::viewer::NullSink);
@@ -131,7 +131,7 @@ fn sink(title: &str, headless: bool) -> Box<dyn FrameSink> {
     )))
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "linux")))]
 fn sink(_title: &str, _headless: bool) -> Box<dyn FrameSink> {
     Box::new(anyplay_share_worker::viewer::NullSink)
 }

@@ -5,17 +5,24 @@
 //! (`anyplay_share::link`), on a loopback socket for the real program ([`socket`]) or on
 //! channels in tests. Everything with a seam is a trait: [`host::FrameSource`] (where pictures
 //! come from: window capture, or the test pattern), `VideoEncoder` and `VideoDecoder` (H.264
-//! from the system on Windows, [`mf`]; the test codec for tests) and [`viewer::FrameSink`]
+//! from the system on Windows, [`mf`]; OpenH264 from Cisco's binary on Linux, `oh264`; the test
+//! codec for tests) and [`viewer::FrameSink`]
 //! (where pictures go: a window, or a counter in tests).
 
+pub mod annexb;
 pub mod capture;
 pub mod clips;
 pub mod host;
+pub mod limits;
 #[cfg(windows)]
 pub mod mf;
+#[cfg(target_os = "linux")]
+pub mod oh264;
+#[cfg(target_os = "linux")]
+pub mod portal;
 pub mod socket;
 pub mod viewer;
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 pub mod window;
 
 use std::sync::mpsc;
@@ -47,11 +54,14 @@ pub fn test_codec_caps() -> CodecCaps {
 }
 
 /// What this build can do on this PC: H.264 from the system where the system has it (Windows),
-/// the test codec, and window capture where it is built (Windows).
+/// from Cisco's OpenH264 where it is installed (Linux), the test codec, and window capture where
+/// it is built (Windows, Linux).
 pub fn capabilities() -> Capabilities {
     #[cfg(windows)]
     let (mut encode, mut decode) = mf::capabilities();
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    let (mut encode, mut decode) = oh264::capabilities();
+    #[cfg(not(any(windows, target_os = "linux")))]
     let (mut encode, mut decode) = (Vec::new(), Vec::new());
     // After the real codecs: the net service prefers the first both sides have.
     encode.push(test_codec_caps());
@@ -59,7 +69,7 @@ pub fn capabilities() -> Capabilities {
     Capabilities {
         encode,
         decode,
-        capture: cfg!(windows),
+        capture: cfg!(any(windows, target_os = "linux")),
     }
 }
 
@@ -84,6 +94,16 @@ pub fn encoder_for(start: &mut Start) -> Result<Box<dyn VideoEncoder>, String> {
                     .map_err(|software| format!("hardware: {why}; software: {software}"))
             })?;
             note_encoder(&encoder);
+            start.width = setup.width;
+            start.height = setup.height;
+            start.fps = setup.fps;
+            Ok(Box::new(encoder))
+        }
+        #[cfg(target_os = "linux")]
+        "h264" => {
+            let setup = limits::Limits::SOFTWARE.clamp(start);
+            let encoder = oh264::OhEncoder::open(setup)?;
+            eprintln!("share worker: encoding with OpenH264 (software)");
             start.width = setup.width;
             start.height = setup.height;
             start.fps = setup.fps;
@@ -132,8 +152,9 @@ pub fn clips_encoder(setup: &mut clips::recorder::Setup) -> Result<Box<dyn Video
     }
     #[cfg(not(windows))]
     {
+        // Linux has only OpenH264 in software, which clips never use.
         let _ = setup;
-        Err("clips are not built for this system yet".into())
+        Err("clips need a hardware encoder, which this system does not have yet".into())
     }
 }
 
@@ -143,6 +164,10 @@ pub fn decoder_for(codec: &str) -> Option<Box<dyn VideoDecoder>> {
         "test" => Some(Box::new(anyplay_share::testcodec::TestDecoder::new())),
         #[cfg(windows)]
         "h264" => mf::MfDecoder::open()
+            .ok()
+            .map(|d| Box::new(d) as Box<dyn VideoDecoder>),
+        #[cfg(target_os = "linux")]
+        "h264" => oh264::OhDecoder::open()
             .ok()
             .map(|d| Box::new(d) as Box<dyn VideoDecoder>),
         _ => None,
