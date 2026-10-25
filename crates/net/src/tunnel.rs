@@ -365,7 +365,9 @@ impl Tunnels {
                     // A connection that ends at once (the other side does not list this one
                     // yet) must not be redialed in a tight loop.
                     if since.elapsed() >= GOOD_CONNECTION {
+                        // A healthy tunnel that dropped is redialed at once, as before.
                         pause = FIRST_PAUSE;
+                        continue;
                     }
                 }
                 Ok(Err(error)) => tracing::debug!("dial {}: {error}", id.fmt_short()),

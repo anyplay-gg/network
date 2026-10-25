@@ -330,14 +330,15 @@ async fn a_tunnel_that_ends_at_once_is_redialed_with_a_growing_pause() {
     println!("{ends} connection reports in 4 s");
     // Attempts at about 0, 0.5, 1.5 and 3.5 s.
     assert!(
-        (1..=7).contains(&ends),
+        (3..=7).contains(&ends),
         "{ends} connection reports in 4 s, a growing pause allows about 5"
     );
     dialer.tunnels.close().await;
     acceptor.tunnels.close().await;
 }
 
-/// A connection that held for a while is redialed after the first, short pause.
+/// A connection that held for a while resets the pause: after short-lived connections have
+/// raised it, the redial of a healthy tunnel still comes at once.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_tunnel_that_held_for_a_while_is_redialed_quickly() {
     let relay = support::relay::start().await;
@@ -345,13 +346,17 @@ async fn a_tunnel_that_held_for_a_while_is_redialed_quickly() {
     let listed = |of: &Side, account, address| {
         HashMap::from([(of.tunnels.id(), peer(account, address, of))])
     };
+    // Short-lived connections first (the acceptor does not list the dialer yet): attempts at
+    // about 0, 0.5 and 1.5 s raise the pause to 4 s.
     dialer.tunnels.set_peers(listed(&acceptor, 2, B));
+    tokio::time::sleep(Duration::from_millis(2500)).await;
     acceptor.tunnels.set_peers(listed(&dialer, 1, A));
+    // The attempt at about 3.5 s stands.
     linked(&mut dialer.changes).await;
     linked(&mut acceptor.changes).await;
 
     // Hold it past the good-connection mark, then end it from the acceptor's side.
-    tokio::time::sleep(Duration::from_millis(10_500)).await;
+    tokio::time::sleep(Duration::from_millis(10_200)).await;
     acceptor.tunnels.set_peers(HashMap::new());
     acceptor.tunnels.set_peers(listed(&dialer, 1, A));
     while acceptor.changes.try_recv().is_ok() {}
@@ -359,8 +364,9 @@ async fn a_tunnel_that_held_for_a_while_is_redialed_quickly() {
     let ended = std::time::Instant::now();
     linked(&mut dialer.changes).await;
     let took = ended.elapsed();
+    // Without the reset the pause would still be 4 s.
     assert!(
-        took < Duration::from_millis(2500),
+        took < Duration::from_millis(1500),
         "redial took {took:?} after a good connection"
     );
     dialer.tunnels.close().await;
