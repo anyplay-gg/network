@@ -1593,8 +1593,10 @@ pub struct ApiError {
     pub message: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub until: Option<u64>,
+    /// With `version_mismatch`: what the session expects. Boxed to keep `ApiError`, which
+    /// travels in many `Result`s, small.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub expected: Option<Expected>,
+    pub expected: Option<Box<Expected>>,
     /// With `restricted`: why. `until` says when the restriction ends, if it does.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub restriction: Option<Restriction>,
@@ -2591,10 +2593,10 @@ mod tests {
     #[test]
     fn errors_round_trip_and_tolerate_new_codes() {
         let error = ApiError {
-            expected: Some(Expected {
+            expected: Some(Box::new(Expected {
                 version: "01.100".into(),
                 build: "0.1.3".into(),
-            }),
+            })),
             ..ApiError::new(ErrorCode::VersionMismatch, "Versions differ.")
         };
         let text = serde_json::to_string(&error).unwrap();
