@@ -425,6 +425,42 @@ pub struct UpdateSession {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Invite {
     pub to: Vec<AccountId>,
+    /// A party invitation only: ring. A call invitation lives [`CALL_RING_SECONDS`] instead of
+    /// 15 minutes and, unanswered, becomes a missed call.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub call: bool,
+}
+
+/// The longest Discord link of a party.
+pub const MAX_DISCORD_LINK: usize = 200;
+
+/// Whether `link` is a Discord address a party may name: `https://discord.com/channels/...` or
+/// `https://discord.gg/...`, on those hosts only (no port, no credentials), without white space.
+pub fn is_discord_link(link: &str) -> bool {
+    if link.len() > MAX_DISCORD_LINK
+        || link
+            .chars()
+            .any(|c| c.is_whitespace() || c.is_control() || c == '\\')
+    {
+        return false;
+    }
+    let Some(rest) = link.strip_prefix("https://") else {
+        return false;
+    };
+    let (host, path) = rest.split_once('/').unwrap_or((rest, ""));
+    let path = path.split(['?', '#']).next().unwrap_or("");
+    match host {
+        "discord.com" => path.starts_with("channels/") && path.len() > "channels/".len(),
+        "discord.gg" => !path.is_empty(),
+        _ => false,
+    }
+}
+
+/// How long a call rings, in seconds.
+pub const CALL_RING_SECONDS: u64 = 30;
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1126,6 +1162,19 @@ pub enum Event {
     PartyInvitationGone {
         id: String,
     },
+    /// A friend called and the call ran out or was hung up before this account answered.
+    MissedCall {
+        call: MissedCall,
+    },
+    /// A missed call was marked seen, here or on another device of this account.
+    MissedCallGone {
+        account: AccountId,
+    },
+    /// A call this account placed ended without being answered.
+    CallEnded {
+        account: AccountId,
+        reason: CallEnd,
+    },
     /// A new message in a conversation, by its number. Fetch it with
     /// `GET /v1/conversations/{id}/messages?after=<last number known>`.
     Message {
@@ -1380,6 +1429,10 @@ pub struct Party {
     /// Rises with every change to the party. A client drops a copy older than the one it has.
     #[serde(default)]
     pub revision: u64,
+    /// Where the party talks when its voice is on Discord: a `discord.com/channels` or
+    /// `discord.gg` address the leader set. Every member sees it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub discord: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1390,6 +1443,36 @@ pub struct PartyInvitation {
     /// How many members the party has now.
     pub members: u16,
     pub expires: u64,
+    /// A call: it rings, and the party is the call.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub call: bool,
+}
+
+/// A call that was not answered, shown until the callee has seen it. One per caller: a newer
+/// call replaces the older.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MissedCall {
+    pub from: Account,
+    /// When the call began, Unix seconds.
+    pub at: u64,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MissedCalls {
+    pub missed: Vec<MissedCall>,
+}
+
+/// Why a call this account placed ended before it was answered.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CallEnd {
+    /// The callee declined.
+    Declined,
+    /// The call rang out.
+    NoAnswer,
+    /// A code this version does not know.
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -1401,6 +1484,9 @@ pub struct PartyInvitations {
 pub struct UpdateParty {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub leader: Option<AccountId>,
+    /// The Discord link of the party; the empty string removes it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub discord: Option<String>,
 }
 
 /// Moves the party into a session of its leader.
@@ -1605,6 +1691,7 @@ mod join_code_tests {
             party: "P1".into(),
             members: 2,
             expires: 5,
+            call: false,
         });
         let json = serde_json::to_value(&party).unwrap();
         assert_eq!(json["kind"], "party");
@@ -2007,6 +2094,67 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&Event::SignedOut).unwrap(),
             r#"{"type":"signed_out"}"#
+        );
+    }
+
+    #[test]
+    fn only_discord_links_are_party_links() {
+        for ok in [
+            "https://discord.com/channels/1/2",
+            "https://discord.gg/nSHbHBRdS",
+            "https://discord.com/channels/1/2?x=1",
+        ] {
+            assert!(is_discord_link(ok), "{ok}");
+        }
+        for bad in [
+            "",
+            "http://discord.gg/abc",
+            "https://discord.com/",
+            "https://discord.com/channels/",
+            "https://discord.gg/",
+            "https://discord.com.evil.example/channels/1/2",
+            "https://discord.com@evil.example/channels/1",
+            "https://discord.gg:8443/abc",
+            "https://evil.example/https://discord.gg/abc",
+            "discord://discord.gg/abc",
+            "https://discord.gg/a b",
+        ] {
+            assert!(!is_discord_link(bad), "{bad}");
+        }
+    }
+
+    #[test]
+    fn calls_are_invitations_that_ring() {
+        // Older peers neither send nor know the flag.
+        let plain: Invite = serde_json::from_str(r#"{"to":[3]}"#).unwrap();
+        assert!(!plain.call);
+        assert_eq!(serde_json::to_string(&plain).unwrap(), r#"{"to":[3]}"#);
+        let ring = Invite {
+            to: vec![AccountId(3)],
+            call: true,
+        };
+        assert_eq!(
+            serde_json::to_string(&ring).unwrap(),
+            r#"{"to":[3],"call":true}"#
+        );
+        let invitation: PartyInvitation = serde_json::from_str(
+            r#"{"id":"i","from":{"id":1,"handle":"a"},"party":"p","members":1,"expires":9}"#,
+        )
+        .unwrap();
+        assert!(!invitation.call);
+        let ended: Event =
+            serde_json::from_str(r#"{"type":"call_ended","account":4,"reason":"no_answer"}"#)
+                .unwrap();
+        assert_eq!(
+            ended,
+            Event::CallEnded {
+                account: AccountId(4),
+                reason: CallEnd::NoAnswer
+            }
+        );
+        assert_eq!(
+            serde_json::from_str::<CallEnd>(r#""busy""#).unwrap(),
+            CallEnd::Unknown
         );
     }
 

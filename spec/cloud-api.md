@@ -59,11 +59,12 @@ FeedItem  { id, account, at, kind, ..., reactions, mine }   kind and its fields:
 Reactions { reactions, mine }                      reactions: { nice, gg, wow, same } counts; mine: a reaction or null
 PlaytimeEntry { title_id, day, minutes }           day: "YYYY-MM-DD" (UTC)
 TitlePlaytime { title_id, minutes }
-Party     { id, leader, members, max_members, conversation, created, revision }
+Party     { id, leader, members, max_members, conversation, created, revision, discord }   discord: a Discord link, absent when unset
 PartyMember { account, joined, endpoint, relay, voice }   endpoint: "" until announced; relay: URL or null; voice: bool
-PartyInvitation { id, from, party, members, expires }
 JoinCode  { code, url, expires }                   code: 10 characters; url: the address of the join page
 Redeemed  { kind, invitation }                     kind: "session" | "party"; invitation: Invitation or PartyInvitation
+PartyInvitation { id, from, party, members, expires, call }   call: true for a ringing call, absent otherwise
+MissedCall { from, at }                              a call nobody answered; at: Unix seconds
 Conversation { id, kind, name, members, last, read, marks, updated, request, party }   kind: "direct" | "group" | "party"
 ReadMark  { account, seq }
 Message   { conversation, seq, sender, text, created }
@@ -374,13 +375,13 @@ A **party** is up to 8 friends who stay together across games, with one chat. It
 |---|---|---|
 | `GET /v1/party` | | `Party`, or `not_found` when the caller is in none |
 | `POST /v1/party` | | `Party`: a party of one, the caller leading it. `limit` when the caller is in one already. |
-| `POST /v1/party/invitations` | `{to: [id]}` | `{sent: [id]}`: leader only; starts a party when the caller is in none |
+| `POST /v1/party/invitations` | `{to: [id], call?}` | `{sent: [id]}`: leader only; starts a party when the caller is in none |
 | `GET /v1/party/invitations` | | `{invitations: [PartyInvitation]}`: the ones the caller holds |
 | `POST /v1/party/invitations/{id}/accept` | | `Party` |
 | `DELETE /v1/party/invitations/{id}` | | 204: declines |
 | `POST /v1/party/leave` | | 204 |
 | `DELETE /v1/party/members/{account}` | | 204 (leader only) |
-| `PATCH /v1/party` | `{leader}` | `Party` (leader only; the new leader is a member) |
+| `PATCH /v1/party` | `{leader?, discord?}` | `Party` (leader only; the new leader is a member; `discord` sets the party's Discord link, the empty string removes it) |
 | `PUT /v1/party/endpoint` | `{endpoint, relay, voice}` | `Party`: tells the party where the caller's net service is |
 | `POST /v1/party/session` | `{session}` | `{sent: [id]}` (leader only) |
 
@@ -389,6 +390,7 @@ A **party** is up to 8 friends who stay together across games, with one chat. It
 - When the leader leaves, the longest-standing member leads. The last member to leave ends the party, its invitations and its chat. A member whose net service stays disconnected for 15 minutes leaves.
 - `POST /v1/party/session` moves the party into one of the leader's sessions: every other member who is not in the session gets an ordinary session invitation (see Invitations), which lets them in even when the session is for invited players only. The leader must be a member of the session, and the session must not be closed. Nothing else about the party changes; it goes on after the game.
 - `PUT /v1/party/endpoint` is how the members of a party find each other for voice ([voice](voice.md)). `endpoint` and `relay` are the caller's tunnel key and relay, as for a session `Member`, and `voice` says that the caller's net service takes part in the party's voice and accepts voice connections from the other members. The net service sends it when it joins a party, when its relay changes and when `voice` changes, and again after every reconnect. The cloud stores the three on the caller's `PartyMember`, raises the party's `revision` only when one of them changed, and answers `not_found` when the caller is in no party and `bad_request` for an `endpoint` that is not 64 lowercase hex characters or a `relay` that is not an `https` URL. Two members of one party may not name the same `endpoint`: the second request is answered `limit`. A member who has announced nothing has `endpoint` `""`, `relay` null and `voice` false. Only members of the party ever receive `endpoint` and `relay`: the invitation (`PartyInvitation`) carries neither. A net service dials only members whose `voice` is true, and accepts voice connections from every member the party lists.
+- `discord` is where the party talks when its members use Discord for voice: an `https` address on `discord.com` whose path starts with `/channels/`, or on `discord.gg`, at most 200 characters with no white space (`bad_request` otherwise). Only the leader sets it. The cloud stores it with the party and sends it to every member in `Party`; it ends with the party. Nothing in the cloud opens it.
 - The party's chat is a conversation of kind `party` (`Party.conversation`). A member sees what is written after it joined.
 
 ## Join codes
@@ -411,6 +413,24 @@ A **join code** lets someone who is not a friend, a Discord friend for example, 
 ## Shares
 
 Share play between two party members is drafted in the [share play spec](share-play.md#cloud-api): the `Share` object, `/v1/shares` and `/v1/share`, and the events `share_invitation`, `share` and `share_gone`. Not implemented.
+
+## Calls
+
+A **call** is a party invitation with `call: true` ([ADR 0026](../docs/adr/0026-a-call-is-a-party-that-rings.md)). `POST /v1/party/invitations` with `call` true behaves as for any invitation (leader only, a party is made when the caller is in none) with these differences:
+
+- The invitation lives 30 seconds. The cloud sweeps ended invitations every few seconds, so a call that rang out is reported within about 5 seconds of its end.
+- A muted account cannot call (`restricted`, `restriction: "muted"`). An account may start 10 calls a minute (`rate_limited`). A new account may call its friends, as it may write to them.
+- A friend who is in a party already, who blocked the caller or whom the caller blocked is skipped, as in any invitation; `sent` names the ones that ring.
+
+A call that ends without being answered becomes a **missed call** for the callee when it rang out or the caller left the party before it was answered; a decline is not missed. The callee gets `missed_call`; the caller gets `call_ended` with `reason` `no_answer` or `declined`. A later call from the same caller replaces the older missed call.
+
+| Request | Body | Answer |
+|---|---|---|
+| `GET /v1/calls/missed` | | `{missed: [MissedCall]}`, newest first |
+| `DELETE /v1/calls/missed` | | 204: all seen |
+| `DELETE /v1/calls/missed/{account}` | | 204: the missed call of that caller is seen |
+
+A missed call also ends when the two stop being friends or one blocks the other, and after 30 days. Seeing one sends `missed_call_gone` to the account's other devices.
 
 ## Conversations and messages
 
@@ -461,6 +481,9 @@ Every message has a number `seq` that counts up by one in its conversation, star
 | `party_gone` | `id` | This account is no longer in the party. |
 | `party_invitation` | `invitation` | The leader of a party invited this account. |
 | `party_invitation_gone` | `id` | A party invitation expired, was declined or used up. |
+| `missed_call` | `call` | A friend called and the call was not answered. |
+| `missed_call_gone` | `account` | The missed calls from that account were seen. |
+| `call_ended` | `account, reason` | A call this account placed ended unanswered: `declined` or `no_answer`. |
 | `message` | `conversation, seq` | A new message. Fetch the messages after the number you hold. It carries no text. |
 | `message_request` | `conversation` | A stranger wrote for the first time. Fetch the requests. |
 | `read` | `conversation, account, seq` | A member read up to `seq`. |
@@ -468,7 +491,7 @@ Every message has a number `seq` that counts up by one in its conversation, star
 | `conversation_gone` | `id` | This account is no longer in the conversation. |
 | `feed` | | A feed has news (a friend's new item, or a reaction to one of this account's). Fetch `GET /v1/feed`. It carries nothing; a client fetches at most every two seconds. |
 
-- After `welcome`, and after every reconnect, a client reads what it may have missed: `GET /v1/party` and `GET /v1/party/invitations`, and `GET /v1/conversations` with the messages after the numbers it holds. News is a pointer or a numbered state and may be lost; reading the state is always right.
+- After `welcome`, and after every reconnect, a client reads what it may have missed: `GET /v1/party` and `GET /v1/party/invitations`, `GET /v1/calls/missed`, and `GET /v1/conversations` with the messages after the numbers it holds. News is a pointer or a numbered state and may be lost; reading the state is always right.
 - The cloud pings every 20 seconds and closes a connection that does not answer.
 - One device holds one event connection; a new one replaces the old.
 - Close codes: 4001 the access token expired (refresh, then reconnect), 4003 banned, 4004 signed out. 1001 and 1012 mean the cloud's node is going away or restarting: reconnect at a random moment within the next 10 seconds, so that the clients of one node do not all come back at once. After any other break, a client waits half its pause plus a random part of up to the whole pause, starting at 1 second and doubling to at most 30.

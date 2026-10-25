@@ -165,6 +165,10 @@ pub struct Settings {
     /// Volume per account, 0.0 to 2.0; missing is 1.0.
     pub volumes: HashMap<u64, f32>,
     pub muted: HashSet<u64>,
+    /// The player's own microphone is muted.
+    pub mic_muted: bool,
+    /// The player hears nobody (and sends nothing).
+    pub deafened: bool,
 }
 
 /// One other member in a [`Report`].
@@ -192,6 +196,8 @@ enum Ctl {
     Mode(TalkMode),
     Volume(u64, f32),
     Muted(u64, bool),
+    MicMuted(bool),
+    Deafened(bool),
 }
 
 enum Net {
@@ -261,6 +267,14 @@ impl Hub {
         let _ = self.ctl.send(Ctl::Volume(account, volume));
     }
 
+    pub fn set_mic_muted(&self, muted: bool) {
+        let _ = self.ctl.send(Ctl::MicMuted(muted));
+    }
+
+    pub fn set_deafened(&self, deafened: bool) {
+        let _ = self.ctl.send(Ctl::Deafened(deafened));
+    }
+
     pub fn set_muted(&self, account: u64, muted: bool) {
         let _ = self.ctl.send(Ctl::Muted(account, muted));
     }
@@ -312,6 +326,8 @@ impl Task {
     async fn run(mut self, mut ctl: mpsc::UnboundedReceiver<Ctl>, mut net: mpsc::Receiver<Net>) {
         self.engine.set_mode(self.settings.mode);
         self.engine.set_talking(self.settings.talking);
+        self.engine.set_mic_muted(self.settings.mic_muted);
+        self.engine.set_deafened(self.settings.deafened);
         let mut pump = tokio::time::interval(PUMP);
         pump.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let mut report = tokio::time::interval(REPORT);
@@ -356,6 +372,14 @@ impl Task {
             Ctl::Mode(mode) => {
                 self.settings.mode = mode;
                 self.engine.set_mode(mode);
+            }
+            Ctl::MicMuted(muted) => {
+                self.settings.mic_muted = muted;
+                self.engine.set_mic_muted(muted);
+            }
+            Ctl::Deafened(deafened) => {
+                self.settings.deafened = deafened;
+                self.engine.set_deafened(deafened);
             }
             Ctl::Volume(account, volume) => {
                 self.settings.volumes.insert(account, volume);

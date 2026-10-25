@@ -182,7 +182,11 @@ _Avoid_: Host, owner
 
 **Voice connection**:
 The encrypted connection between the net services of two party members that carries their voice. It runs on the same endpoint as their tunnel and takes the same direct or relayed path, but is a connection of its own. Only members the party names can hold one.
-_Avoid_: Voice tunnel, call, voice channel (that is the party's one channel as the player sees it)
+_Avoid_: Voice tunnel, voice channel (that is the party's one channel as the player sees it)
+
+**Call**:
+A party that rings. A player calls a friend; the friend's launcher rings for 30 seconds, and accepting joins the party, which has its voice on. A group call is the party's voice. A call that nobody answers is a **missed call**. See ADR 0026.
+_Avoid_: Voice chat, ring (as a noun for the whole call)
 
 **Share play**:
 A player streams their running game to one friend in their party, who watches, plays as them, or plays beside them. The friend needs neither the game nor its files.

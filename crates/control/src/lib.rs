@@ -155,6 +155,28 @@ pub enum Command {
     /// Invites friends to the party; makes one when the player is in none.
     PartyInvite {
         accounts: Vec<AccountId>,
+        /// Ring them: a call invitation that lives 30 seconds.
+        #[serde(default)]
+        call: bool,
+    },
+    /// The calls nobody answered.
+    MissedCalls,
+    /// Marks the missed calls of one caller (or of all, when `account` is null) as seen.
+    CallsSeen {
+        #[serde(default)]
+        account: Option<AccountId>,
+    },
+    /// Sets the party's Discord link (the leader); the empty string removes it.
+    PartyLink {
+        url: String,
+    },
+    /// Mutes or unmutes the player's own microphone in party voice.
+    MicMute {
+        muted: bool,
+    },
+    /// Stops (or resumes) hearing the whole party. Deafened also silences the microphone.
+    Deafen {
+        deafened: bool,
     },
     PartyAnswer {
         #[serde(rename = "invitation")]
@@ -857,6 +879,21 @@ pub enum Event {
     PartyInvitationGone {
         id: String,
     },
+    /// Every call nobody answered, after sign-in and after every reconnect.
+    MissedCalls(anyplay_api::MissedCalls),
+    /// A friend called and the player did not answer.
+    MissedCall {
+        call: anyplay_api::MissedCall,
+    },
+    /// A missed call was marked seen (on another device, or by `calls_seen`).
+    MissedCallGone {
+        account: AccountId,
+    },
+    /// A call the player placed ended unanswered.
+    CallEnded {
+        account: AccountId,
+        reason: anyplay_api::CallEnd,
+    },
     /// Party voice: its state, and while it runs who is speaking. Sent when the state, `enabled`
     /// or the mode changes, and at most ten times a second while a level changes.
     Voice {
@@ -864,6 +901,12 @@ pub enum Event {
         /// The player switched voice on (with `voice`). It stays on across parties.
         enabled: bool,
         mode: VoiceMode,
+        /// The player's microphone is muted.
+        #[serde(default)]
+        muted: bool,
+        /// The player hears nobody.
+        #[serde(default)]
+        deafened: bool,
         me: VoiceLevel,
         peers: Vec<VoicePeer>,
     },
@@ -1110,9 +1153,28 @@ mod tests {
             Ok((
                 1,
                 Command::PartyInvite {
-                    accounts: vec![AccountId(4), AccountId(5)]
+                    accounts: vec![AccountId(4), AccountId(5)],
+                    call: false
                 }
             ))
+        );
+        assert_eq!(
+            parse_command(r#"{"id":8,"do":"party_invite","accounts":[4],"call":true}"#),
+            Ok((
+                8,
+                Command::PartyInvite {
+                    accounts: vec![AccountId(4)],
+                    call: true
+                }
+            ))
+        );
+        assert_eq!(
+            parse_command(r#"{"id":9,"do":"calls_seen"}"#),
+            Ok((9, Command::CallsSeen { account: None }))
+        );
+        assert_eq!(
+            parse_command(r#"{"id":10,"do":"deafen","deafened":true}"#),
+            Ok((10, Command::Deafen { deafened: true }))
         );
         assert_eq!(
             parse_command(r#"{"id":2,"do":"party_leave"}"#),
@@ -1323,6 +1385,8 @@ mod tests {
             state: VoiceState::On,
             enabled: true,
             mode: VoiceMode::PushToTalk,
+            muted: true,
+            deafened: false,
             me: VoiceLevel {
                 level: 25,
                 speaking: true,
@@ -1348,7 +1412,7 @@ mod tests {
         assert_eq!(
             text,
             concat!(
-                "{\"event\":\"voice\",\"state\":\"on\",\"enabled\":true,\"mode\":\"push_to_talk\",",
+                "{\"event\":\"voice\",\"state\":\"on\",\"enabled\":true,\"mode\":\"push_to_talk\",\"muted\":true,\"deafened\":false,",
                 "\"me\":{\"level\":25,\"speaking\":true},\"peers\":[",
                 "{\"account\":7,\"level\":0,\"speaking\":false,\"link\":\"relay\"},",
                 "{\"account\":8,\"level\":0,\"speaking\":false,\"link\":null}]}\n"
