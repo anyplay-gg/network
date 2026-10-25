@@ -6,19 +6,21 @@
 //! Without `--relay` it uses the relays the iroh project runs for everyone, because the
 //! network's own relays do not exist yet. Only probe packets cross them.
 
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use futures_util::StreamExt;
 use iroh::endpoint::{Connection, presets};
-use iroh::{Endpoint, EndpointAddr, RelayMap, RelayMode, RelayUrl, TransportAddr};
+use iroh::{Endpoint, EndpointAddr, RelayMap, RelayMode, RelayUrl, SecretKey, TransportAddr};
 use serde::{Deserialize, Serialize};
 
 const ALPN: &[u8] = b"anyplay/probe/0";
 const USAGE: &str = "\
 anyplay-probe: measures a tunnel between two networks
 
-  anyplay-probe listen [--relay <url>] [--relay-only]
-      prints a ticket and answers probes until stopped
+  anyplay-probe listen [--relay <url>] [--relay-only] [--key <file>]
+      prints a ticket and answers probes until stopped; with --key the identity is kept in
+      the file (created with mode 0600 when missing), so the ticket survives restarts
   anyplay-probe connect <ticket> [--relay <url>] [--relay-only] [--seconds <n>]
                                  [--rate <per second>] [--size <bytes>] [--bulk <MiB>] [--json]
       measures the tunnel to the listener (defaults: 20 s, 60 per second, 160 bytes, 8 MiB)
@@ -45,6 +47,7 @@ struct Options {
     bulk: usize,
     json: bool,
     relay_only: bool,
+    key: Option<PathBuf>,
 }
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 2)]
@@ -70,6 +73,9 @@ async fn main() -> std::process::ExitCode {
             "--bulk" => options.bulk = value().parse().unwrap_or(8).min(1024),
             "--json" => options.json = true,
             "--relay-only" => options.relay_only = true,
+            "--key" => {
+                options.key = Some(PathBuf::from(value())).filter(|p| !p.as_os_str().is_empty())
+            }
             other if ticket.is_none() && !other.starts_with("--") => {
                 ticket = Some(other.to_owned())
             }
@@ -102,6 +108,9 @@ async fn endpoint(options: &Options, accept: bool) -> Result<Endpoint, String> {
         None => RelayMode::Default,
     };
     let mut builder = Endpoint::builder(presets::Minimal).relay_mode(relays);
+    if let Some(path) = &options.key {
+        builder = builder.secret_key(load_or_create_key(path)?);
+    }
     if accept {
         builder = builder.alpns(vec![ALPN.to_vec()]);
     }
@@ -116,6 +125,36 @@ async fn endpoint(options: &Options, accept: bool) -> Result<Endpoint, String> {
         eprintln!("warning: no relay reached in 15 s; only direct paths can work");
     }
     Ok(endpoint)
+}
+
+/// Reads the secret key from `path` (64 hex digits), or creates it there when the file is
+/// missing. The node id, and with it the ticket, then stays the same across restarts.
+fn load_or_create_key(path: &Path) -> Result<SecretKey, String> {
+    match std::fs::read_to_string(path) {
+        Ok(text) => {
+            let bytes: [u8; 32] = data_encoding::HEXLOWER_PERMISSIVE
+                .decode(text.trim().as_bytes())
+                .ok()
+                .and_then(|b| b.try_into().ok())
+                .ok_or_else(|| format!("{} is not a key file (64 hex digits)", path.display()))?;
+            Ok(SecretKey::from_bytes(&bytes))
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            let key = SecretKey::generate();
+            let mut file = std::fs::OpenOptions::new();
+            file.write(true).create_new(true);
+            #[cfg(unix)]
+            std::os::unix::fs::OpenOptionsExt::mode(&mut file, 0o600);
+            let mut file = file
+                .open(path)
+                .map_err(|e| format!("cannot create {}: {e}", path.display()))?;
+            let line = format!("{}\n", data_encoding::HEXLOWER.encode(&key.to_bytes()));
+            std::io::Write::write_all(&mut file, line.as_bytes())
+                .map_err(|e| format!("cannot write {}: {e}", path.display()))?;
+            Ok(key)
+        }
+        Err(e) => Err(format!("cannot read {}: {e}", path.display())),
+    }
 }
 
 async fn listen(options: &Options) -> Result<(), String> {
@@ -482,6 +521,38 @@ mod tests {
     fn jitter_is_the_mean_step() {
         assert_eq!(jitter(&[10.0, 12.0, 11.0]), 1.5);
         assert_eq!(jitter(&[10.0]), 0.0);
+    }
+
+    fn scratch(name: &str) -> PathBuf {
+        let path =
+            std::env::temp_dir().join(format!("anyplay-probe-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        path
+    }
+
+    #[test]
+    fn a_key_file_is_created_once_and_reloaded() {
+        let path = scratch("create");
+        let first = load_or_create_key(&path).unwrap();
+        let second = load_or_create_key(&path).unwrap();
+        assert_eq!(first.to_bytes(), second.to_bytes());
+        assert_eq!(first.public(), second.public());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_broken_key_file_is_refused_not_replaced() {
+        let path = scratch("broken");
+        std::fs::write(&path, "not a key").unwrap();
+        assert!(load_or_create_key(&path).is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "not a key");
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

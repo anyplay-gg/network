@@ -30,7 +30,7 @@ cargo run --release -p anyplay-probe -- listen          # on one side; prints a 
 cargo run --release -p anyplay-probe -- connect <ticket> # on the other
 ```
 
-It reports whether the tunnel went direct or through a relay, the round trip, loss, jitter and throughput. Add `--relay-only` on either side to measure the relayed path. The probe uses the iroh project's public relays, because the network's own relays do not run yet; only probe packets cross them.
+It reports whether the tunnel went direct or through a relay, the round trip, loss, jitter and throughput. Add `--relay-only` on either side to measure the relayed path. `listen --key <file>` keeps the listener's identity in a file (created with mode 0600 when missing), so the ticket stays the same when the listener restarts; without it every start makes a new ticket. The probe uses the iroh project's public relays, because the network's own relays do not run yet; only probe packets cross them.
 
 ## What's inside
 
