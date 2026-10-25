@@ -25,7 +25,7 @@ The network never does any of this, because the law or other people's rights for
 
 ## Consequences
 
-- Revival servers and the online-permission answer are built and tested now, while the network is open to the team only, and go through a lawyer's review before it opens to the public.
+- Revival servers and the online-permission answer are built and tested now. **Amended 2026-10-25:** the operator decided against a paid legal review before the public opening (a small open project, like AnyPS5 itself), so this gate is lifted. Everything else in this decision stays as written: the list of what the network never does is the line, and a change to it needs a new ADR.
 - A revival server is written from observation of the game the player owns: never from the publisher's code, never with the publisher's keys, and only once the publisher has ended the service. If a publisher brings a service back, our server for it stops.
 - Games whose online play runs on a publisher's live service stay offline on the PlayStation side. Players who have the game's PC version play that one, with AnyPlay as the social layer around it.
 - A public compatibility list says for each game how it plays online: through the network's platform services, as play together, as a virtual LAN, through a revival server, or not at all.
