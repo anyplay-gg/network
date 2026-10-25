@@ -1,6 +1,6 @@
 # Discord's Social SDK runs in the net service, behind a seam, and AnyPlay keeps no Discord data
 
-Status: Proposed.
+Status: Accepted (25.10.2026, by the operator).
 
 Players want Discord around their games the way a console has it: what they play shows on their Discord profile, friends can join from Discord, Discord friends show beside AnyPlay friends. The launcher already shows a presence over Discord's local IPC pipe, and the portal can link a Discord identity ([ADR 0016](0016-accounts-are-managed-on-the-web.md), [portal API](../../spec/portal-api.md#connections)). Discord's Social SDK (version 1.10.19337 was inspected; it is closed source) does more: presence and invites without a running Discord app, the Discord friend list with live status, and voice and text in lobbies. [The plan](../discord-plan.md) has the order of work; this record has the choices. Five carry it.
 
