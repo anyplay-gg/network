@@ -1,1 +1,10 @@
 /target
+
+# Discord's Social SDK is closed source and never committed: not the library, not the header,
+# not bindings made from it (bindgen writes those into target/).
+/discord-sdk/
+/discord_social_sdk/
+**/cdiscord.h
+**/discordpp.h
+**/discord_partner_sdk.*
+**/libdiscord_partner_sdk.*

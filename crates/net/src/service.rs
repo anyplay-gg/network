@@ -44,6 +44,8 @@ use crate::traffic::Traffic;
 use crate::tunnel::{self, Link, LinkChange, LinkTotals, RelayAccess, Tunnels};
 use crate::voice::{self, Audio, Hub};
 
+mod discord;
+
 /// How the service is set up; the cloud comes later, with the launcher's hello.
 #[derive(Clone, Debug)]
 pub struct Config {
@@ -63,6 +65,8 @@ pub struct Config {
     pub audio: Audio,
     /// The share worker that captures, encodes, decodes and shows streams.
     pub workers: WorkerSet,
+    /// Discord's Social SDK: off unless the library is there (ADR 0022).
+    pub discord: anyplay_discord::Backend,
 }
 
 type Continuation = Box<dyn FnOnce(&mut Service) + Send>;
@@ -79,6 +83,7 @@ enum Input {
     /// A report of the screen hub of that generation.
     Screen(u64, screen::Output),
     Done(Continuation),
+    Discord(anyplay_discord::Event),
     Tick,
     Stop,
 }
@@ -193,6 +198,7 @@ pub struct Service {
     conversation_answers: Answers,
     /// The mutes that limit the account, as the launcher was last told.
     restrictions: Vec<control::Restriction>,
+    discord: discord::DiscordSide,
     restriction_answers: Answers,
     sessions: HashMap<String, Session>,
     /// Per session, so that a session read on going online never undoes a newer push.
@@ -259,6 +265,18 @@ impl Service {
         let secret = endpoint_key(&config.data);
         let observer = Observer::start(config.data.join("observations"));
         let (out, _) = mpsc::unbounded_channel();
+        let (discord_tx, mut discord_rx) = mpsc::unbounded_channel();
+        let discord = discord::DiscordSide::new(config.discord.open(discord_tx));
+        {
+            let tx = tx.clone();
+            tokio::spawn(async move {
+                while let Some(event) = discord_rx.recv().await {
+                    if tx.send(Input::Discord(event)).is_err() {
+                        return;
+                    }
+                }
+            });
+        }
         let service = Self {
             config,
             inbox: tx,
@@ -288,6 +306,7 @@ impl Service {
             screen: ScreenSide::default(),
             conversation_answers: Answers::default(),
             restrictions: Vec::new(),
+            discord,
             restriction_answers: Answers::default(),
             sessions: HashMap::new(),
             session_answers: HashMap::new(),
@@ -373,6 +392,7 @@ impl Service {
                         self.screen_output(output);
                     }
                 }
+                Input::Discord(event) => self.discord_event(event),
                 Input::Done(continuation) => continuation(&mut self),
                 Input::Tick => self.tick(),
                 Input::Stop => break,
@@ -505,7 +525,13 @@ impl Service {
             return;
         }
         match command {
-            Command::Hello { launcher, cloud } => self.hello(id, &launcher, &cloud),
+            Command::Hello { launcher, cloud } => {
+                self.hello(id, &launcher, &cloud);
+                self.discord_changed();
+            }
+            Command::DiscordStatus => self.discord_status(id),
+            Command::DiscordConnect => self.discord_connect(id),
+            Command::DiscordDisconnect => self.discord_disconnect(id),
             Command::Email { email } => {
                 let Some(cloud) = self.cloud(id) else { return };
                 if self.me.is_some() {
@@ -610,6 +636,7 @@ impl Service {
                         cloud.signout().await
                     },
                     move |service, _| {
+                        service.discord_end(true);
                         service.end_online("signed out");
                         service.ok(id, Done {});
                     },
@@ -620,6 +647,7 @@ impl Service {
                     return;
                 };
                 self.request(id, async move { cloud.delete_me().await }, |service, ()| {
+                    service.discord_end(true);
                     service.end_online("account deleted");
                     Done {}
                 });
@@ -1515,6 +1543,9 @@ impl Service {
         }
         self.invitations.clear();
         self.forget_social();
+        if why != "offline" {
+            self.discord_end(false);
+        }
         self.links.clear();
         if let Some(tunnels) = self.tunnels.take() {
             tokio::spawn(async move { tunnels.close().await });

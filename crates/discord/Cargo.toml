@@ -1,0 +1,29 @@
+[package]
+name = "anyplay-discord"
+description = "Discord's Social SDK behind a trait: loaded at run time, with a fake for every test"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[features]
+# The real SDK. The SDK is closed source and is never in a repository, so this feature needs its
+# folder at build time (DISCORD_SDK_DIR, the folder that holds include/cdiscord.h): bindgen makes
+# the bindings from the header into the build directory, and nothing of it is committed. The
+# shared library is loaded at run time, by absolute path. Without the feature the crate builds
+# and tests with the fake and `Off` only.
+sdk = ["dep:libloading", "dep:bindgen"]
+
+[dependencies]
+libloading = { version = "0.8", optional = true }
+serde.workspace = true
+tokio = { version = "1.54", default-features = false, features = ["sync"] }
+tracing = "0.1"
+
+[build-dependencies]
+bindgen = { version = "0.72", optional = true }
+
+[dev-dependencies]
+serde_json.workspace = true

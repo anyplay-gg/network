@@ -13,6 +13,8 @@ Options:
   --relay-ca <file>     also trust the root certificates in this PEM file for relays
   --relay-only          connect to other players only through a relay, so they never learn
                         this PC's addresses
+  --discord-sdk <file>  load Discord's Social SDK from this library (an absolute path);
+                        by default the library next to this program, if there is one
   --version             print the version
 ";
 
@@ -21,6 +23,7 @@ fn main() -> std::process::ExitCode {
     let mut file_credentials = std::env::var_os("ANYPLAY_NET_FILE_CREDENTIALS").is_some();
     let mut relay_ca = std::env::var_os("ANYPLAY_NET_RELAY_CA").map(PathBuf::from);
     let mut relay_only = false;
+    let mut discord_sdk = None;
     let mut args = std::env::args_os().skip(1);
     while let Some(arg) = args.next() {
         match arg.to_str() {
@@ -28,6 +31,7 @@ fn main() -> std::process::ExitCode {
             Some("--file-credentials") => file_credentials = true,
             Some("--relay-ca") => relay_ca = args.next().map(PathBuf::from),
             Some("--relay-only") => relay_only = true,
+            Some("--discord-sdk") => discord_sdk = args.next().map(PathBuf::from),
             Some("--version") => {
                 println!("anyplay-net {}", env!("CARGO_PKG_VERSION"));
                 return std::process::ExitCode::SUCCESS;
@@ -69,6 +73,7 @@ fn main() -> std::process::ExitCode {
         workers: anyplay_net::screen::WorkerSet::new(
             anyplay_net::worker_process::ProcessWorkers::new(),
         ),
+        discord: discord_backend(discord_sdk),
     };
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
@@ -139,4 +144,18 @@ fn device_name() -> String {
         .filter(|name| !name.is_empty())
         .unwrap_or_else(|| "PC".to_owned());
     name.chars().take(64).collect()
+}
+
+/// Discord's Social SDK is used only when its library is given with `--discord-sdk` or sits next
+/// to this program, and only in a build that has SDK support; otherwise Discord is off and
+/// nothing changes for the player.
+fn discord_backend(given: Option<PathBuf>) -> anyplay_discord::Backend {
+    let library = given.or_else(|| {
+        let own = std::env::current_exe().ok()?;
+        anyplay_discord::library_next_to(&own).filter(|path| path.is_file())
+    });
+    match library {
+        Some(library) => anyplay_discord::Backend::Sdk { library },
+        None => anyplay_discord::Backend::Off,
+    }
 }

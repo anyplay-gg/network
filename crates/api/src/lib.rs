@@ -479,6 +479,52 @@ pub struct Invitation {
     pub expires: u64,
 }
 
+// Discord Social SDK
+
+/// What the SDK's authorisation gave the net service: the one-time code and the PKCE verifier
+/// of the challenge it was asked with. The cloud trades them for tokens with its client secret.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DiscordCodeExchange {
+    pub code: String,
+    pub code_verifier: String,
+    /// The redirect address the SDK reported; one of the two the cloud accepts.
+    pub redirect_uri: String,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DiscordRefresh {
+    pub refresh: String,
+}
+
+/// Discord's tokens for the player, in transit: the cloud keeps none of them.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DiscordTokens {
+    pub access: String,
+    pub refresh: String,
+    /// Seconds from now until `access` ends.
+    pub expires_in: u64,
+    /// Space-separated scopes Discord granted.
+    pub scope: String,
+}
+
+macro_rules! secret_debug {
+    ($($name:ident { $($field:ident),* }),*) => {$(
+        impl fmt::Debug for $name {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.debug_struct(stringify!($name))$(.field(stringify!($field), &"<hidden>"))*.finish()
+            }
+        }
+    )*};
+}
+secret_debug!(
+    DiscordCodeExchange {
+        code,
+        code_verifier
+    },
+    DiscordRefresh { refresh },
+    DiscordTokens { access, refresh }
+);
+
 // Relays, reports, information
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1244,6 +1290,8 @@ pub enum ErrorCode {
     Limit,
     TooLarge,
     RateLimited,
+    /// Discord refused a code or a refresh token (`/me/discord/token`, `/me/discord/refresh`).
+    GrantRefused,
     Internal,
     /// A code this version does not know.
     #[serde(other)]
@@ -1255,6 +1303,7 @@ impl ErrorCode {
     pub fn status(self) -> u16 {
         match self {
             ErrorCode::BadRequest
+            | ErrorCode::GrantRefused
             | ErrorCode::CodeWrong
             | ErrorCode::CodeExpired
             | ErrorCode::HandleInvalid => 400,
@@ -1289,6 +1338,7 @@ impl ErrorCode {
             ErrorCode::Limit => "limit",
             ErrorCode::TooLarge => "too_large",
             ErrorCode::RateLimited => "rate_limited",
+            ErrorCode::GrantRefused => "grant_refused",
             ErrorCode::Internal => "internal",
             ErrorCode::Unknown => "unknown",
         }
@@ -1743,6 +1793,40 @@ mod join_code_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn discord_secrets_stay_out_of_debug_output() {
+        let tokens = DiscordTokens {
+            access: "access-secret".into(),
+            refresh: "refresh-secret".into(),
+            expires_in: 604_800,
+            scope: "identify".into(),
+        };
+        let exchange = DiscordCodeExchange {
+            code: "code-secret".into(),
+            code_verifier: "verifier-secret".into(),
+            redirect_uri: "http://127.0.0.1/callback".into(),
+        };
+        let text = format!(
+            "{tokens:?} {exchange:?} {:?}",
+            DiscordRefresh {
+                refresh: "r-secret".into()
+            }
+        );
+        assert!(!text.contains("secret"), "{text}");
+    }
+
+    #[test]
+    fn a_refused_grant_is_a_bad_request_by_status() {
+        assert_eq!(ErrorCode::GrantRefused.status(), 400);
+        let body = ApiError::new(ErrorCode::GrantRefused, "Discord refused it.");
+        let text = serde_json::to_string(&body).unwrap();
+        assert!(text.contains(r#""error":"grant_refused""#), "{text}");
+        assert_eq!(
+            serde_json::from_str::<ApiError>(&text).unwrap().error,
+            ErrorCode::GrantRefused
+        );
+    }
 
     #[test]
     fn message_text_has_bounds() {

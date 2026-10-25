@@ -40,6 +40,14 @@ pub enum Command {
     },
     SignOut,
     DeleteAccount,
+    /// What the net service knows of Discord now (phase 0 of ADR 0022).
+    DiscordStatus,
+    /// Connects the player's Discord account through the SDK: with a refresh token the service
+    /// kept for this account, else Discord asks the player. Answers at once; the `discord` event
+    /// follows.
+    DiscordConnect,
+    /// Disconnects and forgets the kept refresh token.
+    DiscordDisconnect,
     AddFriend {
         handle: String,
     },
@@ -620,6 +628,33 @@ pub struct Opened {
     pub url: String,
 }
 
+/// Where the player is with Discord.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DiscordState {
+    /// This build has no Discord SDK, or the library did not load.
+    Unavailable,
+    SignedOut,
+    Connecting,
+    Connected,
+}
+
+/// The player's Discord account while connected. `id` is a decimal string.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DiscordUser {
+    pub id: String,
+    pub name: String,
+}
+
+/// The answer to `discord_status`, and the fields of the `discord` event.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DiscordInfo {
+    pub state: DiscordState,
+    pub user: Option<DiscordUser>,
+    /// The number of Discord friends while connected; their names stay in the net service.
+    pub friends: Option<u32>,
+}
+
 /// An answer without fields.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Done {}
@@ -840,6 +875,8 @@ pub enum Event {
         pending: Option<Pending>,
     },
     Friends(FriendLists),
+    /// The state of the Discord connection changed (and once after `hello`).
+    Discord(DiscordInfo),
     Invitation {
         invitation: Invitation,
     },
@@ -975,6 +1012,33 @@ mod tests {
             "{\"id\":5,\"do\":\"join_redeem\",\"code\":\"anyps5://v1/join/k3x9m2pqra\"}\n"
         );
         assert_eq!(parse_command(line.trim_end()), Ok((5, redeem)));
+    }
+
+    #[test]
+    fn the_discord_commands_and_event_have_their_wire_form() {
+        assert_eq!(
+            command_line(3, &Command::DiscordConnect),
+            "{\"id\":3,\"do\":\"discord_connect\"}
+"
+        );
+        assert_eq!(
+            parse_command("{\"id\":4,\"do\":\"discord_status\"}"),
+            Ok((4, Command::DiscordStatus))
+        );
+        let event = Event::Discord(DiscordInfo {
+            state: DiscordState::Connected,
+            user: Some(DiscordUser {
+                id: "1563714917998133289".into(),
+                name: "Lumen".into(),
+            }),
+            friends: Some(3),
+        });
+        let text = serde_json::to_string(&event).unwrap();
+        assert_eq!(
+            text,
+            "{\"event\":\"discord\",\"state\":\"connected\",\"user\":{\"id\":\"1563714917998133289\",\"name\":\"Lumen\"},\"friends\":3}"
+        );
+        assert_eq!(serde_json::from_str::<Event>(&text).unwrap(), event);
     }
 
     #[test]
