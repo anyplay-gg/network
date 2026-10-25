@@ -838,6 +838,23 @@ pub struct ScreenWorkerReady {
     pub encoders: Vec<ScreenCodec>,
     pub decoders: Vec<ScreenCodec>,
     pub capture: bool,
+    /// The codec libraries the worker loads while it runs (OpenH264 on Linux) and how each
+    /// stands; empty where it loads none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub libraries: Vec<ScreenLibrary>,
+}
+
+/// A codec library the share worker loads, and whether it could.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScreenLibrary {
+    /// Which library: `openh264`.
+    pub name: String,
+    /// `ready`, `off` (the player turned it off), `missing` (not installed), `refused` (a file
+    /// that is not a known build) or `failed` (a known build that would not load).
+    pub state: String,
+    /// Why, when it is not `ready`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
 }
 
 /// One codec a worker can encode or decode.

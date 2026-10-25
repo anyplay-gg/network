@@ -64,6 +64,7 @@ impl Workers for TestWorkers {
             encode: vec![test_codec_caps()],
             decode: vec![test_codec_caps()],
             capture: false,
+            libraries: Vec::new(),
         })
     }
 

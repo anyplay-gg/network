@@ -141,7 +141,7 @@ A **restriction** has a `kind` and, when they apply, `until`, `rule`, `reason`, 
 | `screen_stop` | | `{}` |
 | `screen_watch` | `account` | `{}`: watch the stream that member offers |
 | `screen_leave` | | `{}` |
-| `screen_worker` | `path` | `{encoders, decoders, capture}`: where the launcher put the verified share worker |
+| `screen_worker` | `path` | `{encoders, decoders, capture, libraries}`: where the launcher put the verified share worker; `libraries` (absent when the worker loads none) is `[{name, state, detail}]`, see [Screen share](screen-share.md#control-protocol-additions) |
 
 - `hello` comes first. Until it is answered every other command gets `bad_state`. The net service then resumes the device's saved sign-in, if there is one.
 - `browser_sign_in` is how the launcher signs a player in or creates an account ([ADR 0016](../docs/adr/0016-accounts-are-managed-on-the-web.md)). The net service opens a listener on `127.0.0.1` with a random port, makes a PKCE verifier and a `state`, and answers the address of the cloud's sign-in page; the launcher opens it in the system browser. The net service then sends a `state` event with `pending` `browser`, and when the player has finished in the browser, a `state` event with the account (and `pending` null). It fails with `not_found` when the cloud has no account web, and with `bad_state` when an account is signed in. A browser that is not finished in 10 minutes, or a sign-in the player stops, ends with a `notice` (`sign_in_timed_out`, `sign_in_stopped`) and `pending` null. `create` opens the page at "Create account". Nothing is typed in the launcher.

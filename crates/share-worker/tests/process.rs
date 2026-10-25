@@ -79,6 +79,11 @@ impl Node {
         // The test codec is always there; on Windows H.264 from the system comes before it.
         assert!(capabilities.encode.iter().any(|c| c.codec == "test"));
         assert!(capabilities.decode.iter().any(|c| c.codec == "test"));
+        // On Linux the worker says how its OpenH264 library stands, whether or not it is there.
+        if cfg!(target_os = "linux") {
+            let names: Vec<_> = capabilities.libraries.iter().map(|l| &l.name).collect();
+            assert_eq!(names, ["openh264"]);
+        }
         let members: Members = others.iter().map(|n| n.as_member()).collect();
         let (out, mut rx) = mpsc::unbounded_channel();
         let views = self.views.clone();
