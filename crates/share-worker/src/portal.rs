@@ -18,8 +18,9 @@ use ashpd::desktop::{PersistMode, Session};
 
 /// A window the player picked: the PipeWire remote to read it from, and the stream's node.
 pub struct PortalWindow {
-    /// The PipeWire remote of the portal's session (only this stream is visible on it).
-    pub fd: OwnedFd,
+    /// The PipeWire remote of the portal's session (only this stream is visible on it); taken by
+    /// whoever connects to it.
+    pub fd: Option<OwnedFd>,
     /// The stream's PipeWire node.
     pub node_id: u32,
     /// The window's size when it was picked, if the portal says.
@@ -48,7 +49,7 @@ pub fn pick_window() -> Result<PortalWindow, String> {
         .block_on(open())
         .map_err(|e| format!("the screen cast portal refused: {e}"))?;
     Ok(PortalWindow {
-        fd,
+        fd: Some(fd),
         node_id,
         size,
         session: Some(session),

@@ -42,6 +42,8 @@ windows-capture = "2"
 [target.'cfg(target_os = "linux")'.dependencies]
 ashpd = { version = "0.13", default-features = false, features = ["tokio", "screencast"] }
 tokio = { version = "1.54", features = ["rt"] }
+# The window's pictures from PipeWire (MIT; links the system's libpipewire, MIT).
+pipewire = "0.10"
 
 # The viewer's window (MIT or Apache-2.0), on Windows and on Linux (X11 and Wayland).
 [target.'cfg(any(windows, target_os = "linux"))'.dependencies]

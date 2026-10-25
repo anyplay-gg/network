@@ -61,7 +61,7 @@ pub fn capabilities() -> Capabilities {
     Capabilities {
         encode,
         decode,
-        capture: cfg!(windows),
+        capture: cfg!(any(windows, target_os = "linux")),
     }
 }
 
