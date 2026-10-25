@@ -850,9 +850,10 @@ pub struct ScreenLibrary {
     /// Which library: `openh264`.
     pub name: String,
     /// `ready`, `off` (the player turned it off), `missing` (not installed), `refused` (a file
-    /// that is not a known build) or `failed` (a known build that would not load).
+    /// that is not a known build) or `failed` (a file that could not be read, or a known build
+    /// that would not load).
     pub state: String,
-    /// Why, when it is not `ready`.
+    /// More about the state when there is more to say.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
 }

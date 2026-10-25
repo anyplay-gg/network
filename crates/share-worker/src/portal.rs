@@ -42,8 +42,8 @@ impl std::fmt::Debug for PortalWindow {
     }
 }
 
-/// How long the player has to pick the window. A dialog still open after that is given up, so
-/// that a worker whose stream was stopped meanwhile does not wait on it for ever.
+/// How long the player has to pick the window. A dialog still open after that is given up, and the
+/// worker ends with an error instead of waiting on it for ever.
 const PICK_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// Asks the player for the window to share. Blocks while the portal's dialog is open, at most
@@ -86,8 +86,9 @@ type Opened = (
     Option<SourceType>,
 );
 
-/// The portal's answer, or an error once `limit` has passed. A session the portal opened meanwhile
-/// is left to it: it goes when the runtime, and with it the worker's D-Bus connection, does.
+/// The portal's answer, or an error once `limit` has passed. The dialog and any session the portal
+/// opened meanwhile stay until the worker exits and its D-Bus connection (`ashpd` keeps one for
+/// the process) closes; the worker exits right after a failed pick.
 async fn within<T>(
     limit: Duration,
     work: impl Future<Output = ashpd::Result<T>>,

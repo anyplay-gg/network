@@ -36,7 +36,7 @@ pub struct CodecLibrary {
     /// Which library: `openh264`.
     pub name: String,
     pub state: LibraryState,
-    /// Why, when it is not `ready`: the file, the error, the hash it refused.
+    /// More about the state when there is more to say: the file, the error, the hash it refused.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
 }
@@ -53,7 +53,7 @@ pub enum LibraryState {
     Missing,
     /// A file is there, but not a build the worker may load (its hash is not a known one).
     Refused,
-    /// A known build that would not load.
+    /// A file that could not be read, or a known build that would not load.
     Failed,
 }
 

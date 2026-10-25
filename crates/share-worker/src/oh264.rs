@@ -17,6 +17,7 @@ use std::fs::File;
 use std::io::ErrorKind;
 use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use std::time::Instant;
 
 use anyplay_share::codec::{CodecError, EncodedFrame, Frame, VideoDecoder, VideoEncoder};
@@ -112,12 +113,20 @@ fn load(file: &File, shown: &Path) -> Result<OpenH264API, CodecLibrary> {
 }
 
 /// The library, or how it stands when there is none to use.
+/// The library file that loaded first, kept open for the worker's life and used for every later
+/// load. glibc hands back a library it already has by the name it was loaded under, whatever file
+/// that name points at now; with this file held, its `/proc/self/fd` name never points at another.
+static LOADED: OnceLock<(File, PathBuf)> = OnceLock::new();
+
 fn open_api() -> Result<OpenH264API, CodecLibrary> {
     let path = match source() {
         Source::Off => return Err(status(LibraryState::Off, None)),
         Source::Missing => return Err(status(LibraryState::Missing, None)),
         Source::File(path) => path,
     };
+    if let Some((file, shown)) = LOADED.get() {
+        return load(file, shown);
+    }
     let file = File::open(&path).map_err(|e| {
         let state = if e.kind() == ErrorKind::NotFound {
             LibraryState::Missing
@@ -126,7 +135,11 @@ fn open_api() -> Result<OpenH264API, CodecLibrary> {
         };
         status(state, Some(format!("{}: {e}", path.display())))
     })?;
-    load(&file, &path)
+    let api = load(&file, &path)?;
+    // Another thread may have loaded first; then this file is dropped, and its library goes with
+    // the API made from it.
+    let _ = LOADED.set((file, path));
+    Ok(api)
 }
 
 fn api() -> Result<OpenH264API, String> {
@@ -475,7 +488,13 @@ mod tests {
     fn have_library() -> bool {
         match api() {
             Ok(_) => true,
-            Err(why) if std::env::var_os(LIBRARY_ENV).is_some() => {
+            // Only a file named in the variable must load; empty and `off` skip like no file.
+            Err(why)
+                if matches!(
+                    source_of(std::env::var_os(LIBRARY_ENV), None),
+                    Source::File(_)
+                ) =>
+            {
                 panic!("{LIBRARY_ENV} is set, but: {why}")
             }
             Err(why) => {
@@ -502,6 +521,8 @@ mod tests {
         });
         let mut encoder = OhEncoder::open(setup).unwrap();
         let mut decoder = OhDecoder::open().unwrap();
+        // Both came from the one file held open, so its name stayed that file's.
+        assert!(LOADED.get().is_some(), "the loaded library's file is held");
         let mut pattern = anyplay_share::testcodec::TestPattern::default();
         let mut shown = 0;
         let mut keys = 0;
