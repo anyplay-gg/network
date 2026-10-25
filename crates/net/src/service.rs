@@ -1117,7 +1117,11 @@ impl Service {
                 );
             }
             // Share screen
-            Command::ScreenStart { source } => self.screen_start(id, source),
+            Command::ScreenStart {
+                source,
+                window,
+                pids,
+            } => self.screen_start(id, source, window, pids),
             Command::ScreenStop => {
                 if let Some(hub) = &self.screen.hub {
                     hub.stop_sharing("ended");
@@ -2291,7 +2295,13 @@ impl Service {
         });
     }
 
-    fn screen_start(&mut self, id: u64, source: control::ScreenSource) {
+    fn screen_start(
+        &mut self,
+        id: u64,
+        source: control::ScreenSource,
+        window: Option<i64>,
+        pids: Vec<u32>,
+    ) {
         if self.me.is_none() {
             self.fail(id, Failure::new(Failure::NOT_SIGNED_IN, "Sign in first."));
             return;
@@ -2308,7 +2318,10 @@ impl Service {
             return;
         };
         self.spawn(
-            async move { hub.start_sharing(title, source).await },
+            async move {
+                hub.start_sharing_game(title, source, screen::GameWindow { window, pids })
+                    .await
+            },
             move |service, result| service.screen_answer(id, result),
         );
     }

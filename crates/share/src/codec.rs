@@ -43,6 +43,11 @@ pub enum CodecError {
     MissingReference,
     /// The frame buffer does not match its size.
     BadFrame,
+    /// A codec with a pipeline (the hardware ones) took the input and has no output yet. Not a
+    /// failure: the output of this input comes with a later call, in order.
+    Pending,
+    /// The codec stopped working (the driver reset, the device was lost). The stream ends.
+    Failed(String),
 }
 
 impl fmt::Display for CodecError {
@@ -51,6 +56,8 @@ impl fmt::Display for CodecError {
             CodecError::Malformed(why) => write!(f, "malformed encoded frame: {why}"),
             CodecError::MissingReference => write!(f, "the frame this one builds on is missing"),
             CodecError::BadFrame => write!(f, "the frame buffer does not match its size"),
+            CodecError::Pending => write!(f, "the codec has no output for this input yet"),
+            CodecError::Failed(why) => write!(f, "the codec failed: {why}"),
         }
     }
 }
@@ -63,6 +70,8 @@ pub trait VideoEncoder {
     fn codec(&self) -> &str;
     /// Encode one picture. `force_key` makes it a key frame.
     fn encode(&mut self, frame: &Frame, force_key: bool) -> Result<EncodedFrame, CodecError>;
+    /// A new target rate in kbit/s. Codecs without a rate (the test codec) ignore it.
+    fn set_bitrate(&mut self, _kbps: u32) {}
 }
 
 /// Turns encoded frames back into pictures.

@@ -57,6 +57,16 @@ The dialing side (the streamer) opens one bidirectional stream right after the h
 
 Role names stay `host` and `guest` on the wire, as in share play; this file says streamer and viewer.
 
+## Capture
+
+The streamer's worker takes the picture of one window with Windows Graphics Capture. Which window is decided in this order, and a window of a process the launcher did not start is never taken while it has named some:
+
+1. `window`, the window the launcher found for the game, if it still exists, can be captured, is at least 200 by 150 and belongs to one of `pids` (a handle can be reused).
+2. The largest window of one of `pids` that is visible, not a tool window and at least 200 by 150. The worker looks for up to 8 seconds, because a game that has just started has no window yet. `pids` are the game's process and what it started, as the launcher's job object lists them.
+3. Only when the launcher named neither: a window whose title contains the game's title. This is a guess and the launcher always names the game, so it is the fallback for tools and tests.
+
+A window that does not change (or is minimised) gives its last picture again at the stream's rate, so the viewer sees a live stream. The stream's size is the rate ladder's, not the window's: a picture of another size or shape is scaled to fit with black bars, so a resize of the window never restarts the stream. When the window closes the capture ends and so does the stream. The cursor and the capture border are not drawn.
+
 ## Starting, watching, stopping
 
 1. **Start.** The player has a game running (`playing` set, a `game_start` came before), is signed in with tunnels up and in a party with at least one other member, and the worker is there with an encoder. The launcher sends `screen_start`. The net service answers `ok` at once; the `screen` event shows `hosting` with phase `connecting`. It begins to dial the members.
@@ -85,7 +95,7 @@ For the [control protocol](control-protocol.md#share-screen). The Rust reference
 
 | `do` | Fields | `ok` | Errors |
 |---|---|---|---|
-| `screen_start` | `source`: `game` (default) or `test_pattern` | `{}` | `no_game`, `not_signed_in`, `not_in_party`, `no_encoder` (no worker, or it cannot capture or encode), `busy` (already streaming) |
+| `screen_start` | `source`: `game` (default) or `test_pattern`; `window`, `pids`: where the game is (see [Capture](#capture)) | `{}` | `no_game`, `not_signed_in`, `not_in_party`, `no_encoder` (no worker, or it cannot capture or encode), `busy` (already streaming) |
 | `screen_stop` | | `{}` | |
 | `screen_watch` | `account` | `{}` | `not_found` (that member offers no stream), `busy` (already watching), `no_decoder` |
 | `screen_leave` | | `{}` | |
@@ -122,6 +132,6 @@ Against [ADR 0021](../docs/adr/0021-the-line-is-drawn-at-the-law.md): no platfor
 - Input of any kind from a viewer (that is share play's `hand_over` and `together`, behind `share.enabled`).
 - Viewers outside the party, a public link, recording or clips.
 - Several rates (one per viewer): the stream follows the weakest watcher.
-- Game sound where the worker cannot tap it; the stream is then silent and the viewer's panel says "No sound".
+- Game sound. The viewer's window says "no sound" in its title. The plan: WASAPI loopback of the game's process tree (process loopback capture, Windows 10 build 20348 and later), Opus at 48 kHz stereo in the audio datagram, played by the viewer's worker.
 - The engine tap as a source (see ADR 0023), HDR, 4K, more than two channels of sound.
 - A "is streaming" mark in the friends list.
