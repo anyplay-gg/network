@@ -40,6 +40,7 @@ pub mod codec;
 pub mod control;
 pub mod link;
 pub mod packetiser;
+pub mod pixels;
 pub mod rate;
 pub mod reassembler;
 mod rs;

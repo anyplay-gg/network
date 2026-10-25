@@ -4,22 +4,22 @@
 //!
 //! ```text
 //! anyplay-share --capabilities
-//! anyplay-share --role host|guest [--link 127.0.0.1:PORT] [--token TOKEN] [--source test_pattern]
+//! anyplay-share --role host|guest [--link 127.0.0.1:PORT] [--token TOKEN]
+//!               [--source game|test_pattern] [--title TITLE] [--window HWND] [--pid PID]...
 //! ```
 //!
 //! `--link` and `--token` default to `ANYPLAY_SHARE_ENDPOINT` and `ANYPLAY_SHARE_TOKEN`.
+//! `--title` is the game's title: the viewer names its window after it. The streamer captures
+//! the window the launcher named (`--window`), else the largest window of the game's processes
+//! (`--pid`, repeated), and only without any process a window whose title contains `--title`.
 
 use std::process::ExitCode;
 
-use anyplay_share::codec::VideoDecoder;
 use anyplay_share::control::Role;
-use anyplay_share::testcodec::{TestDecoder, TestEncoder};
-use anyplay_share_worker::host::{self, PatternSource};
-use anyplay_share_worker::viewer::{self, DecoderFactory, NullSink};
-use anyplay_share_worker::{capabilities, socket};
-
-/// A key frame at least this often, so that a viewer who joins late waits at most 2 seconds.
-const KEY_INTERVAL: u32 = 120;
+use anyplay_share::link::FromWorker;
+use anyplay_share_worker::host::{self, FrameSource, PatternSource};
+use anyplay_share_worker::viewer::{self, DecoderFactory, FrameSink};
+use anyplay_share_worker::{Port, capabilities, decoder_for, encoder_for, socket};
 
 fn main() -> ExitCode {
     let mut args = std::env::args().skip(1);
@@ -27,6 +27,9 @@ fn main() -> ExitCode {
     let mut link = std::env::var("ANYPLAY_SHARE_ENDPOINT").ok();
     let mut token = std::env::var("ANYPLAY_SHARE_TOKEN").ok();
     let mut source = "game".to_owned();
+    let mut title = String::new();
+    let mut window: Option<i64> = None;
+    let mut pids: Vec<u32> = Vec::new();
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--capabilities" => {
@@ -46,9 +49,9 @@ fn main() -> ExitCode {
             "--link" => link = args.next(),
             "--token" => token = args.next(),
             "--source" => source = args.next().unwrap_or_default(),
-            "--title" => {
-                args.next();
-            }
+            "--title" => title = args.next().unwrap_or_default(),
+            "--window" => window = args.next().and_then(|v| v.parse().ok()),
+            "--pid" => pids.extend(args.next().and_then(|v| v.parse::<u32>().ok())),
             _ => {}
         }
     }
@@ -64,27 +67,56 @@ fn main() -> ExitCode {
         }
     };
     match role {
-        Role::Host => {
-            if source != "test_pattern" {
-                // Window capture is not part of this build; say so instead of sending nothing.
-                let _ = port.to_service.send(anyplay_share::link::FromWorker::Ended(
-                    "this build of the share worker cannot capture a window".into(),
-                ));
-                return ExitCode::FAILURE;
-            }
-            host::run(
-                Box::new(PatternSource::default()),
-                Box::new(TestEncoder::new(KEY_INTERVAL)),
-                port,
-            );
-        }
+        Role::Host => match frame_source(&source, &title, window, pids) {
+            Ok(frames) => host::run_with(frames, Box::new(encoder_for), port),
+            Err(reason) => return fail(port, reason),
+        },
         Role::Guest => {
-            let decoders: DecoderFactory = Box::new(|codec| match codec {
-                "test" => Some(Box::new(TestDecoder::new()) as Box<dyn VideoDecoder>),
-                _ => None,
-            });
-            viewer::run(decoders, Box::new(NullSink), port);
+            let decoders: DecoderFactory = Box::new(decoder_for);
+            viewer::run(decoders, sink(&title), port);
         }
     }
     ExitCode::SUCCESS
+}
+
+/// Tells the net service why the worker cannot do what it was started for.
+fn fail(port: Port, reason: String) -> ExitCode {
+    let _ = port.to_service.send(FromWorker::Ended(reason));
+    // The net service reads the message before it sees the link close.
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    ExitCode::FAILURE
+}
+
+fn frame_source(
+    source: &str,
+    title: &str,
+    window: Option<i64>,
+    pids: Vec<u32>,
+) -> Result<Box<dyn FrameSource>, String> {
+    match source {
+        "test_pattern" => Ok(Box::new(PatternSource::default())),
+        "game" => {
+            anyplay_share_worker::capture::open(&anyplay_share_worker::capture::WindowTarget {
+                window,
+                pids,
+                title_contains: title.to_owned(),
+            })
+        }
+        _ => Err("this build of the share worker cannot capture a window".into()),
+    }
+}
+
+/// The viewer's window: "title" and, until the game's sound is carried, a note that there is
+/// none.
+#[cfg(windows)]
+fn sink(title: &str) -> Box<dyn FrameSink> {
+    let name = if title.is_empty() { "AnyPlay" } else { title };
+    Box::new(anyplay_share_worker::window::WindowSink::new(&format!(
+        "{name} - AnyPlay Share screen (no sound)"
+    )))
+}
+
+#[cfg(not(windows))]
+fn sink(_title: &str) -> Box<dyn FrameSink> {
+    Box::new(anyplay_share_worker::viewer::NullSink)
 }

@@ -12,7 +12,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyplay_control::{Link, ScreenPhase, ScreenSource};
-use anyplay_net::screen::{self, Hub, Member, Members, Output, Refusal, View, WorkerPort, Workers};
+use anyplay_net::screen::{
+    self, GameWindow, Hub, Member, Members, Output, Refusal, View, WorkerPort, Workers,
+};
 use anyplay_net::traffic::Traffic;
 use anyplay_net::tunnel::{Options, RelayAccess, Tunnels};
 use anyplay_share::codec::{Frame, VideoDecoder};
@@ -21,7 +23,7 @@ use anyplay_share::link::{Capabilities, FromWorker, ToWorker};
 use anyplay_share::testcodec::{TestDecoder, TestEncoder, TestPattern};
 use anyplay_share_worker::host::{self, PatternSource};
 use anyplay_share_worker::viewer::{self, DecoderFactory, FrameSink};
-use anyplay_share_worker::{Port, capabilities};
+use anyplay_share_worker::{Port, test_codec_caps};
 use iroh::endpoint::ConnectionError;
 use iroh::{EndpointAddr, EndpointId, SecretKey};
 use tokio::sync::mpsc;
@@ -58,10 +60,20 @@ struct TestWorkers {
 
 impl Workers for TestWorkers {
     fn capabilities(&self) -> Option<Capabilities> {
-        Some(capabilities())
+        Some(Capabilities {
+            encode: vec![test_codec_caps()],
+            decode: vec![test_codec_caps()],
+            capture: false,
+        })
     }
 
-    fn launch(&self, role: Role, source: ScreenSource, _: &str) -> Result<WorkerPort, String> {
+    fn launch(
+        &self,
+        role: Role,
+        source: ScreenSource,
+        _: &str,
+        _: &GameWindow,
+    ) -> Result<WorkerPort, String> {
         if role == Role::Host {
             assert_eq!(
                 source,
@@ -121,7 +133,13 @@ impl Workers for NoWorkers {
         None
     }
 
-    fn launch(&self, _: Role, _: ScreenSource, _: &str) -> Result<WorkerPort, String> {
+    fn launch(
+        &self,
+        _: Role,
+        _: ScreenSource,
+        _: &str,
+        _: &GameWindow,
+    ) -> Result<WorkerPort, String> {
         Err("no worker".into())
     }
 }

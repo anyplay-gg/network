@@ -72,6 +72,15 @@ pub mod code {
 
 // The share worker, as the hub sees it
 
+/// Where the game shows its picture, as far as the launcher knows (see `screen_start`).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct GameWindow {
+    /// A Windows `HWND` as a number.
+    pub window: Option<i64>,
+    /// The processes of the game.
+    pub pids: Vec<u32>,
+}
+
 /// The two ends of the conversation with one worker. Dropping `to` ends the worker.
 pub struct WorkerPort {
     pub to: mpsc::UnboundedSender<ToWorker>,
@@ -83,7 +92,13 @@ pub trait Workers: Send + Sync + 'static {
     /// What the worker can do; none while there is none.
     fn capabilities(&self) -> Option<Capabilities>;
     /// Starts a worker for one side. The first message it gets is [`ToWorker::Start`].
-    fn launch(&self, role: Role, source: ScreenSource, title: &str) -> Result<WorkerPort, String>;
+    fn launch(
+        &self,
+        role: Role,
+        source: ScreenSource,
+        title: &str,
+        game: &GameWindow,
+    ) -> Result<WorkerPort, String>;
     /// Tells it where the verified worker program is and answers what that can do. Only the
     /// real service has a program to point at.
     fn set_path(&self, _path: &str) -> Result<Capabilities, String> {
@@ -131,7 +146,13 @@ impl Workers for NoWorkers {
         None
     }
 
-    fn launch(&self, _: Role, _: ScreenSource, _: &str) -> Result<WorkerPort, String> {
+    fn launch(
+        &self,
+        _: Role,
+        _: ScreenSource,
+        _: &str,
+        _: &GameWindow,
+    ) -> Result<WorkerPort, String> {
         Err("there is no share worker".into())
     }
 }
@@ -209,6 +230,7 @@ enum Ctl {
     Start {
         title: String,
         source: ScreenSource,
+        game: GameWindow,
         reply: oneshot::Sender<Result<(), Refusal>>,
     },
     StopSharing(&'static str),
@@ -297,10 +319,22 @@ impl Hub {
 
     /// Starts sharing: dials the members and offers them the stream of `title`.
     pub async fn start_sharing(&self, title: String, source: ScreenSource) -> Result<(), Refusal> {
+        self.start_sharing_game(title, source, GameWindow::default())
+            .await
+    }
+
+    /// Like `start_sharing`, with the game's window and processes for the share worker.
+    pub async fn start_sharing_game(
+        &self,
+        title: String,
+        source: ScreenSource,
+        game: GameWindow,
+    ) -> Result<(), Refusal> {
         let (reply, answer) = oneshot::channel();
         let _ = self.ctl.send(Ctl::Start {
             title,
             source,
+            game,
             reply,
         });
         answer.await.unwrap_or(Err(Refusal::NoEncoder))
@@ -344,10 +378,22 @@ pub struct Handle {
 
 impl Handle {
     pub async fn start_sharing(&self, title: String, source: ScreenSource) -> Result<(), Refusal> {
+        self.start_sharing_game(title, source, GameWindow::default())
+            .await
+    }
+
+    /// Like `start_sharing`, with the game's window and processes for the share worker.
+    pub async fn start_sharing_game(
+        &self,
+        title: String,
+        source: ScreenSource,
+        game: GameWindow,
+    ) -> Result<(), Refusal> {
         let (reply, answer) = oneshot::channel();
         let _ = self.ctl.send(Ctl::Start {
             title,
             source,
+            game,
             reply,
         });
         answer.await.unwrap_or(Err(Refusal::NoEncoder))
@@ -400,6 +446,7 @@ struct Peer {
 struct Hosting {
     title: String,
     source: ScreenSource,
+    game: GameWindow,
     worker: Option<HostWorker>,
 }
 
@@ -485,9 +532,10 @@ impl Task {
             Ctl::Start {
                 title,
                 source,
+                game,
                 reply,
             } => {
-                let _ = reply.send(self.start_sharing(title, source));
+                let _ = reply.send(self.start_sharing(title, source, game));
             }
             Ctl::StopSharing(reason) => self.stop_sharing(reason),
             Ctl::Watch { account, reply } => {
@@ -499,7 +547,12 @@ impl Task {
         self.report(true);
     }
 
-    fn start_sharing(&mut self, title: String, source: ScreenSource) -> Result<(), Refusal> {
+    fn start_sharing(
+        &mut self,
+        title: String,
+        source: ScreenSource,
+        game: GameWindow,
+    ) -> Result<(), Refusal> {
         if self.hosting.is_some() {
             return Err(Refusal::Busy);
         }
@@ -513,6 +566,7 @@ impl Task {
         self.hosting = Some(Hosting {
             title,
             source,
+            game,
             worker: None,
         });
         self.sync_dialers();
@@ -563,7 +617,12 @@ impl Task {
             .unwrap_or_default();
         let port = self
             .workers
-            .launch(Role::Guest, ScreenSource::Game, &title)
+            .launch(
+                Role::Guest,
+                ScreenSource::Game,
+                &title,
+                &GameWindow::default(),
+            )
             .map_err(|error| {
                 tracing::warn!("screen: viewer worker: {error}");
                 Refusal::NoDecoder
@@ -1039,7 +1098,7 @@ impl Task {
             .and_then(|p| p.hello.as_ref())
             .map(|h| h.decode.clone())
             .unwrap_or_default();
-        let codec = pick_codec(&caps.encode, &viewer_decodes);
+        let codec = pick_codec(&caps.encode, &viewer_decodes, hosting.source);
         let running = hosting.worker.as_ref().map(|w| w.start.codec.clone());
         let usable = match (&codec, &running) {
             (Some(_), None) => true,
@@ -1104,24 +1163,25 @@ impl Task {
             .map(|h| h.decode.clone())
             .next()
             .unwrap_or_default();
-        let Some(codec) = pick_codec(&caps.encode, &decodes) else {
+        let Some(codec) = pick_codec(&caps.encode, &decodes, hosting.source) else {
             return;
         };
-        let port = match self
-            .workers
-            .launch(Role::Host, hosting.source, &hosting.title)
-        {
-            Ok(port) => port,
-            Err(error) => {
-                tracing::warn!("screen: streamer worker: {error}");
-                let _ = self.out.send(Output::Notice {
-                    code: "screen_worker",
-                    message: format!("Sharing your screen could not start: {error}"),
-                });
-                self.stop_sharing("no_encoder");
-                return;
-            }
-        };
+        let port =
+            match self
+                .workers
+                .launch(Role::Host, hosting.source, &hosting.title, &hosting.game)
+            {
+                Ok(port) => port,
+                Err(error) => {
+                    tracing::warn!("screen: streamer worker: {error}");
+                    let _ = self.out.send(Output::Notice {
+                        code: "screen_worker",
+                        message: format!("Sharing your screen could not start: {error}"),
+                    });
+                    self.stop_sharing("no_encoder");
+                    return;
+                }
+            };
         self.generation += 1;
         let generation = self.generation;
         let target = self.best_target(&watchers);
@@ -1418,7 +1478,9 @@ fn config_message(start: &Start) -> Message {
 }
 
 /// AV1, then H.264, then whatever else both have, in the streamer's order.
-fn pick_codec(encode: &[CodecCaps], decode: &[CodecCaps]) -> Option<String> {
+/// The codec a stream uses: AV1, else H.264, else (only for the test pattern) the test codec.
+/// The test codec is lossless and huge; it is never what a player's game is streamed with.
+fn pick_codec(encode: &[CodecCaps], decode: &[CodecCaps], source: ScreenSource) -> Option<String> {
     let both = |name: &str| {
         encode.iter().any(|c| c.codec == name) && decode.iter().any(|c| c.codec == name)
     };
@@ -1427,10 +1489,7 @@ fn pick_codec(encode: &[CodecCaps], decode: &[CodecCaps]) -> Option<String> {
             return Some(preferred.to_owned());
         }
     }
-    encode
-        .iter()
-        .find(|c| decode.iter().any(|d| d.codec == c.codec))
-        .map(|c| c.codec.clone())
+    (source == ScreenSource::TestPattern && both("test")).then(|| "test".to_owned())
 }
 
 /// The control stream of one connection: the dialing side opens it, the other accepts it. Lines

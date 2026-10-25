@@ -22,7 +22,7 @@ use anyplay_share::link::{
 };
 use tokio::sync::mpsc;
 
-use crate::screen::{WorkerPort, Workers};
+use crate::screen::{GameWindow, WorkerPort, Workers};
 
 /// How long a worker program has to ask for its capabilities.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -62,7 +62,13 @@ impl Workers for ProcessWorkers {
         Ok(capabilities)
     }
 
-    fn launch(&self, role: Role, source: ScreenSource, title: &str) -> Result<WorkerPort, String> {
+    fn launch(
+        &self,
+        role: Role,
+        source: ScreenSource,
+        title: &str,
+        game: &GameWindow,
+    ) -> Result<WorkerPort, String> {
         let path = self
             .state
             .lock()
@@ -90,6 +96,16 @@ impl Workers for ProcessWorkers {
                 "--title",
                 title,
             ])
+            .args(
+                game.window
+                    .into_iter()
+                    .flat_map(|window| ["--window".to_owned(), window.to_string()]),
+            )
+            .args(
+                game.pids
+                    .iter()
+                    .flat_map(|pid| ["--pid".to_owned(), pid.to_string()]),
+            )
             .env("ANYPLAY_SHARE_ENDPOINT", address.to_string())
             .env("ANYPLAY_SHARE_TOKEN", &token)
             .stdin(Stdio::null())

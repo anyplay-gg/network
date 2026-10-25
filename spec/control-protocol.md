@@ -128,7 +128,7 @@ A **restriction** has a `kind` and, when they apply, `until`, `rule`, `reason`, 
 | `accept_request` | `conversation` | the `Conversation` |
 | `leave_conversation` | `conversation` | `{}`: leaves a group or declines a request |
 | `add_to_conversation` | `conversation`, `accounts` | `{added}` |
-| `screen_start` | `source`: `game` (default) or `test_pattern` | `{}`: the player's game is streamed to the party |
+| `screen_start` | `source`: `game` (default) or `test_pattern`; `window`: the game's window as a number (a Windows `HWND`), `pids`: the game's process ids, both optional | `{}`: the player's game is streamed to the party |
 | `screen_stop` | | `{}` |
 | `screen_watch` | `account` | `{}`: watch the stream that member offers |
 | `screen_leave` | | `{}` |

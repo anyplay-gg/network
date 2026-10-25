@@ -3,7 +3,7 @@
 use std::sync::mpsc::RecvTimeoutError;
 use std::time::{Duration, Instant};
 
-use anyplay_share::codec::{Frame, VideoEncoder};
+use anyplay_share::codec::{CodecError, Frame, VideoEncoder};
 use anyplay_share::link::{FromWorker, Start, ToWorker, WorkerStats};
 use anyplay_share::packetiser::Packetiser;
 use anyplay_share::testcodec::TestPattern;
@@ -26,6 +26,10 @@ impl FrameSource for PatternSource {
     }
 }
 
+/// Makes the encoder for a setup. It may lower the setup to what the encoder can do (a software
+/// encoder cannot do 1080p60); the loop then follows the lowered numbers.
+pub type EncoderFactory = Box<dyn FnMut(&mut Start) -> Result<Box<dyn VideoEncoder>, String>>;
+
 /// How often the stats leave.
 const STATS_EVERY: Duration = Duration::from_millis(500);
 /// The fastest the loop produces pictures, whatever the setup asks for.
@@ -37,6 +41,10 @@ struct State {
     packetiser: Packetiser,
     parity: u8,
     key_wanted: bool,
+    /// A new `Start` came: the encoder is made again.
+    restart: bool,
+    /// A new rate for the encoder.
+    rate: Option<u32>,
 }
 
 impl State {
@@ -49,6 +57,7 @@ impl State {
                 self.parity = new.parity_percent;
                 self.start = new;
                 self.key_wanted = true;
+                self.restart = true;
             }
             ToWorker::Rate {
                 kbps,
@@ -56,6 +65,7 @@ impl State {
             } => {
                 self.start.kbps = kbps;
                 self.parity = parity_percent;
+                self.rate = Some(kbps);
             }
             ToWorker::KeyFrame => self.key_wanted = true,
             ToWorker::Datagram(_) => {}
@@ -68,7 +78,18 @@ impl State {
 /// Runs the streamer until the net service stops it or hangs up. Waits for the first
 /// [`ToWorker::Start`]; then, at the setup's frame rate, takes a picture from `source`, encodes
 /// it and sends its datagrams.
-pub fn run(mut source: Box<dyn FrameSource>, mut encoder: Box<dyn VideoEncoder>, port: Port) {
+pub fn run(source: Box<dyn FrameSource>, encoder: Box<dyn VideoEncoder>, port: Port) {
+    let mut encoder = Some(encoder);
+    run_with(
+        source,
+        Box::new(move |_| encoder.take().ok_or_else(|| "only one encoder".to_owned())),
+        port,
+    );
+}
+
+/// Like [`run`], with an encoder made from each `Start`: a change of size or codec makes a new
+/// one, and the rate of a `Rate` message goes to the running one.
+pub fn run_with(mut source: Box<dyn FrameSource>, mut make_encoder: EncoderFactory, port: Port) {
     let Port {
         from_service,
         to_service,
@@ -85,7 +106,10 @@ pub fn run(mut source: Box<dyn FrameSource>, mut encoder: Box<dyn VideoEncoder>,
         parity: start.parity_percent,
         start,
         key_wanted: true,
+        restart: true,
+        rate: None,
     };
+    let mut encoder: Option<Box<dyn VideoEncoder>> = None;
     let mut frames: u64 = 0;
     let mut window_bytes: u64 = 0;
     let mut window_frames: u32 = 0;
@@ -106,6 +130,27 @@ pub fn run(mut source: Box<dyn FrameSource>, mut encoder: Box<dyn VideoEncoder>,
                 Err(RecvTimeoutError::Disconnected) => return,
             }
         }
+        if state.restart {
+            state.restart = false;
+            state.rate = None;
+            // The old encoder goes first: two hardware encoders at once is more than some
+            // drivers give.
+            drop(encoder.take());
+            match make_encoder(&mut state.start) {
+                Ok(made) => encoder = Some(made),
+                Err(reason) => {
+                    let _ = to_service.send(FromWorker::Ended(reason));
+                    return;
+                }
+            }
+            state.packetiser.set_max_payload(state.start.max_payload);
+        }
+        let Some(encoder) = encoder.as_mut() else {
+            return;
+        };
+        if let Some(kbps) = state.rate.take() {
+            encoder.set_bitrate(kbps);
+        }
         let period = Duration::from_secs_f64(1.0 / f64::from(state.start.fps.clamp(1, MAX_FPS)));
         next += period;
         let now = Instant::now();
@@ -119,12 +164,18 @@ pub fn run(mut source: Box<dyn FrameSource>, mut encoder: Box<dyn VideoEncoder>,
         };
         let encoded = match encoder.encode(&frame, state.key_wanted) {
             Ok(encoded) => encoded,
+            // The encoder keeps the picture and answers later; a key frame asked for now is
+            // still wanted.
+            Err(CodecError::Pending) => continue,
+            Err(CodecError::BadFrame) => continue,
             Err(error) => {
                 let _ = to_service.send(FromWorker::Ended(format!("the encoder failed: {error}")));
                 return;
             }
         };
-        state.key_wanted = false;
+        if encoded.key {
+            state.key_wanted = false;
+        }
         let datagrams = match state.packetiser.packetise(&encoded, state.parity) {
             Ok(datagrams) => datagrams,
             Err(_) => {

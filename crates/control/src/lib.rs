@@ -245,6 +245,14 @@ pub enum Command {
     ScreenStart {
         #[serde(default)]
         source: ScreenSource,
+        /// The game's window (a Windows `HWND` as a number), if the launcher has found it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        window: Option<i64>,
+        /// The processes of the game: the one the launcher started and what it started.
+        /// Without a window or processes the share worker finds the window by the game's
+        /// title, which can pick a wrong one.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        pids: Vec<u32>,
     },
     /// Ends the stream the player shares.
     ScreenStop,
@@ -1363,7 +1371,20 @@ mod tests {
             Ok((
                 1,
                 Command::ScreenStart {
-                    source: ScreenSource::Game
+                    source: ScreenSource::Game,
+                    window: None,
+                    pids: Vec::new(),
+                }
+            ))
+        );
+        assert_eq!(
+            parse_command(r#"{"id":4,"do":"screen_start","window":65872,"pids":[100,101]}"#),
+            Ok((
+                4,
+                Command::ScreenStart {
+                    source: ScreenSource::Game,
+                    window: Some(65872),
+                    pids: vec![100, 101],
                 }
             ))
         );
@@ -1372,7 +1393,9 @@ mod tests {
             Ok((
                 2,
                 Command::ScreenStart {
-                    source: ScreenSource::TestPattern
+                    source: ScreenSource::TestPattern,
+                    window: None,
+                    pids: Vec::new(),
                 }
             ))
         );

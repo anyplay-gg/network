@@ -13,6 +13,9 @@ use crate::Port;
 /// Where pictures go: a window, or a counter in tests.
 pub trait FrameSink {
     fn show(&mut self, frame: &Frame);
+    /// Called every few milliseconds when there is nothing new to show, so that a window can
+    /// answer its own events (move, resize, close). Default: nothing to do.
+    fn idle(&mut self) {}
     /// The sink was told to stop (the window should close). Default: nothing to do.
     fn close(&mut self) {}
     /// The viewer closed the window: the worker ends.
@@ -61,6 +64,7 @@ pub fn run(decoders: DecoderFactory, mut sink: Box<dyn FrameSink>, port: Port) {
             let _ = to_service.send(FromWorker::Ended("the window was closed".into()));
             return;
         }
+        sink.idle();
         match from_service.recv_timeout(SLICE) {
             Ok(ToWorker::Start(start)) => {
                 epoch = start.epoch;
@@ -107,7 +111,13 @@ pub fn run(decoders: DecoderFactory, mut sink: Box<dyn FrameSink>, port: Port) {
                         frame: done.frame,
                     }));
                 }
-                Err(CodecError::BadFrame) => {}
+                // The decoder holds the picture and shows it with the next one.
+                Err(CodecError::BadFrame) | Err(CodecError::Pending) => {}
+                Err(CodecError::Failed(why)) => {
+                    let _ =
+                        to_service.send(FromWorker::Ended(format!("the decoder failed: {why}")));
+                    return;
+                }
             }
         }
         if let Some(request) = reassembler.poll_key_request(now_us(&clock)) {

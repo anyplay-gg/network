@@ -19,6 +19,22 @@ path = "src/main.rs"
 anyplay-share = { path = "../share" }
 serde_json.workspace = true
 
+# Windows: the system's own H.264 encoders and decoders (Media Foundation), Windows Graphics
+# Capture of one window, and a window for the viewer. All of it ships with the system or is
+# MIT or Apache-2.0 (docs/adr/0027).
+[target.'cfg(windows)'.dependencies]
+minifb = "0.28"
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Dwm",
+    "Win32_Media_MediaFoundation",
+    "Win32_System_Com",
+    "Win32_System_Ole",
+    "Win32_System_Variant",
+    "Win32_UI_WindowsAndMessaging",
+] }
+windows-capture = "2"
+
 [dev-dependencies]
 anyplay-control = { path = "../control" }
 anyplay-net = { path = "../net" }

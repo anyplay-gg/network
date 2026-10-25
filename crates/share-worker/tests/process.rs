@@ -70,7 +70,9 @@ impl Node {
     fn join(&mut self, others: &[&Node]) {
         let workers = ProcessWorkers::new();
         let capabilities = workers.set_path(WORKER).expect("the worker answers");
-        assert_eq!(capabilities.encode[0].codec, "test");
+        // The test codec is always there; on Windows H.264 from the system comes before it.
+        assert!(capabilities.encode.iter().any(|c| c.codec == "test"));
+        assert!(capabilities.decode.iter().any(|c| c.codec == "test"));
         let members: Members = others.iter().map(|n| n.as_member()).collect();
         let (out, mut rx) = mpsc::unbounded_channel();
         let views = self.views.clone();
@@ -121,17 +123,18 @@ async fn the_worker_programs_carry_a_stream() {
     eventually("no offer", || !b.view().offers.is_empty()).await;
     b.hub.as_ref().unwrap().watch(1).await.expect("watch");
 
-    // The viewer's worker reports pictures shown, at the size of the test pattern.
+    // The viewer's worker reports pictures shown (the test codec keeps the test pattern's size,
+    // H.264 from the system has the size of the stream).
     eventually("the viewer never showed a picture", || {
         b.view().watching.is_some_and(|w| {
-            w.phase == ScreenPhase::Live && w.stats.width == 320 && w.stats.fps > 0
+            w.phase == ScreenPhase::Live && w.stats.width >= 320 && w.stats.fps > 0
         })
     })
     .await;
     // The streamer's worker reports what it sends.
     eventually("the streamer never reported", || {
         a.view().hosting.is_some_and(|h| {
-            h.phase == ScreenPhase::Live && h.stats.width == 320 && h.stats.kbps > 0
+            h.phase == ScreenPhase::Live && h.stats.width >= 320 && h.stats.kbps > 0
         })
     })
     .await;
