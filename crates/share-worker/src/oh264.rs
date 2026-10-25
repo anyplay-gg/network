@@ -150,10 +150,16 @@ impl OhEncoder {
         })
     }
 
-    /// Sets one of the encoder's bit rates (`ENCODER_OPTION_BITRATE` or `_MAX_BITRATE`).
-    fn set_rate(&mut self, option: openh264_sys2::ENCODER_OPTION, bps: u32) -> bool {
+    /// Sets one of the encoder's bit rates (`ENCODER_OPTION_BITRATE` or `_MAX_BITRATE`) for
+    /// `layer`.
+    fn set_rate(
+        &mut self,
+        option: openh264_sys2::ENCODER_OPTION,
+        layer: openh264_sys2::LAYER_NUM,
+        bps: u32,
+    ) -> bool {
         let mut info = openh264_sys2::SBitrateInfo {
-            iLayer: openh264_sys2::SPATIAL_LAYER_ALL,
+            iLayer: layer,
             iBitrate: bps.min(i32::MAX as u32) as i32,
         };
         // SAFETY: the encoder is open; the option takes a pointer to an SBitrateInfo, which
@@ -208,21 +214,24 @@ impl VideoEncoder for OhEncoder {
     }
 
     fn set_bitrate(&mut self, kbps: u32) {
-        let bps = kbps.saturating_mul(1000);
-        let raising = kbps > self.setup.kbps;
-        // The target may not pass the maximum: raise the maximum first, lower it last.
-        let (first, second) = if raising {
-            (
-                openh264_sys2::ENCODER_OPTION_MAX_BITRATE,
-                openh264_sys2::ENCODER_OPTION_BITRATE,
-            )
-        } else {
-            (
-                openh264_sys2::ENCODER_OPTION_BITRATE,
-                openh264_sys2::ENCODER_OPTION_MAX_BITRATE,
-            )
+        use openh264_sys2::{
+            ENCODER_OPTION_BITRATE, ENCODER_OPTION_MAX_BITRATE, SPATIAL_LAYER_0, SPATIAL_LAYER_ALL,
         };
-        if self.set_rate(first, bps) && self.set_rate(second, bps) {
+        let bps = kbps.saturating_mul(1000);
+        // OpenH264 refuses a target above the maximum, and keeps a maximum for the whole stream
+        // and one for its single layer (the crate sets both to the opening rate). Both move with
+        // the target: up before it when raising, down after it when lowering.
+        let max = |encoder: &mut Self| {
+            encoder.set_rate(ENCODER_OPTION_MAX_BITRATE, SPATIAL_LAYER_ALL, bps)
+                && encoder.set_rate(ENCODER_OPTION_MAX_BITRATE, SPATIAL_LAYER_0, bps)
+        };
+        let target =
+            |encoder: &mut Self| encoder.set_rate(ENCODER_OPTION_BITRATE, SPATIAL_LAYER_ALL, bps);
+        let raising = kbps > self.setup.kbps;
+        let raised = !raising || max(self);
+        let set = raised && target(self);
+        let lowered = set && (raising || max(self));
+        if lowered {
             self.setup.kbps = kbps;
         }
     }
@@ -357,7 +366,9 @@ mod tests {
         }
         assert!(shown >= 25, "only {shown} of 30 pictures came out");
         assert_eq!(keys, 1, "one key frame unless asked");
+        // Above the opening rate: the encoder takes it (its maximum moves with it).
         encoder.set_bitrate(8000);
+        assert_eq!(encoder.setup.kbps, 8000);
         encoder.set_bitrate(1000);
         assert_eq!(encoder.setup.kbps, 1000);
     }

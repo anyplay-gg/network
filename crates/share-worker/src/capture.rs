@@ -340,7 +340,7 @@ mod pipewire_source {
         last: Option<Frame>,
         started: Instant,
         // Last: the portal session closes after the stream has stopped.
-        _window: PortalWindow,
+        _window: Option<PortalWindow>,
     }
 
     impl PipeWireSource {
@@ -350,6 +350,20 @@ mod pipewire_source {
                 .take()
                 .ok_or("the portal gave no PipeWire remote")?;
             let node = window.node_id;
+            Self::start(Some(fd), node, Some(window))
+        }
+
+        /// A node on the user's own PipeWire, without the portal (tests).
+        #[cfg(test)]
+        pub fn open_local(node: u32) -> Result<PipeWireSource, String> {
+            Self::start(None, node, None)
+        }
+
+        fn start(
+            fd: Option<OwnedFd>,
+            node: u32,
+            window: Option<PortalWindow>,
+        ) -> Result<PipeWireSource, String> {
             let shared: Shared = Arc::default();
             let (stop, stop_rx) = pw::channel::channel::<()>();
             let (ready_tx, ready_rx) = mpsc::channel::<Result<(), String>>();
@@ -389,7 +403,7 @@ mod pipewire_source {
     /// The capture thread: connects to the portal's PipeWire remote, asks for the window's stream
     /// as 32-bit RGB in shared memory and keeps the newest picture until told to stop.
     fn run(
-        fd: OwnedFd,
+        fd: Option<OwnedFd>,
         node: u32,
         shared: Shared,
         stop: pw::channel::Receiver<()>,
@@ -400,9 +414,11 @@ mod pipewire_source {
         let mainloop = pw::main_loop::MainLoopRc::new(None).map_err(|e| failed("loop", e))?;
         let context =
             pw::context::ContextRc::new(&mainloop, None).map_err(|e| failed("context", e))?;
-        let core = context
-            .connect_fd_rc(fd, None)
-            .map_err(|e| failed("connect", e))?;
+        let core = match fd {
+            Some(fd) => context.connect_fd_rc(fd, None),
+            None => context.connect_rc(None),
+        }
+        .map_err(|e| failed("connect", e))?;
         let stream = pw::stream::StreamBox::new(
             &core,
             "anyplay-share",
@@ -421,12 +437,18 @@ mod pipewire_source {
         };
         let _listener = stream
             .add_local_listener_with_user_data(data)
-            .state_changed(move |_, data, _, new| {
-                if let pw::stream::StreamState::Error(why) = new {
+            .state_changed(move |_, data, _, new| match new {
+                pw::stream::StreamState::Error(why) => {
                     eprintln!("share worker: the PipeWire stream failed: {why}");
                     end(&data.shared);
                     quit_on_error.quit();
                 }
+                // The connection to PipeWire is gone.
+                pw::stream::StreamState::Unconnected => {
+                    end(&data.shared);
+                    quit_on_error.quit();
+                }
+                _ => {}
             })
             .param_changed(|_, data, id, param| {
                 let Some(param) = param else { return };
@@ -491,6 +513,19 @@ mod pipewire_source {
                 &mut params,
             )
             .map_err(|e| failed("stream connect", e))?;
+        // The window's node goes away when the window closes or the player stops sharing in the
+        // desktop's own controls. The stream itself only pauses then, so the registry tells.
+        let registry = core.get_registry_rc().map_err(|e| failed("registry", e))?;
+        let (gone, quit_on_gone) = (shared.clone(), mainloop.clone());
+        let _gone = registry
+            .add_listener_local()
+            .global_remove(move |id| {
+                if id == node {
+                    end(&gone);
+                    quit_on_gone.quit();
+                }
+            })
+            .register();
         let quit = mainloop.clone();
         let _stop = stop.attach(mainloop.loop_(), move |()| quit.quit());
         let _ = ready.send(Ok(()));
@@ -498,7 +533,8 @@ mod pipewire_source {
         Ok(())
     }
 
-    /// The formats the worker takes: 32-bit RGB in either order, any size, any rate. No DMA-BUF
+    /// The formats the worker takes: 32-bit RGB in either order, any size, at most 60 pictures a
+    /// second (the most a stream takes; more would only be copied and dropped). No DMA-BUF
     /// modifiers are offered, so the compositor sends pictures in shared memory.
     fn format_param() -> Option<Vec<u8>> {
         let object = pw::spa::pod::object!(
@@ -550,10 +586,7 @@ mod pipewire_source {
                 Fraction,
                 pw::spa::utils::Fraction { num: 60, denom: 1 },
                 pw::spa::utils::Fraction { num: 0, denom: 1 },
-                pw::spa::utils::Fraction {
-                    num: 1000,
-                    denom: 1
-                }
+                pw::spa::utils::Fraction { num: 60, denom: 1 }
             ),
         );
         pw::spa::pod::serialize::PodSerializer::serialize(
@@ -605,6 +638,70 @@ mod pipewire_source {
 #[cfg(test)]
 mod tests {
     use super::{PixelOrder, pack_bgra};
+
+    /// The id of the PipeWire node named `name`, from `pw-dump`.
+    #[cfg(target_os = "linux")]
+    fn node_id(name: &str) -> Option<u32> {
+        let out = std::process::Command::new("pw-dump").output().ok()?;
+        let objects: Vec<serde_json::Value> = serde_json::from_slice(&out.stdout).ok()?;
+        objects.iter().find_map(|object| {
+            let named = object["info"]["props"]["node.name"].as_str() == Some(name);
+            let node = object["type"].as_str() == Some("PipeWire:Interface:Node");
+            (named && node)
+                .then(|| object["id"].as_u64())
+                .flatten()
+                .map(|id| id as u32)
+        })
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "needs a running PipeWire, pw-dump and gst-launch-1.0 with its PipeWire plugin"]
+    fn the_capture_ends_when_its_stream_goes_away() {
+        use std::time::{Duration, Instant};
+
+        use crate::host::FrameSource;
+
+        // A live test picture published as a PipeWire node, as a window's stream is.
+        let name = format!("anyplay-capture-test-{}", std::process::id());
+        let mut publisher = std::process::Command::new("gst-launch-1.0")
+            .args([
+                "-q",
+                "videotestsrc",
+                "is-live=true",
+                "!",
+                "video/x-raw,format=BGRx,width=320,height=240,framerate=30/1",
+                "!",
+                "pipewiresink",
+                "mode=provide",
+                &format!("stream-properties=props,node.name={name}"),
+            ])
+            .spawn()
+            .expect("gst-launch-1.0");
+        let node = (0..50).find_map(|_| {
+            std::thread::sleep(Duration::from_millis(100));
+            node_id(&name)
+        });
+        let Some(node) = node else {
+            let _ = publisher.kill();
+            panic!("the test picture's node did not appear");
+        };
+        let mut source = super::pipewire_source::PipeWireSource::open_local(node).unwrap();
+        let first = source.next_frame().expect("a picture");
+        assert_eq!((first.width, first.height), (320, 240));
+
+        // The window closes: its node goes away, and so must the capture.
+        publisher.kill().unwrap();
+        let _ = publisher.wait();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while source.next_frame().is_some() {
+            assert!(
+                Instant::now() < deadline,
+                "the capture went on after its stream went away"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
 
     #[test]
     fn rows_with_padding_are_packed_tight_with_opaque_alpha() {
