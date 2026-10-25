@@ -342,6 +342,9 @@ pub struct SessionRef {
     pub joinable: bool,
     pub members: u16,
     pub max_members: u16,
+    /// What kind of session it is: a `lan` session reads "playing together" in presence.
+    #[serde(default)]
+    pub kind: SessionKind,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -359,6 +362,38 @@ pub enum Visibility {
     Closed,
 }
 
+/// What a session is for ([ADR 0030](../../docs/adr/0030-play-together-is-a-session-that-ends-with-its-host.md)).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionKind {
+    /// Play Together: a session the launcher opens for a game that finds others on a local
+    /// network. The leader's world is the game, so the session ends when the leader leaves.
+    Lan,
+    /// A session the game itself opens through its session calls. The default, what every
+    /// session was before the field existed, and what a kind nobody knows is read as.
+    #[default]
+    #[serde(other)]
+    Game,
+}
+
+impl SessionKind {
+    /// The text of the kind in the API and in a cloud's store.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SessionKind::Game => "game",
+            SessionKind::Lan => "lan",
+        }
+    }
+
+    /// The kind named by `text`; anything unknown is a `game` session.
+    pub fn from_text(text: &str) -> Self {
+        match text {
+            "lan" => SessionKind::Lan,
+            _ => SessionKind::Game,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Session {
     pub id: String,
@@ -366,6 +401,9 @@ pub struct Session {
     pub title: String,
     pub version: String,
     pub build: String,
+    /// Absent from a cloud that predates the field: a `game` session.
+    #[serde(default)]
+    pub kind: SessionKind,
     pub leader: AccountId,
     pub max_members: u16,
     pub visibility: Visibility,
@@ -401,6 +439,8 @@ pub struct CreateSession {
     pub title: String,
     pub version: String,
     pub build: String,
+    #[serde(default, skip_serializing_if = "is_game")]
+    pub kind: SessionKind,
     pub max_members: u16,
     pub visibility: Visibility,
     #[serde(default)]
@@ -474,6 +514,10 @@ fn is_false(value: &bool) -> bool {
     !*value
 }
 
+fn is_game(kind: &SessionKind) -> bool {
+    *kind == SessionKind::Game
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Invited {
     pub sent: Vec<AccountId>,
@@ -484,6 +528,10 @@ pub struct Invitation {
     pub id: String,
     pub from: Account,
     pub session: String,
+    /// The kind of the session invited to. A `lan` invitation reads "Mira is playing Minecraft.
+    /// Join?" and not "Mira invited you".
+    #[serde(default)]
+    pub kind: SessionKind,
     pub title_id: String,
     pub title: String,
     pub version: String,
@@ -1875,6 +1923,44 @@ mod join_code_tests {
     }
 
     #[test]
+    fn a_session_without_a_kind_is_a_game_session() {
+        // A cloud from before Play Together sends no kind.
+        let old = r#"{"id":"S1","title_id":"GAME00001","title":"G","version":"1","build":"1","leader":1,
+            "max_members":4,"visibility":"friends","properties":"","members":[],"created":0}"#;
+        let session: Session = serde_json::from_str(old).unwrap();
+        assert_eq!(session.kind, SessionKind::Game);
+        let reference: SessionRef =
+            serde_json::from_str(r#"{"id":"S1","joinable":true,"members":1,"max_members":4}"#)
+                .unwrap();
+        assert_eq!(reference.kind, SessionKind::Game);
+        // A net service from before it asks for a game session by saying nothing.
+        let create = CreateSession {
+            title_id: "GAME00001".into(),
+            title: "G".into(),
+            version: "1".into(),
+            build: "1".into(),
+            kind: SessionKind::Game,
+            max_members: 4,
+            visibility: Visibility::Friends,
+            properties: String::new(),
+            endpoint: "ab".repeat(32),
+            relay: None,
+        };
+        assert!(!serde_json::to_string(&create).unwrap().contains("kind"));
+        let lan = CreateSession {
+            kind: SessionKind::Lan,
+            ..create
+        };
+        assert!(
+            serde_json::to_string(&lan)
+                .unwrap()
+                .contains(r#""kind":"lan""#)
+        );
+        assert_eq!(SessionKind::from_text("lan"), SessionKind::Lan);
+        assert_eq!(SessionKind::from_text("arena"), SessionKind::Game);
+    }
+
+    #[test]
     fn a_redeemed_code_is_its_kind_and_its_invitation() {
         let party = Redeemed::Party(PartyInvitation {
             id: "I1".into(),
@@ -1893,6 +1979,7 @@ mod join_code_tests {
             id: "I2".into(),
             from: person(),
             session: "S1".into(),
+            kind: SessionKind::Game,
             title_id: "GAME00001".into(),
             title: "Game".into(),
             version: "01.00".into(),

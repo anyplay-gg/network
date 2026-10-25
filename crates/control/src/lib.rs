@@ -87,6 +87,10 @@ pub enum Command {
         version: String,
         build: String,
         join: Option<String>,
+        /// Play Together: open a `lan` session for this game before it starts, and ask the
+        /// party into it. Without `join` only; with both, `join` wins.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        host: Option<Host>,
     },
     GameEnd,
     Invite {
@@ -640,6 +644,22 @@ pub struct FriendAdded {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GameStarted {
     pub env: BTreeMap<String, String>,
+    /// The `lan` session the start opened (`host` was given and the cloud made it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<String>,
+}
+
+/// What a launcher asks for to host a game: a Play Together session.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Host {
+    /// The most players, the host included.
+    pub max_members: u16,
+    /// `friends` lets a friend of any member join from presence; `invite` only the invited.
+    pub visibility: Visibility,
+    /// Ask the host's party into the session when it opens: the party moves in when the host
+    /// leads it, else its friends among the host's party get an invitation.
+    #[serde(default)]
+    pub party: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -889,6 +909,8 @@ pub struct Member {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Session {
     pub id: String,
+    #[serde(default)]
+    pub kind: anyplay_api::SessionKind,
     pub title_id: String,
     pub title: String,
     pub version: String,
@@ -924,6 +946,14 @@ pub enum Event {
         id: u64,
         title: String,
         max: u16,
+    },
+    /// A Play Together session ended without the player leaving it: its host left or was
+    /// disconnected for good. The player's game goes on; it has no one to play with.
+    SessionEnded {
+        session: String,
+        title_id: String,
+        title: String,
+        host: Account,
     },
     Notice {
         code: String,
@@ -1841,6 +1871,47 @@ mod tests {
                 }
             ))
         );
+    }
+
+    #[test]
+    fn a_game_start_may_host_a_play_together_session() {
+        let hosted = Command::GameStart {
+            title_id: "GAME00001".into(),
+            title: "Game".into(),
+            version: "01.000".into(),
+            build: "0.1.3".into(),
+            join: None,
+            host: Some(Host {
+                max_members: 8,
+                visibility: Visibility::Friends,
+                party: true,
+            }),
+        };
+        let line = command_line(4, &hosted);
+        assert!(
+            line.contains("\"host\":{\"max_members\":8,\"visibility\":\"friends\",\"party\":true}")
+        );
+        assert_eq!(parse_command(&line), Ok((4, hosted)));
+        // A launcher from before Play Together sends no `host`, and its line still reads.
+        assert_eq!(
+            parse_command(
+                r#"{"id":5,"do":"game_start","title_id":"GAME00001","title":"Game","version":"01.000","build":"0.1.3","join":null}"#
+            ),
+            Ok((
+                5,
+                Command::GameStart {
+                    title_id: "GAME00001".into(),
+                    title: "Game".into(),
+                    version: "01.000".into(),
+                    build: "0.1.3".into(),
+                    join: None,
+                    host: None,
+                }
+            ))
+        );
+        // The answer of an older net service has no session.
+        let answer: GameStarted = serde_json::from_str(r#"{"env":{}}"#).unwrap();
+        assert_eq!(answer.session, None);
     }
 
     // A command field named `id` once replaced the command's number on the line, so the net service

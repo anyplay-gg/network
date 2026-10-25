@@ -95,6 +95,7 @@ mod tests {
             title: "Game".into(),
             version: "1".into(),
             build: "1".into(),
+            kind: Default::default(),
             leader: members[0].account.id,
             max_members: 8,
             visibility: Visibility::Friends,

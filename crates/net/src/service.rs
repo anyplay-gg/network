@@ -15,7 +15,8 @@ use std::time::{Duration, Instant};
 use anyplay_api::{
     AccountId, Activity, CodeAnswer, CreateSession, Device, ErrorCode, Event, FriendLists,
     Invitation, JoinSession, MAX_DAY_MINUTES, MAX_PLAYTIME_UPLOAD, Me, Platform, PlaytimeEntry,
-    PresenceRequest, Report, Session, Visibility, check_handle, day_number, is_title_id,
+    PresenceRequest, Report, Session, SessionKind, Visibility, check_handle, day_number,
+    is_title_id,
 };
 use anyplay_bridge_protocol::{
     self as bridge, ActivateResult, DialogResult, Frame, Message, PeerInfoReply, PeerState,
@@ -1076,7 +1077,8 @@ impl Service {
                 version,
                 build,
                 join,
-            } => self.game_start(id, title_id, title, version, build, join),
+                host,
+            } => self.game_start(id, title_id, title, version, build, join, host),
             Command::GameEnd => {
                 self.game_end();
                 self.ok(id, Done {});
@@ -1707,7 +1709,7 @@ impl Service {
             }
             Event::SessionGone { id } => {
                 self.session_answers.entry(id.clone()).or_default().pushed();
-                self.session_gone(&id);
+                self.session_closed(&id);
             }
             // A mute, a warning or the decision on an appeal: read what limits the account again.
             Event::Action { .. } => self.fetch_restrictions(),
@@ -1829,7 +1831,7 @@ impl Service {
                     match result {
                         Ok(session) => service.session_changed(session),
                         Err(CloudError::Api(error)) if error.error == ErrorCode::NotFound => {
-                            service.session_gone(&id)
+                            service.session_closed(&id)
                         }
                         Err(_) => {}
                     }
@@ -3014,6 +3016,7 @@ impl Service {
             .and_then(|id| self.sessions.get(&id))
             .map(|session| control::Session {
                 id: session.id.clone(),
+                kind: session.kind,
                 title_id: session.title_id.clone(),
                 title: session.title.clone(),
                 version: session.version.clone(),
@@ -3056,10 +3059,12 @@ impl Service {
         version: String,
         build: String,
         join: Option<String>,
+        host: Option<control::Host>,
     ) {
         if self.game.is_some() {
             self.game_end();
         }
+        let hosted = (title_id.clone(), title.clone());
         let token: [u8; 32] = rand::random();
         let mut env = std::collections::BTreeMap::new();
         env.insert(
@@ -3089,7 +3094,10 @@ impl Service {
         self.push_presence();
         self.screen_event();
         let Some(session) = join else {
-            self.ok(id, GameStarted { env });
+            match host {
+                Some(host) => self.host_session(id, env, host, hosted, version, build),
+                None => self.ok(id, GameStarted { env, session: None }),
+            }
             return;
         };
         let (Some(cloud), Some((endpoint, relay))) = (
@@ -3127,7 +3135,7 @@ impl Service {
                     }
                     service.session_changed(joined);
                     service.send_intent();
-                    service.ok(id, GameStarted { env });
+                    service.ok(id, GameStarted { env, session: None });
                 }
                 Err(error) => {
                     let failure = service.failure(&error);
@@ -3135,6 +3143,146 @@ impl Service {
                 }
             },
         );
+    }
+
+    /// Play Together, the host side: opens the `lan` session of the game that is starting and
+    /// asks the party into it. The game starts whether or not this works; without a session it
+    /// is a game like any other, and the launcher is told why with a `host_failed` notice.
+    fn host_session(
+        &mut self,
+        id: u64,
+        env: std::collections::BTreeMap<String, String>,
+        host: control::Host,
+        (title_id, title): (String, String),
+        version: String,
+        build: String,
+    ) {
+        let (Some(cloud), Some((endpoint, relay))) = (
+            self.cloud.clone().filter(|_| self.me.is_some()),
+            self.endpoint(),
+        ) else {
+            self.host_failed("The network is not ready to open a session.");
+            self.ok(id, GameStarted { env, session: None });
+            return;
+        };
+        let body = CreateSession {
+            title_id,
+            title,
+            version,
+            build,
+            kind: SessionKind::Lan,
+            max_members: host.max_members.clamp(2, anyplay_api::MAX_MEMBERS),
+            visibility: host.visibility,
+            properties: String::new(),
+            endpoint,
+            relay,
+        };
+        let party = host.party;
+        self.spawn(
+            async move { cloud.create_session(&body).await },
+            move |service, result| match result {
+                Ok(session) => {
+                    let session_id = session.id.clone();
+                    if let Some(game) = &mut service.game {
+                        game.sessions.insert(session_id.clone());
+                    }
+                    service.session_changed(session);
+                    service.sync_audience();
+                    if party {
+                        service.ask_party_into(&session_id);
+                    }
+                    service.ok(
+                        id,
+                        GameStarted {
+                            env,
+                            session: Some(session_id),
+                        },
+                    );
+                }
+                Err(error) => {
+                    let failure = service.failure(&error);
+                    service.host_failed(&failure.message);
+                    service.ok(id, GameStarted { env, session: None });
+                }
+            },
+        );
+    }
+
+    fn host_failed(&mut self, message: &str) {
+        self.event(control::Event::Notice {
+            code: "host_failed".into(),
+            message: message.to_owned(),
+        });
+    }
+
+    /// Asks the party of the player into `session`: the party moves in when the player leads it,
+    /// else its members get an invitation each (the cloud sends it to friends only).
+    fn ask_party_into(&mut self, session: &str) {
+        let (Some(party), Some(cloud), Some(me)) = (
+            self.party.clone(),
+            self.cloud.clone(),
+            self.me.as_ref().map(|m| m.id),
+        ) else {
+            return;
+        };
+        let session = session.to_owned();
+        if party.leader == me {
+            self.spawn(
+                async move { cloud.move_party(&session).await },
+                |_, result| {
+                    if let Err(error) = result {
+                        tracing::info!("the party could not be moved into the session: {error}");
+                    }
+                },
+            );
+        } else {
+            let others: Vec<AccountId> = party
+                .members
+                .iter()
+                .map(|m| m.account.id)
+                .filter(|account| *account != me)
+                .collect();
+            if others.is_empty() {
+                return;
+            }
+            self.spawn(
+                async move { cloud.invite(&session, others).await },
+                |_, result| {
+                    if let Err(error) = result {
+                        tracing::info!("the party could not be invited to the session: {error}");
+                    }
+                },
+            );
+        }
+    }
+
+    /// A session the cloud closed or took the player out of. A Play Together session that ends
+    /// while the player's game still runs is told to the launcher, which says so.
+    fn session_closed(&mut self, id: &str) {
+        let me = self.me.as_ref().map(|m| m.id);
+        let ended = self
+            .sessions
+            .get(id)
+            .filter(|s| s.kind == SessionKind::Lan && Some(s.leader) != me)
+            .filter(|_| self.game.as_ref().is_some_and(|g| g.sessions.contains(id)))
+            .map(|s| control::Event::SessionEnded {
+                session: s.id.clone(),
+                title_id: s.title_id.clone(),
+                title: s.title.clone(),
+                host: s
+                    .members
+                    .iter()
+                    .find(|m| m.account.id == s.leader)
+                    .map(|m| m.account.clone())
+                    .unwrap_or(anyplay_api::Account {
+                        id: s.leader,
+                        handle: String::new(),
+                    }),
+            });
+        self.session_gone(id);
+        if let Some(event) = ended {
+            self.event(event);
+        }
     }
 
     fn game_end(&mut self) {
@@ -3558,6 +3706,7 @@ impl Service {
                     title,
                     version,
                     build,
+                    kind: SessionKind::Game,
                     max_members: create.max_members,
                     visibility: create.visibility,
                     properties: create.properties,
