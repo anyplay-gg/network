@@ -79,7 +79,7 @@ fn near(a: [u8; 3], rgb: u32, by: u8) -> bool {
 fn the_picked_window_is_captured_and_streamed_through_openh264() {
     let _window = TestWindow::open("AnyPlay capture test");
     std::thread::sleep(Duration::from_millis(500));
-    eprintln!("pick the window \"AnyPlay capture test\" in the dialog");
+    eprintln!("pick the window \"AnyPlay capture test\" in the dialog (its Window tab)");
     let mut source = capture::open(&WindowTarget::default()).expect("a window was picked");
     let deadline = Instant::now() + Duration::from_secs(5);
     let picture = loop {

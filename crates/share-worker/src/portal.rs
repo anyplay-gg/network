@@ -3,7 +3,8 @@
 //!
 //! The portal has no way to name a window for the player, so the processes the launcher gives
 //! cannot preselect it (spec/screen-share.md: the player confirms the window each time). Nothing
-//! is kept between streams: no restore token is asked for.
+//! is kept between streams: no restore token is asked for. A screen picked instead of a window is
+//! refused, since some pickers offer screens whatever is asked for.
 //!
 //! The portal speaks D-Bus, which `ashpd` (MIT) does on a tokio runtime; the worker itself is
 //! not async, so the runtime lives here, one thread, for as long as the stream does. Dropping
@@ -45,9 +46,22 @@ pub fn pick_window() -> Result<PortalWindow, String> {
         .enable_all()
         .build()
         .map_err(|e| format!("the portal's runtime could not start: {e}"))?;
-    let (session, fd, node_id, size) = runtime
+    let (session, fd, node_id, size, kind) = runtime
         .block_on(open())
         .map_err(|e| format!("the screen cast portal refused: {e}"))?;
+    // Some pickers offer screens whatever was asked for (Hyprland's opens on its Screen tab).
+    // Only a window is shared: a screen would show the desktop and everything on it.
+    if kind != Some(SourceType::Window) {
+        let _ = runtime.block_on(session.close());
+        return Err(format!(
+            "the player picked {} instead of a window; only the game's window is shared",
+            match kind {
+                Some(SourceType::Monitor) => "a screen",
+                Some(SourceType::Virtual) => "a virtual screen",
+                _ => "a source of unknown kind",
+            }
+        ));
+    }
     Ok(PortalWindow {
         fd: Some(fd),
         node_id,
@@ -57,7 +71,16 @@ pub fn pick_window() -> Result<PortalWindow, String> {
     })
 }
 
-async fn open() -> ashpd::Result<(Session<Screencast>, OwnedFd, u32, Option<(i32, i32)>)> {
+/// What the portal gave: its session, the PipeWire remote, the stream's node, size and kind.
+type Opened = (
+    Session<Screencast>,
+    OwnedFd,
+    u32,
+    Option<(i32, i32)>,
+    Option<SourceType>,
+);
+
+async fn open() -> ashpd::Result<Opened> {
     let proxy = Screencast::new().await?;
     let session = proxy.create_session(Default::default()).await?;
     // The cursor stays out of the picture, as on Windows; a portal that cannot hide it draws it.
@@ -84,11 +107,15 @@ async fn open() -> ashpd::Result<(Session<Screencast>, OwnedFd, u32, Option<(i32
     let Some(stream) = streams.streams().first() else {
         return Err(ashpd::Error::NoResponse);
     };
-    let (node_id, size) = (stream.pipe_wire_node_id(), stream.size());
+    let (node_id, size, kind) = (
+        stream.pipe_wire_node_id(),
+        stream.size(),
+        stream.source_type(),
+    );
     let fd = proxy
         .open_pipe_wire_remote(&session, Default::default())
         .await?;
-    Ok((session, fd, node_id, size))
+    Ok((session, fd, node_id, size, kind))
 }
 
 impl Drop for PortalWindow {
