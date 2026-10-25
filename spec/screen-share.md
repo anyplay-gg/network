@@ -59,7 +59,7 @@ Role names stay `host` and `guest` on the wire, as in share play; this file says
 
 ## Capture
 
-On Linux the worker asks the desktop portal's ScreenCast for one window: the player picks it in the system's dialog each time a stream starts, no choice is remembered, and the portal hands the worker a PipeWire stream of that window alone. The portal cannot be told which window is the game's, so `window` and `pids` are not used there. Cancelling the dialog ends the stream before it starts, and so does picking a screen: some pickers offer screens whatever is asked for, and only a window is shared.
+On Linux the worker asks the desktop portal's ScreenCast for one window: the player picks it in the system's dialog each time a stream starts, no choice is remembered, and the portal hands the worker a PipeWire stream of that window alone. The portal cannot be told which window is the game's, so `window` and `pids` are not used there. Cancelling the dialog ends the stream before it starts, and so does picking a screen: some pickers offer screens whatever is asked for, and only a window is shared. A dialog left open for 2 minutes is given up the same way. The worker takes at most 30 pictures a second from the compositor, what its software encoder sends. Until the window has drawn its first picture the worker keeps taking the net service's messages, so a stop gets through.
 
 On Windows the streamer's worker takes the picture of one window with Windows Graphics Capture. Which window is decided in this order, and a window of a process the launcher did not start is never taken while it has named some:
 

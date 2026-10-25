@@ -83,7 +83,9 @@ fn the_picked_window_is_captured_and_streamed_through_openh264() {
     let mut source = capture::open(&WindowTarget::default()).expect("a window was picked");
     let deadline = Instant::now() + Duration::from_secs(5);
     let picture = loop {
-        let frame = source.next_frame().expect("the capture did not end");
+        let frame = source
+            .wait_frame(Duration::from_secs(5))
+            .expect("the capture did not end");
         if frame.width >= 320 && frame.height >= 180 {
             break frame;
         }
@@ -106,7 +108,9 @@ fn the_picked_window_is_captured_and_streamed_through_openh264() {
     let mut decoder = OhDecoder::open().expect("the OpenH264 decoder");
     let mut shown = None;
     for n in 0..30 {
-        let frame = source.next_frame().expect("frames keep coming");
+        let frame = source
+            .wait_frame(Duration::from_secs(5))
+            .expect("frames keep coming");
         match encoder.encode(&frame, n == 0) {
             Ok(encoded) => match decoder.decode(&encoded) {
                 Ok(out) => shown = Some(out),

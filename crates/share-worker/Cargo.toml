@@ -41,7 +41,7 @@ windows-capture = "2"
 # own dialog) through ashpd (MIT), on a small tokio runtime of its own.
 [target.'cfg(target_os = "linux")'.dependencies]
 ashpd = { version = "0.13", default-features = false, features = ["tokio", "screencast"] }
-tokio = { version = "1.54", features = ["rt"] }
+tokio = { version = "1.54", features = ["rt", "time"] }
 # The window's pictures from PipeWire (MIT; links the system's libpipewire, MIT).
 pipewire = "0.10"
 # Software H.264 from Cisco's OpenH264 binary, loaded at run time and checked by its hash

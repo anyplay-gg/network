@@ -11,7 +11,9 @@
 //! the worker waits on the portal (the dialog, and closing the session) and is idle otherwise.
 //! Dropping [`PortalWindow`] closes the portal session, which ends the PipeWire stream.
 
+use std::future::Future;
 use std::os::fd::OwnedFd;
+use std::time::Duration;
 
 use ashpd::desktop::screencast::{
     CursorMode, Screencast, SelectSourcesOptions, SourceType, StartCastOptions,
@@ -40,16 +42,19 @@ impl std::fmt::Debug for PortalWindow {
     }
 }
 
-/// Asks the player for the window to share. Blocks while the portal's dialog is open; an error
-/// when there is no portal, the player cancels, or the portal gives no window.
+/// How long the player has to pick the window. A dialog still open after that is given up, so
+/// that a worker whose stream was stopped meanwhile does not wait on it for ever.
+const PICK_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// Asks the player for the window to share. Blocks while the portal's dialog is open, at most
+/// [`PICK_TIMEOUT`]; an error when there is no portal, the player cancels, no window is picked in
+/// time, or the portal gives no window.
 pub fn pick_window() -> Result<PortalWindow, String> {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .map_err(|e| format!("the portal's runtime could not start: {e}"))?;
-    let (session, fd, node_id, size, kind) = runtime
-        .block_on(open())
-        .map_err(|e| format!("the screen cast portal refused: {e}"))?;
+    let (session, fd, node_id, size, kind) = runtime.block_on(within(PICK_TIMEOUT, open()))?;
     // Some pickers offer screens whatever was asked for (Hyprland's opens on its Screen tab).
     // Only a window is shared: a screen would show the desktop and everything on it.
     if kind != Some(SourceType::Window) {
@@ -80,6 +85,22 @@ type Opened = (
     Option<(i32, i32)>,
     Option<SourceType>,
 );
+
+/// The portal's answer, or an error once `limit` has passed. A session the portal opened meanwhile
+/// is left to it: it goes when the runtime, and with it the worker's D-Bus connection, does.
+async fn within<T>(
+    limit: Duration,
+    work: impl Future<Output = ashpd::Result<T>>,
+) -> Result<T, String> {
+    match tokio::time::timeout(limit, work).await {
+        Ok(Ok(value)) => Ok(value),
+        Ok(Err(e)) => Err(format!("the screen cast portal refused: {e}")),
+        Err(_) => Err(format!(
+            "no window was picked in {} seconds",
+            limit.as_secs()
+        )),
+    }
+}
 
 async fn open() -> ashpd::Result<Opened> {
     let proxy = Screencast::new().await?;
@@ -124,5 +145,25 @@ impl Drop for PortalWindow {
         if let Some(session) = self.session.take() {
             let _ = self.runtime.block_on(session.close());
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_dialog_left_open_is_given_up_after_the_limit() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let never = std::future::pending::<ashpd::Result<()>>();
+        let error = runtime
+            .block_on(within(Duration::from_millis(50), never))
+            .unwrap_err();
+        assert!(error.contains("no window was picked"), "{error}");
+        let answered = runtime.block_on(within(Duration::from_secs(5), async { Ok(7) }));
+        assert_eq!(answered, Ok(7));
     }
 }

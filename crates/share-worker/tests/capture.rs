@@ -65,7 +65,9 @@ impl Drop for TestWindow {
 fn first_picture(source: &mut dyn anyplay_share_worker::host::FrameSource) -> Frame {
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
-        let frame = source.next_frame().expect("the capture did not end");
+        let frame = source
+            .wait_frame(Duration::from_secs(5))
+            .expect("the capture did not end");
         if frame.width >= 640 && frame.height >= 360 {
             return frame;
         }
@@ -113,7 +115,9 @@ fn the_window_of_a_process_is_found_captured_and_streamed() {
     let mut decoder = MfDecoder::open().expect("an H.264 decoder");
     let mut shown = None;
     for n in 0..30 {
-        let mut frame = source.next_frame().expect("frames keep coming");
+        let mut frame = source
+            .wait_frame(Duration::from_secs(5))
+            .expect("frames keep coming");
         frame.timestamp_us = n * 33_333;
         match encoder.encode(&frame, n == 0) {
             Ok(encoded) => match decoder.decode(&encoded) {

@@ -12,7 +12,7 @@ use anyplay_share::codec::{CodecError, VideoEncoder};
 use super::mux::{self, MuxError};
 use super::ring::{ClipFrame, Ring};
 use super::{Command, Event, KEY_SECONDS, MAX_BYTES};
-use crate::host::FrameSource;
+use crate::host::{FrameSource, Next};
 
 /// What a recording is made of.
 #[derive(Clone, Copy, Debug)]
@@ -82,11 +82,16 @@ pub fn run(
             // Far behind (the PC stalled): do not rush a burst of pictures to catch up.
             next = now + period;
         }
-        let Some(frame) = source.next_frame() else {
-            let _ = events.send(Event::Ended {
-                reason: "window_closed".into(),
-            });
-            return;
+        let frame = match source.next_frame() {
+            Next::Picture(frame) => frame,
+            // Back to the commands: a quit gets through while the window has not drawn.
+            Next::NotYet => continue,
+            Next::Ended => {
+                let _ = events.send(Event::Ended {
+                    reason: "window_closed".into(),
+                });
+                return;
+            }
         };
         let force = key_wanted || since_key >= key_every;
         match encoder.encode(&frame, force) {
@@ -204,8 +209,8 @@ mod tests {
 
     struct Pattern(TestPattern);
     impl FrameSource for Pattern {
-        fn next_frame(&mut self) -> Option<Frame> {
-            Some(self.0.next_frame())
+        fn next_frame(&mut self) -> Next {
+            Next::Picture(self.0.next_frame())
         }
     }
 
