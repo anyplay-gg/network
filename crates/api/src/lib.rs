@@ -28,6 +28,10 @@ pub const MAX_TROPHY_UPLOAD: usize = 512;
 pub const MAX_CARDS: usize = 100;
 /// Rarity is given once this many players have a title, so it cannot reveal one player.
 pub const RARITY_MIN_PLAYERS: u32 = 10;
+/// A run summary is given once this many players reported, so it cannot point at one player.
+pub const RUN_REPORTS_MIN: u32 = 3;
+/// The longest game or toolkit version in a run report, in characters.
+pub const MAX_RUN_VERSION: usize = 32;
 /// The longest profile text, in characters.
 pub const MAX_ABOUT: usize = 160;
 /// The most favourite titles a profile lists.
@@ -553,6 +557,106 @@ pub struct Rarity {
     /// Accounts with at least one record for the title; 0 below [`RARITY_MIN_PLAYERS`].
     pub players: u32,
     pub trophies: Vec<TrophyRarity>,
+}
+
+/// How a game ran for a player.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Verdict {
+    /// The game does not start.
+    NoStart,
+    /// It reaches the menus.
+    Menus,
+    /// It runs in a game.
+    InGame,
+    /// It is playable.
+    Playable,
+}
+
+/// The system a run report was made on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Os {
+    Windows,
+    Linux,
+    Macos,
+}
+
+/// What a player tells about one run: the body of `PUT /v1/me/run-reports/{title_id}`. The title is
+/// in the path; nothing else about the player or the machine is part of it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RunReport {
+    /// The version of the game.
+    pub version: String,
+    /// The version of the toolkit that ran it.
+    pub toolkit: String,
+    pub verdict: Verdict,
+    pub os: Os,
+}
+
+/// True for a game or toolkit version of a run report: 1 to [`MAX_RUN_VERSION`] characters from
+/// `A-Z a-z 0-9 . _ + -`, such as `01.000.002`.
+pub fn is_run_version(text: &str) -> bool {
+    (1..=MAX_RUN_VERSION).contains(&text.len())
+        && text
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'+' | b'-'))
+}
+
+/// How many reports each verdict has.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VerdictCounts {
+    pub no_start: u32,
+    pub menus: u32,
+    pub in_game: u32,
+    pub playable: u32,
+}
+
+impl VerdictCounts {
+    pub fn total(&self) -> u32 {
+        self.no_start + self.menus + self.in_game + self.playable
+    }
+
+    pub fn add(&mut self, verdict: Verdict, n: u32) {
+        let slot = match verdict {
+            Verdict::NoStart => &mut self.no_start,
+            Verdict::Menus => &mut self.menus,
+            Verdict::InGame => &mut self.in_game,
+            Verdict::Playable => &mut self.playable,
+        };
+        *slot += n;
+    }
+
+    /// The most reported verdict; on a tie the lower one, so that a summary promises no more than
+    /// the players found. `None` without reports.
+    pub fn top(&self) -> Option<Verdict> {
+        [
+            (Verdict::NoStart, self.no_start),
+            (Verdict::Menus, self.menus),
+            (Verdict::InGame, self.in_game),
+            (Verdict::Playable, self.playable),
+        ]
+        .into_iter()
+        .filter(|(_, n)| *n > 0)
+        .fold(None, |best: Option<(Verdict, u32)>, (v, n)| match best {
+            Some((_, m)) if m >= n => best,
+            _ => Some((v, n)),
+        })
+        .map(|(v, _)| v)
+    }
+}
+
+/// What players found, from run reports: the answer of `GET /v1/titles/{title_id}/runs`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RunSummary {
+    pub title_id: String,
+    /// The game version the counts are about, or null for all versions of the title.
+    pub version: Option<String>,
+    /// Reports counted; 0 below [`RUN_REPORTS_MIN`].
+    pub reports: u32,
+    /// The most reported verdict, or null below [`RUN_REPORTS_MIN`].
+    pub verdict: Option<Verdict>,
+    pub counts: VerdictCounts,
 }
 
 /// Trophies by grade.
@@ -1313,6 +1417,29 @@ mod tests {
         assert!(!is_title_id("GAME 01234"));
         assert!(!is_title_id("GAME01234?x=1"));
         assert!(!is_title_id(&"A".repeat(65)));
+    }
+
+    #[test]
+    fn run_versions_and_the_top_verdict() {
+        assert!(is_run_version("01.000.002"));
+        assert!(is_run_version("0.2.0-rc+1"));
+        assert!(!is_run_version(""));
+        assert!(!is_run_version("a b"));
+        assert!(!is_run_version(&"1".repeat(33)));
+        let mut counts = VerdictCounts::default();
+        assert_eq!(counts.top(), None);
+        counts.add(Verdict::Playable, 2);
+        counts.add(Verdict::Menus, 2);
+        counts.add(Verdict::NoStart, 1);
+        assert_eq!(counts.total(), 5);
+        assert_eq!(counts.top(), Some(Verdict::Menus));
+        counts.add(Verdict::Playable, 1);
+        assert_eq!(counts.top(), Some(Verdict::Playable));
+        let report: RunReport = serde_json::from_str(
+            r#"{"version":"1.0","toolkit":"0.2","verdict":"no_start","os":"macos"}"#,
+        )
+        .unwrap();
+        assert_eq!((report.verdict, report.os), (Verdict::NoStart, Os::Macos));
     }
 
     #[test]

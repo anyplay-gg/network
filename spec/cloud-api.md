@@ -221,6 +221,21 @@ The cloud keeps a **trophy record** per trophy a player earned: the title, the t
 - `players` counts the accounts with at least one record for the title. Rarity is only given once 10 players have the title; below that `players` is 0 and `trophies` empty, so it cannot tell which trophies one person earned.
 - A gamer card's `trophies` counts the account's records by grade, or is null when its trophies are hidden from the caller. Its `avatar` is the hash of the account's avatar, absent when there is none or the caller may not see it. Nothing else is on a card.
 
+## Run reports
+
+A **run report** is a player's answer to "How did it run?" after a session: the title, the game version, the toolkit version, a verdict and the player's system. Nothing else leaves the player's machine: no paths, hardware IDs or game data ([ADR 0021](../docs/adr/0021-the-line-is-drawn-at-the-law.md) draws the line; a run report is an opinion, not a game file).
+
+| Request | Body | Answer |
+|---|---|---|
+| `PUT /v1/me/run-reports/{title_id}` | `{version, toolkit, verdict, os}` | `204` |
+| `GET /v1/titles/{title_id}/runs?version=` | | `{title_id, version, reports, verdict, counts}` |
+
+- `verdict` is `no_start`, `menus`, `in_game` or `playable`. `os` is `windows`, `linux` or `macos`. `version` and `toolkit` are 1 to 32 characters from `A-Z a-z 0-9 . _ + -` (`bad_request` otherwise).
+- An account has one report per title, game version and toolkit version; a new `PUT` replaces the old one, and the cloud keeps the time of the last change. Deleting an account deletes its run reports; the export lists them.
+- `GET` counts accounts, not rows: an account counts once, with its latest report in the scope asked for, so one player cannot make a summary alone. With `version`, it counts the reports for that game version when there are at least 3, and else the reports for all versions. `version` in the answer is the game version the counts are about, or null for all versions. `counts` is `{no_start, menus, in_game, playable}`; `reports` is their sum (the number of accounts) and `verdict` the most reported one (on a tie the lower one, so a summary promises no more than players found).
+- Below 3 reports `reports` is 0, `verdict` is null and all counts are 0, so a summary cannot point at one player. A website may list the same summaries publicly later; they hold no account.
+- `PUT` is limited to 30 per account per hour (`rate_limited`).
+
 ## Profiles, avatars and playtime
 
 A profile has a short text, up to 3 favourite titles, an avatar and the playtime per title. Each part has its own visibility in `Privacy` (`about`, `favourites`, `avatar`, `playtime`), and all start at `friends`. The rule is the one of the trophies: the account itself always; its friends unless the part is `nobody`; everyone else only with `everyone`; a block in either direction hides it.
@@ -429,6 +444,7 @@ Every message has a number `seq` that counts up by one in its conversation, star
 | messages | 30 per account per minute |
 | conversations with strangers | 10 per account per hour |
 | friend requests of a new account | 10 in its first day (`new_account_friend_requests_per_day`) |
+| `PUT /v1/me/run-reports/{title_id}` | 30 per account per hour |
 | `reports` | 20 per account per day and 5 per 10 minutes (settings of the cloud) |
 | appeals | 10 per account per hour |
 | everything else | 120 per account per minute |
