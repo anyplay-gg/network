@@ -63,7 +63,7 @@ ReadMark  { account, seq }
 Message   { conversation, seq, sender, text, created }
 ```
 
-- A **handle** has 3 to 16 characters from `A-Z a-z 0-9 _ -` and starts with a letter. Handles are unique without regard to case; the spelling of the owner is kept. Some handles are reserved (names of the network, of staff roles, and of platforms).
+- A **handle** has 3 to 16 characters from `A-Z a-z 0-9 _ -` and starts with a letter. Handles are unique without regard to case; the spelling of the owner is kept. Handles that look alike are one handle: the **skeleton** of a handle (`handle_skeleton` in `anyplay-api`) is the handle in lower case without `_` and `-`, with `rn` read as `m`, `vv` as `w`, `1` and `i` as `l`, and `0` as `o`, and an account can take a handle only when no other account has its skeleton (so `Flokzy`, `FIokzy`, `F1okzy` and `Flok_zy` are one). A skeleton that is taken answers `handle_taken`, like a taken handle. Some handles are reserved (names of the network, of staff roles, and of platforms), and reserved names are matched by skeleton too.
 - `visibility` is `friends` (friends of a member may join), `invite` (only invited accounts) or `closed`.
 - `properties` is opaque data for the game, as standard base64, at most 8 KiB once decoded.
 - `endpoint` is the net service's tunnel key (an iroh endpoint ID) as lowercase hex, and `relay` the URL of the relay it is reachable through, or null. Other members dial it with both; the cloud publishes neither anywhere else.

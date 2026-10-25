@@ -40,6 +40,10 @@ _Avoid_: Profile (the launcher's local display name), user
 The unique public name of an account, at most 16 characters. Games see it as the player's online ID.
 _Avoid_: Username, gamertag
 
+**Handle skeleton**:
+What a handle looks like once spellings that read the same in common fonts are folded together (`FIokzy` and `Flokzy`, `Flok_zy` and `Flokzy`). Two handles with one skeleton pass for each other, so only one account may hold it. Used for comparing; never shown.
+_Avoid_: Normalized handle, handle key (the cloud's `handle_key` is only the lower-case spelling)
+
 **Device**:
 One PC that is signed in to an account, with its own tokens. An account has at most 10.
 _Avoid_: Session (that is a group of players), client

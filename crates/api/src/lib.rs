@@ -100,6 +100,32 @@ pub fn check_handle(handle: &str) -> Result<(), HandleProblem> {
     Ok(())
 }
 
+/// The look of a handle: what stays when the spellings that read the same in common UI fonts are
+/// folded together. Two handles with the same skeleton pass for each other, so an account may
+/// take a handle only when no other account has its skeleton.
+///
+/// The steps run in this order, and the cloud's migration backfills with the same ones in SQL:
+///
+/// 1. lower case (`A-Z` to `a-z`),
+/// 2. drop `_` and `-`,
+/// 3. `rn` to `m` and `vv` to `w` (two letters that read as one),
+/// 4. `1` and `i` to `l` (small L, capital I and the digit one are the same stroke in many
+///    sans-serif fonts; capital I is `i` after step 1),
+/// 5. `0` to `o`.
+///
+/// Not mapped, on purpose: `5`/`s`, `2`/`z`, `8`/`b`, `u`/`v`, `cl`/`d`. They differ in most
+/// fonts, and every mapping makes more honest handles unavailable. The skeleton is for comparing,
+/// never for showing: the owner's spelling is kept.
+pub fn handle_skeleton(handle: &str) -> String {
+    handle
+        .to_ascii_lowercase()
+        .replace(['_', '-'], "")
+        .replace("rn", "m")
+        .replace("vv", "w")
+        .replace(['1', 'i'], "l")
+        .replace('0', "o")
+}
+
 /// Another account as anyone may see it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Account {
@@ -1397,6 +1423,60 @@ mod tests {
         assert_eq!(check_handle("dot.ted"), Err(HandleProblem::Character));
         assert_eq!(check_handle("Ünïcode"), Err(HandleProblem::FirstCharacter));
         assert_eq!(check_handle("abcdé"), Err(HandleProblem::Character));
+    }
+
+    #[test]
+    fn the_skeleton_folds_lookalikes_together() {
+        // Each row is one skeleton, and every spelling on it passes for the others.
+        for (skeleton, spellings) in [
+            (
+                "flokzy",
+                &[
+                    "Flokzy",
+                    "FIokzy",
+                    "F1okzy",
+                    "Fiokzy",
+                    "Flok_zy",
+                    "Flok-zy",
+                    "F_l_o_k_z_y",
+                ][..],
+            ),
+            ("foo", &["Foo", "F00", "FoO", "f0o"][..]),
+            ("mlke", &["Mike", "rnike", "RNike", "M1ke"][..]),
+            ("wolf", &["Wolf", "vvolf", "VVolf"][..]),
+        ] {
+            for spelling in spellings {
+                assert_eq!(handle_skeleton(spelling), skeleton, "{spelling}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_skeleton_keeps_apart_what_looks_different() {
+        for (a, b) in [
+            ("Alec", "Alex"),
+            ("sam", "sum"),
+            ("mark", "rark"),
+            ("vwolf", "wolf"),
+            ("s5", "ss"),
+            ("zed", "2ed"),
+            ("bob", "8ob"),
+            ("rm", "m"),
+            ("nr", "m"),
+        ] {
+            assert_ne!(handle_skeleton(a), handle_skeleton(b), "{a} / {b}");
+        }
+    }
+
+    #[test]
+    fn the_skeleton_is_ascii_and_a_fixed_point() {
+        for handle in ["Alec", "a_b-c9", "P1ayer_0ne", "rnrnvv"] {
+            let skeleton = handle_skeleton(handle);
+            assert_eq!(handle_skeleton(&skeleton), skeleton, "{handle}");
+            assert!(skeleton.is_ascii());
+        }
+        assert_eq!(handle_skeleton("P1ayer_0ne"), "playerone");
+        assert_eq!(handle_skeleton("rnrnvv"), "mmw");
     }
 
     #[test]
