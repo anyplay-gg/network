@@ -7,6 +7,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+pub mod client;
 pub mod moderation;
 pub mod path;
 
@@ -1515,6 +1516,8 @@ pub enum ErrorCode {
     RateLimited,
     /// Discord refused a code or a refresh token (`/me/discord/token`, `/me/discord/refresh`).
     GrantRefused,
+    /// The client is older than the cloud allows; the body adds `minimum`.
+    ClientTooOld,
     Internal,
     /// A code this version does not know.
     #[serde(other)]
@@ -1539,6 +1542,7 @@ impl ErrorCode {
             | ErrorCode::Limit => 409,
             ErrorCode::TooLarge => 413,
             ErrorCode::RateLimited => 429,
+            ErrorCode::ClientTooOld => 426,
             ErrorCode::Internal | ErrorCode::Unknown => 500,
         }
     }
@@ -1562,6 +1566,7 @@ impl ErrorCode {
             ErrorCode::TooLarge => "too_large",
             ErrorCode::RateLimited => "rate_limited",
             ErrorCode::GrantRefused => "grant_refused",
+            ErrorCode::ClientTooOld => "client_too_old",
             ErrorCode::Internal => "internal",
             ErrorCode::Unknown => "unknown",
         }
@@ -1596,6 +1601,9 @@ pub struct ApiError {
     /// With `banned`: why, and how to appeal.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ban: Option<Box<BanNotice>>,
+    /// With `client_too_old`: the oldest version of the client's product the cloud accepts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub minimum: Option<Box<str>>,
 }
 
 impl ApiError {
@@ -1607,6 +1615,7 @@ impl ApiError {
             expected: None,
             restriction: None,
             ban: None,
+            minimum: None,
         }
     }
 }
@@ -2594,6 +2603,24 @@ mod tests {
             serde_json::from_str(r#"{"error":"from_the_future","message":"x"}"#).unwrap();
         assert_eq!(newer.error, ErrorCode::Unknown);
         assert_eq!(ErrorCode::VersionMismatch.status(), 409);
+    }
+
+    #[test]
+    fn client_too_old_carries_the_minimum() {
+        assert_eq!(ErrorCode::ClientTooOld.status(), 426);
+        assert_eq!(ErrorCode::ClientTooOld.as_str(), "client_too_old");
+        let error = ApiError {
+            minimum: Some("0.3.0".into()),
+            ..ApiError::new(ErrorCode::ClientTooOld, "Update the launcher.")
+        };
+        let text = serde_json::to_string(&error).unwrap();
+        assert_eq!(
+            text,
+            r#"{"error":"client_too_old","message":"Update the launcher.","minimum":"0.3.0"}"#
+        );
+        assert_eq!(serde_json::from_str::<ApiError>(&text).unwrap(), error);
+        let plain = serde_json::to_string(&ApiError::new(ErrorCode::Internal, "x")).unwrap();
+        assert!(!plain.contains("minimum"));
     }
 
     #[test]

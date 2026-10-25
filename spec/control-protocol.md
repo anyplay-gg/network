@@ -8,6 +8,7 @@ The Rust reference is [`crates/control`](../crates/control). The launcher shows;
 
 - The launcher starts the net service as a child process and talks to it over the child's standard input and output. Nobody else holds those streams, so the channel needs no secret.
 - Each message is one JSON object on one line, in UTF-8, ended by `\n`. A line has at most 1 MiB.
+- The launcher sets `ANYPLAY_CLIENT` in the net service's environment to `launcher/<its version>` (such as `launcher/0.3.0`). The net service sends it to the cloud as `X-AnyPlay-Client` on every request and on the event connection ([cloud API](cloud-api.md#conventions)); without it, or when it is not a valid value, it sends `net/<its own version>`, which no cloud gates.
 - The net service writes its log to standard error. The launcher keeps it in its log folder.
 - The net service ends when its standard input closes and no game is connected to it. While a game is still connected it waits for that game to end.
 
@@ -51,6 +52,12 @@ A **restriction** has a `kind` and, when they apply, `until`, `rule`, `reason`, 
 | `muted` | A moderator muted the account: no friend requests and no messages. | `until`, `rule`, `reason`, `action`, `appeal` |
 | `new_account` | The account is too new to write to people who are not friends, or to send more friend requests today. Nothing a moderator did. | `until` (when it may) |
 | `banned` | The account is banned and signed out. | `until` (absent for good), and when the cloud has a statement `rule`, `reason`, `action`, `appeal` |
+
+When the cloud retires this launcher's version ([cloud API](cloud-api.md#conventions)), a command that reaches the cloud fails with `client_too_old`, which adds `minimum` (the oldest version the cloud accepts, as a string):
+
+```json
+{"id": 9, "error": {"code": "client_too_old", "message": "This launcher is too old. Update to 0.3.0 or newer.", "minimum": "0.3.0"}}
+```
 
 `kind` is a plain string and `appeal.status` too (`available`, `open`, `upheld`, `reversed`, `expired`): a launcher treats a value it does not know as a restriction it cannot name, and still shows `until` and `reason`. A `restricted` failure from a net service that predates this field has none; the launcher then falls back to the `message`.
 
@@ -178,6 +185,7 @@ A **restriction** has a `kind` and, when they apply, `until`, `rule`, `reason`, 
 | `notice` | `code`, `message` | something failed that no command waits for |
 | `restrictions` | `restrictions` | what limits the signed-in account now: a list of restrictions, empty when nothing does. Sent after the account goes online, when a moderator mutes or warns it, when an appeal is filed or decided, and after a `restricted` failure the list did not contain |
 | `banned` | `restriction` | the account was banned (the event connection saw it, or a request answered `banned`); the account is signed out. A `notice` with the code `banned` is sent too, for launchers that predate this event |
+| `client_too_old` | `minimum` | the cloud refuses this launcher because its version is below `minimum`. Sent once per run of the net service, by a request or by the event connection, whichever finds out first |
 | `party` | `party` or null | the party the player is in changed, began or ended; a copy with an older revision is dropped before it gets here |
 | `missed_calls` | `missed` | after sign-in and after every reconnect: every call nobody answered |
 | `missed_call` | `call` | a friend called and the player did not answer |
@@ -198,6 +206,7 @@ A **restriction** has a `kind` and, when they apply, `until`, `rule`, `reason`, 
 | `screen` | `can_share`, `can_watch`, `hosting`, `offers`, `watching` | share screen changed; while a stream runs its numbers at most twice a second |
 | `feed` | | the feed has news; fetch `feed`. The net service sends at most one every two seconds, with one trailing event for news inside that time |
 
+- `client_too_old` ends the event connection for good: the `cloud` state goes to `offline` and stays there, and the net service does not try again until it is started again, so the launcher shows its update screen and does not wait for the connection. The sign-in stays kept. Every command that reaches the cloud afterwards still fails with the `client_too_old` failure (with `minimum`), without a second event. A launcher that does not know the event ignores it, and a failure with an unknown code is a failure like any other.
 - `restrictions` lists only the mutes that have not ended or been lifted; a warning limits nothing and is not listed, a new account's limit comes with the `restricted` failure. The net service sends it only when the list changed. A restriction with `until` in the past is over: the launcher drops it at that time without waiting for an event.
 - To appeal: a mute is appealed with the `appeal` command. A ban signs the account out, so it is appealed on the account web: the launcher starts `browser_sign_in`, and the cloud's sign-in ends on the page with the statement and the form (after a ban the player proves who they are there, as in [ADR 0015](../docs/adr/0015-moderators-are-accounts.md)).
 - `cloud` is `offline`, `connecting` or `online`. `account` is `{id, handle, email}` or null. `pending` is `code` (an e-mail is out), `handle` (the account needs a handle), `browser` (the system browser has the sign-in) or null.

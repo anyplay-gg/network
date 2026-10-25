@@ -10,6 +10,8 @@ The Rust reference is [`crates/api`](../crates/api). The cloud in [anyplaynet/cl
 - Times are Unix seconds. Account IDs are integers between 1 and 2^53 - 1, so every JSON parser reads them exactly.
 - A request that needs an account carries `Authorization: Bearer <access token>`.
 - Clients send `User-Agent: anyplay-net/<version>`.
+- Clients send `X-AnyPlay-Client: <product>/<version>` to say which program they are, such as `launcher/0.3.0` or `net/0.1.0`. The product is lower-case letters, digits and `-`; the version is plain semantic versioning (`major.minor.patch`, optionally `-pre.release`; no build metadata) and at most 32 characters. The net service sends what the launcher gives it in its environment (`ANYPLAY_CLIENT`) and otherwise `net/<version>`; a browser sends nothing.
+- **Retiring old launchers.** A cloud may set a minimum launcher version (`min_launcher_version`, see the cloud's configuration). Then every request under `/v1/` from a client that names itself `launcher/<version>` with a version below the minimum is refused with `client_too_old`, before it is handled, whatever its path, token or body. The event connection's handshake is refused the same way (a plain `426` answer instead of the upgrade). A pre-release of the minimum is below it (`0.3.0-beta` is older than `0.3.0`). Nothing else is gated: a missing header, a value that does not read as above, and any other product pass, so browsers, the net service run by hand and tools keep working. `GET /v1/info` is never refused, so an old client can still read the cloud's name and links. Outside `/v1/`, `/healthz`, `/readyz`, `/metrics`, the account web and `/web` are not under the gate either.
 - An error is an HTTP status with a body `{"error": "<code>", "message": "<English text>"}`. The codes:
 
 | Code | Status | Meaning |
@@ -29,6 +31,7 @@ The Rust reference is [`crates/api`](../crates/api). The cloud in [anyplaynet/cl
 | `limit` | 409 | A per-account limit is reached (friends, requests, sessions). |
 | `too_large` | 413 | The body or the session properties are too large. |
 | `grant_refused` | 400 | Discord refused the code or the refresh token of a Discord SDK request. |
+| `client_too_old` | 426 | The client is older than the cloud allows (see Retiring old launchers above). The body adds `minimum`, the oldest version accepted. Nothing the client can retry: it needs an update. A client that does not know this code reads it as an unknown one. |
 | `rate_limited` | 429 | Too many requests. `Retry-After` says how many seconds to wait. |
 | `internal` | 500 | The cloud failed. |
 

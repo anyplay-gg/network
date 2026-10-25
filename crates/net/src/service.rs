@@ -179,6 +179,8 @@ pub struct Service {
     browser: Option<(JoinHandle<()>, JoinHandle<()>)>,
     link: control::Cloud,
     offline_since: Option<Instant>,
+    /// The cloud refused this client as too old: told to the launcher once per run.
+    client_too_old: Once,
     events: Option<(u64, JoinHandle<()>)>,
     next_events: u64,
     /// The address the cloud named in `welcome`: the player's own before it is in a session.
@@ -228,6 +230,16 @@ pub struct Service {
     last_state: Option<(control::Cloud, Option<SignedIn>, Option<Pending>)>,
     last_bridge_state: Option<bridge::State>,
     control_closed: bool,
+}
+
+/// Something that happens once: [`Once::first`] is true the first time only.
+#[derive(Default)]
+struct Once(bool);
+
+impl Once {
+    fn first(&mut self) -> bool {
+        !std::mem::replace(&mut self.0, true)
+    }
 }
 
 /// Runs the service until the launcher's input ends and no game holds it, or until `stop`
@@ -295,6 +307,7 @@ impl Service {
             browser: None,
             link: control::Cloud::Offline,
             offline_since: None,
+            client_too_old: Once::default(),
             events: None,
             next_events: 1,
             address: None,
@@ -498,6 +511,9 @@ impl Service {
                             });
                         }
                         self.end_online("banned");
+                    }
+                    ErrorCode::ClientTooOld => {
+                        self.client_too_old(api.minimum.as_deref().unwrap_or_default().to_owned());
                     }
                     // A mute the launcher was not told of, such as one that began while it was
                     // away.
@@ -1070,10 +1086,10 @@ impl Service {
                                         found.version, found.build
                                     ),
                                 );
-                                failure.expected = Some(anyplay_api::Expected {
+                                failure.expected = Some(Box::new(anyplay_api::Expected {
                                     version: found.version,
                                     build: found.build,
-                                });
+                                }));
                                 service.fail(id, failure);
                             } else {
                                 service.ok(id, Done {});
@@ -1684,6 +1700,7 @@ impl Service {
                 });
                 self.end_online("signed out");
             }
+            EventInput::ClientTooOld(minimum) => self.client_too_old(minimum),
             EventInput::Banned(restriction) => {
                 let message = match restriction.until {
                     Some(until) => format!("This account is banned until {until} (Unix time)."),
@@ -1696,6 +1713,22 @@ impl Service {
                 self.event(control::Event::Banned { restriction });
                 self.end_online("banned");
             }
+        }
+        self.state_changed();
+    }
+
+    /// The cloud refuses this client for being too old. The launcher is told once per run (every
+    /// command that fails the same way still carries the code); the event connection ends for
+    /// good, so nothing keeps asking until the service is started again. The sign-in stays.
+    fn client_too_old(&mut self, minimum: String) {
+        if let Some((_, task)) = self.events.take() {
+            task.abort();
+        }
+        self.link = control::Cloud::Offline;
+        self.offline_since = None;
+        if self.client_too_old.first() {
+            tracing::warn!("the cloud requires a newer client: {minimum}");
+            self.event(control::Event::ClientTooOld { minimum });
         }
         self.state_changed();
     }
@@ -4247,6 +4280,19 @@ fn endpoint_key(data: &std::path::Path) -> SecretKey {
         tracing::warn!("could not keep the endpoint key: {error}");
     }
     key
+}
+
+#[cfg(test)]
+mod once_tests {
+    use super::*;
+
+    #[test]
+    fn once_is_first_only_once() {
+        let mut once = Once::default();
+        assert!(once.first());
+        assert!(!once.first());
+        assert!(!once.first());
+    }
 }
 
 #[cfg(test)]
