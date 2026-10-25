@@ -68,10 +68,13 @@ pub const EDIT_WINDOW_SECS: u64 = 15 * 60;
 pub const MAX_QUOTE_CHARS: usize = 140;
 /// The most conversations an account pins.
 pub const MAX_PINNED: i64 = 5;
+/// How long the text an unsend or an edit removed stays readable for a report, in seconds.
+pub const REPORT_HOLD_SECS: u64 = 7 * 24 * 60 * 60;
 /// How long a typing signal counts, in seconds. A client sends it again every
 /// [`TYPING_RESEND_SECS`] while the player types and drops it after this long.
+/// (The cloud itself accepts one per account and conversation every 2 seconds.)
 pub const TYPING_TTL_SECS: u64 = 6;
-/// The shortest pause between two typing signals of one account in one conversation.
+/// The pace of a client's typing signals for one conversation.
 pub const TYPING_RESEND_SECS: u64 = 3;
 
 /// The number of an account. Games see it as the player's 64-bit account ID.

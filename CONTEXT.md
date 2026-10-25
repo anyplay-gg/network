@@ -296,7 +296,7 @@ One of six fixed names an account puts on a message: Nice, Love, Laugh, GG, Wow,
 _Avoid_: Emoji, sticker, like
 
 **Edit**:
-A change of the text of one's own message within 15 minutes. The message shows "edited"; the cloud keeps no earlier text.
+A change of the text of one's own message within 15 minutes. The message shows "edited"; no client can read the earlier text.
 _Avoid_: Revision (that counts changes to a conversation), update
 
 **Unsend**:
@@ -308,7 +308,7 @@ The counter of a conversation that rises with every edit, unsend and reaction. A
 _Avoid_: Version, etag
 
 **Delivered**:
-A direct message the other account's device has fetched. Between sent and read.
+A direct message the other account's device has fetched. Between sent and read. Only direct conversations have it.
 _Avoid_: Received, seen (groups say seen by)
 
 **Mute (a conversation)**:

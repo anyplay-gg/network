@@ -2124,6 +2124,12 @@ impl Service {
                     self.fail(id, bad_id());
                     return;
                 }
+                if reply == Some(0) {
+                    self.fail(id, bad_id());
+                    return;
+                }
+                // Writing ends typing at the cloud; the next signal goes through at once.
+                self.typing.stop(&conversation);
                 if !anyplay_api::is_message_text(&text) {
                     self.fail(id, bad_message_text());
                     return;
