@@ -14,6 +14,8 @@ use bytes::{BufMut, Bytes, BytesMut};
 use iroh::endpoint::{Connection, RecvStream, SendStream};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
+use tokio::sync::mpsc;
+use tokio::time::Instant;
 
 use crate::broadcast::{BroadcastStats, Limiter, Verdict, is_broadcast};
 
@@ -22,11 +24,32 @@ use crate::broadcast::{BroadcastStats, Limiter, Verdict, is_broadcast};
 pub const TUNNEL_HEADER: usize = 4;
 /// The largest datagram a game may send; bigger ones are dropped.
 const LARGEST_DATAGRAM: usize = 64 * 1024;
+/// Oversized datagrams that may wait for each peer's sender; further ones are dropped.
+const OVERSIZE_QUEUE: usize = 64;
+/// How long one oversized datagram may take to open its stream and hand over its bytes before
+/// the stream is reset.
+const OVERSIZE_SEND_TIMEOUT: Duration = Duration::from_millis(250);
+/// Queued oversized datagrams older than this are stale for a game and dropped unsent.
+const OVERSIZE_MAX_AGE: Duration = Duration::from_millis(500);
+/// How long the receiving side waits for the rest of an oversized datagram before it gives up.
+pub const OVERSIZE_READ_TIMEOUT: Duration = Duration::from_secs(1);
+
+/// The tunnel to one peer and the bounded sender for its oversized datagrams.
+struct Peer {
+    connection: Connection,
+    oversize: mpsc::Sender<Queued>,
+}
+
+/// An oversized datagram waiting for its stream.
+struct Queued {
+    bytes: Bytes,
+    queued: Instant,
+}
 
 #[derive(Default)]
 struct Routes {
     /// The tunnel to each peer, by the peer's virtual address.
-    peers: HashMap<Ipv4Addr, Connection>,
+    peers: HashMap<Ipv4Addr, Peer>,
     datagrams: HashMap<u16, u16>,
     streams: HashMap<u16, u16>,
     /// Loopback ports of bound datagram sockets: only these may send.
@@ -42,6 +65,10 @@ pub struct Drops {
     pub unbound_sender: std::sync::atomic::AtomicU64,
     pub unknown_peer: std::sync::atomic::AtomicU64,
     pub unbound_port: std::sync::atomic::AtomicU64,
+    /// Oversized datagrams dropped because the peer's queue of them was full.
+    pub oversize_backlog: std::sync::atomic::AtomicU64,
+    /// Oversized datagrams that waited too long or whose stream timed out or failed.
+    pub oversize_expired: std::sync::atomic::AtomicU64,
 }
 
 /// The loopback side of game traffic and the routes into the tunnels.
@@ -145,7 +172,17 @@ impl Traffic {
     pub fn route(&self, address: Ipv4Addr, connection: Option<Connection>) {
         let mut routes = self.write();
         match connection {
-            Some(connection) => routes.peers.insert(address, connection),
+            Some(connection) => {
+                // Dropping the old entry closes its queue, which ends its sender task.
+                let oversize = spawn_oversize_sender(connection.clone(), self.drops.clone());
+                routes.peers.insert(
+                    address,
+                    Peer {
+                        connection,
+                        oversize,
+                    },
+                )
+            }
             None => routes.peers.remove(&address),
         };
     }
@@ -200,12 +237,23 @@ impl Traffic {
                 self.broadcast(header.vport, header.source_vport, game);
                 continue;
             }
-            let connection = self.read().peers.get(&header.address).cloned();
-            let Some(connection) = connection else {
+            let route = self
+                .read()
+                .peers
+                .get(&header.address)
+                .map(|p| (p.connection.clone(), p.oversize.clone()));
+            let Some((connection, oversize)) = route else {
                 count(&self.drops.unknown_peer);
                 continue;
             };
-            send_datagram(&connection, header.vport, header.source_vport, game);
+            send_datagram(
+                &connection,
+                &oversize,
+                &self.drops,
+                header.vport,
+                header.source_vport,
+                game,
+            );
         }
     }
 
@@ -222,21 +270,22 @@ impl Traffic {
             Verdict::TooFast => return BroadcastStats::add(&self.broadcasts.too_fast, 1),
             Verdict::Send => {}
         }
-        let connections: Vec<Connection> = {
+        let routes: Vec<(Connection, mpsc::Sender<Queued>)> = {
             let routes = self.read();
             routes
                 .audience
                 .iter()
-                .filter_map(|address| routes.peers.get(address).cloned())
+                .filter_map(|address| routes.peers.get(address))
+                .map(|p| (p.connection.clone(), p.oversize.clone()))
                 .collect()
         };
         BroadcastStats::add(&self.broadcasts.accepted, 1);
-        if connections.is_empty() {
+        if routes.is_empty() {
             return BroadcastStats::add(&self.broadcasts.alone, 1);
         }
-        BroadcastStats::add(&self.broadcasts.copies, connections.len() as u64);
-        for connection in &connections {
-            send_datagram(connection, vport, source_vport, game);
+        BroadcastStats::add(&self.broadcasts.copies, routes.len() as u64);
+        for (connection, oversize) in &routes {
+            send_datagram(connection, oversize, &self.drops, vport, source_vport, game);
         }
     }
 
@@ -291,7 +340,11 @@ impl Traffic {
             return Err("wrong stream key".into());
         }
         let (header, _) = TrafficHeader::split(&head[STREAM_KEY_LEN..]).ok_or("short header")?;
-        let connection = self.read().peers.get(&header.address).cloned();
+        let connection = self
+            .read()
+            .peers
+            .get(&header.address)
+            .map(|p| p.connection.clone());
         let connection = connection.ok_or("no tunnel to that address")?;
         let (mut send, recv) = connection.open_bi().await.map_err(|e| e.to_string())?;
         send.write_all(&tunnel_header(header.vport, header.source_vport))
@@ -334,9 +387,17 @@ impl Traffic {
     }
 }
 
-/// Sends game bytes through a tunnel: as one QUIC datagram when it fits, else on a stream of
-/// its own so that a large datagram still arrives.
-pub fn send_datagram(connection: &Connection, vport: u16, source_vport: u16, game: &[u8]) {
+/// Sends game bytes through a tunnel: as one QUIC datagram when it fits, else through the
+/// peer's bounded sender, which gives it a stream of its own so that a large datagram still
+/// arrives. A full queue drops the datagram, as a full socket buffer would.
+fn send_datagram(
+    connection: &Connection,
+    oversize: &mpsc::Sender<Queued>,
+    drops: &Drops,
+    vport: u16,
+    source_vport: u16,
+    game: &[u8],
+) {
     let mut out = BytesMut::with_capacity(TUNNEL_HEADER + game.len());
     out.put_slice(&tunnel_header(vport, source_vport));
     out.put_slice(game);
@@ -350,13 +411,71 @@ pub fn send_datagram(connection: &Connection, vport: u16, source_vport: u16, gam
         }
         return;
     }
-    let connection = connection.clone();
+    let queued = Queued {
+        bytes: out,
+        queued: Instant::now(),
+    };
+    if oversize.try_send(queued).is_err() {
+        count(&drops.oversize_backlog);
+    }
+}
+
+/// Starts the one task that sends a peer's oversized datagrams, one stream at a time. It ends
+/// when the peer's route is dropped or the connection closes.
+fn spawn_oversize_sender(connection: Connection, drops: Arc<Drops>) -> mpsc::Sender<Queued> {
+    let (queue, mut waiting) = mpsc::channel::<Queued>(OVERSIZE_QUEUE);
     tokio::spawn(async move {
-        if let Ok(mut send) = connection.open_uni().await {
-            let _ = send.write_all(&out).await;
-            let _ = send.finish();
+        while let Some(item) = waiting.recv().await {
+            if item.queued.elapsed() > OVERSIZE_MAX_AGE {
+                count(&drops.oversize_expired);
+                continue;
+            }
+            match send_on_stream(&connection, &item.bytes).await {
+                Ok(true) => {}
+                Ok(false) => count(&drops.oversize_expired),
+                Err(()) => return,
+            }
         }
     });
+    queue
+}
+
+/// Writes `bytes` on a new unidirectional stream within `OVERSIZE_SEND_TIMEOUT`. `Ok(false)`:
+/// the time ran out or the write failed and the stream was reset; `Err`: the connection is gone.
+async fn send_on_stream(connection: &Connection, bytes: &Bytes) -> Result<bool, ()> {
+    let deadline = Instant::now() + OVERSIZE_SEND_TIMEOUT;
+    let mut send = match tokio::time::timeout_at(deadline, connection.open_uni()).await {
+        Ok(Ok(send)) => send,
+        Ok(Err(_)) => return Err(()),
+        Err(_) => return Ok(false),
+    };
+    match tokio::time::timeout_at(deadline, send.write_all(bytes)).await {
+        Ok(Ok(())) => {
+            let _ = send.finish();
+            Ok(true)
+        }
+        _ => {
+            let _ = send.reset(0u8.into());
+            Ok(false)
+        }
+    }
+}
+
+/// Reads one oversized datagram from a stream the peer at `from` opened and delivers it. A
+/// stream that does not complete in `OVERSIZE_READ_TIMEOUT` is abandoned.
+pub async fn receive_oversized(traffic: &Traffic, from: Ipv4Addr, mut recv: RecvStream) {
+    let read = tokio::time::timeout(
+        OVERSIZE_READ_TIMEOUT,
+        recv.read_to_end(LARGEST_STREAMED_DATAGRAM),
+    )
+    .await;
+    match read {
+        Ok(Ok(bytes)) => traffic.deliver_datagram(from, &bytes).await,
+        Ok(Err(_)) => {}
+        Err(_) => {
+            let _ = recv.stop(0u8.into());
+        }
+    }
 }
 
 /// The largest oversized datagram read from a stream.
@@ -423,6 +542,135 @@ mod tests {
         assert!(same(b"abc", b"abc"));
         assert!(!same(b"abc", b"abd"));
         assert!(!same(b"abc", b"ab"));
+    }
+
+    const TEST_ALPN: &[u8] = b"anyplay/test-oversize";
+
+    async fn test_endpoint() -> iroh::Endpoint {
+        iroh::Endpoint::builder(iroh::endpoint::presets::Minimal)
+            .alpns(vec![TEST_ALPN.to_vec()])
+            .relay_mode(iroh::RelayMode::Disabled)
+            .clear_ip_transports()
+            .bind_addr((Ipv4Addr::LOCALHOST, 0))
+            .unwrap()
+            .bind()
+            .await
+            .unwrap()
+    }
+
+    /// Two connected loopback endpoints: the dialer's and the acceptor's connection, plus the
+    /// endpoints, which must stay alive.
+    async fn connected() -> (Connection, Connection, [iroh::Endpoint; 2]) {
+        let server = test_endpoint().await;
+        let client = test_endpoint().await;
+        let addr = iroh::EndpointAddr::new(server.id())
+            .with_ip_addr(server.bound_sockets().into_iter().next().unwrap());
+        let accepting = {
+            let server = server.clone();
+            tokio::spawn(async move {
+                let incoming = server.accept().await.unwrap();
+                incoming.accept().unwrap().await.unwrap()
+            })
+        };
+        let dialed = client.connect(addr, TEST_ALPN).await.unwrap();
+        (dialed, accepting.await.unwrap(), [server, client])
+    }
+
+    fn alive_tasks() -> usize {
+        tokio::runtime::Handle::current()
+            .metrics()
+            .num_alive_tasks()
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_stalled_receiver_costs_a_bounded_queue_not_a_task_per_packet() {
+        let (dialed, _accepted, _endpoints) = connected().await;
+        let drops = Arc::new(Drops::default());
+        let oversize = spawn_oversize_sender(dialed.clone(), drops.clone());
+        let before = alive_tasks();
+        // The acceptor never calls accept_uni, so its stream limit and windows fill up.
+        let game = vec![9u8; 5000];
+        for i in 0..10_000u32 {
+            send_datagram(&dialed, &oversize, &drops, 1, 1, &game);
+            if i % 64 == 0 {
+                tokio::task::yield_now().await;
+            }
+        }
+        let peak = alive_tasks();
+        assert!(peak <= before + 1, "tasks grew with the packets");
+        let backlog = drops
+            .oversize_backlog
+            .load(std::sync::atomic::Ordering::Relaxed);
+        assert!(backlog > 9_000, "only {backlog} dropped");
+        // Let the sender hit its timeouts on the stalled streams: it neither grows nor ends.
+        tokio::time::sleep(Duration::from_millis(1500)).await;
+        println!(
+            "NEW tasks before={before} peak={peak} after_1.5s={}",
+            alive_tasks()
+        );
+        assert!(alive_tasks() <= before + 1);
+        assert!(
+            drops
+                .oversize_expired
+                .load(std::sync::atomic::Ordering::Relaxed)
+                > 0,
+            "queued packets neither went out nor expired"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn oversized_datagrams_arrive_intact_in_both_directions() {
+        let (a, b, _endpoints) = connected().await;
+        for (from, to) in [(a.clone(), b.clone()), (b, a)] {
+            let receiving = Traffic::start().await.unwrap();
+            let socket = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+            let port = socket.local_addr().unwrap().port();
+            assert_eq!(
+                receiving.bind(7, Transport::Datagram, port),
+                BindResult::Bound
+            );
+            let peer = Ipv4Addr::new(198, 18, 0, 9);
+            {
+                let (receiving, to) = (receiving.clone(), to.clone());
+                tokio::spawn(async move {
+                    while let Ok(recv) = to.accept_uni().await {
+                        receive_oversized(&receiving, peer, recv).await;
+                    }
+                });
+            }
+            {
+                let (receiving, to) = (receiving.clone(), to.clone());
+                tokio::spawn(async move {
+                    while let Ok(datagram) = to.read_datagram().await {
+                        receiving.deliver_datagram(peer, &datagram).await;
+                    }
+                });
+            }
+            let drops = Arc::new(Drops::default());
+            let oversize = spawn_oversize_sender(from.clone(), drops.clone());
+            // 1400 B may fit a datagram or not, depending on the path; 5000 B never does.
+            for size in [1400usize, 5000] {
+                let game: Vec<u8> = (0..size).map(|i| (i % 251) as u8).collect();
+                send_datagram(&from, &oversize, &drops, 7, 3, &game);
+                let mut buf = vec![0u8; 70_000];
+                let len = tokio::time::timeout(Duration::from_secs(5), socket.recv(&mut buf))
+                    .await
+                    .expect("the datagram never arrived")
+                    .unwrap();
+                let (header, got) = TrafficHeader::split(&buf[..len]).unwrap();
+                assert_eq!(
+                    (header.address, header.vport, header.source_vport),
+                    (peer, 7, 3)
+                );
+                assert_eq!(got, &game[..], "{size} B arrived changed");
+            }
+            assert_eq!(
+                drops
+                    .oversize_backlog
+                    .load(std::sync::atomic::Ordering::Relaxed),
+                0
+            );
+        }
     }
 
     #[tokio::test]

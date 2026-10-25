@@ -16,7 +16,7 @@ use iroh::{
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::task::JoinHandle;
 
-use crate::traffic::{LARGEST_STREAMED_DATAGRAM, Traffic};
+use crate::traffic::{Traffic, receive_oversized};
 use crate::{screen, voice};
 
 /// A connection that held at least this long counts as good: the next dial starts over at
@@ -26,6 +26,9 @@ const GOOD_CONNECTION: Duration = Duration::from_secs(10);
 const FIRST_PAUSE: Duration = Duration::from_millis(500);
 /// The longest wait between two dials.
 const LONGEST_PAUSE: Duration = Duration::from_secs(30);
+
+/// How many oversized datagrams one connection reads from streams at once.
+const MAX_OVERSIZE_READS: usize = 32;
 
 /// The protocol inside every tunnel.
 pub const ALPN: &[u8] = b"anyplay/tunnel/0";
@@ -469,13 +472,21 @@ impl Tunnels {
             let connection = connection.clone();
             let tunnels = self.clone();
             async move {
-                while let Ok(mut recv) = connection.accept_uni().await {
+                // At most this many oversized datagrams are read at once; the next stream is
+                // accepted when one finishes, and the sender's stream limit holds the rest back.
+                let reading = Arc::new(tokio::sync::Semaphore::new(MAX_OVERSIZE_READS));
+                loop {
+                    let Ok(permit) = reading.clone().acquire_owned().await else {
+                        return;
+                    };
+                    let Ok(recv) = connection.accept_uni().await else {
+                        return;
+                    };
                     let tunnels = tunnels.clone();
                     tokio::spawn(async move {
-                        if let Ok(bytes) = recv.read_to_end(LARGEST_STREAMED_DATAGRAM).await {
-                            let from = tunnels.address_of(id).unwrap_or(address);
-                            tunnels.traffic.deliver_datagram(from, &bytes).await;
-                        }
+                        let from = tunnels.address_of(id).unwrap_or(address);
+                        receive_oversized(&tunnels.traffic, from, recv).await;
+                        drop(permit);
                     });
                 }
             }
