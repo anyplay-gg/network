@@ -247,9 +247,10 @@ The player's own parts. Only fields the cloud has exist: the text, the favourite
 | `PUT /me/avatar` | the picture | `{avatar}`: the hash. The body is a PNG or JPEG of at most 1 MB with `Content-Type: image/png` or `image/jpeg`; the cloud makes a square of it. The picture is at `GET /v1/avatars/{hash}` (no token; the hash is the right to see it). |
 | `DELETE /me/avatar` | `{}` | `{ok: true}`. |
 | `GET /me/trophies` | | `TrophySummary`. |
+| `GET /users/{name}/compare/{title_id}` | | `TrophyCompare`; see [Other players](#other-players). |
 
 ```text
-TrophySummary { counts, titles }                    counts: Count (bronze, silver, gold, platinum)
+TrophySummary { counts, points, level, titles }      counts: Count (bronze, silver, gold, platinum); points: their worth; level: TrophyLevel {points, level, from, to}
 TitleSummary  { title_id, counts, earned, last_earned }   titles: [TitleSummary], the title with the latest trophy first
 ```
 
@@ -393,11 +394,13 @@ These work without a session; with one, they know the viewer. **A part the viewe
 |---|---|
 | `GET /users/{name}` | `PublicUser`. `{name}` is a handle, in any case. |
 | `GET /users/{name}/trophies` | `TrophySummary`; `not_found` when the viewer may not see the player's trophies, so it does not say whether there are any. |
+| `GET /users/{name}/compare/{title_id}` | `TrophyCompare`, needs a session: the viewer (`you`) next to the player (`them`) in one title, with the numbers, grades and times of both, the counts and points of the title and of all trophies, and each one's level. `not_found` when the player does not exist or their trophies are hidden from the viewer, `bad_request` for the viewer's own name, `unauthorized` without a session. The shape and rules are those of [`GET /v1/accounts/{id}/compare/{title_id}`](cloud-api.md#trophies-and-privacy); the portal shows trophy numbers only, as it has no names or art. |
 
 ```text
-PublicUser { account, about, favourites, avatar, playtime, trophies, links, viewer }
+PublicUser { account, about, favourites, avatar, playtime, trophies, level, links, viewer }
   the Profile parts, each null when hidden or unset
   trophies   Count, or null when hidden
+  level      TrophyLevel {points, level, from, to}, or null when the trophies are hidden; the points count what the viewer may see (secret trophies of another player stay out)
   links      [PublicLink], the connections the viewer may see, possibly empty (never null: an empty list does not say whether there are hidden ones)
     PublicLink {provider, external_id, display_name, avatar_url, profile_url}, as in LinkView
   viewer     null for a visitor who is not signed in, else {relation, requested, blocked}

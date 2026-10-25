@@ -52,10 +52,14 @@ Relay     { url, token, expires }
 Trophy    { number, grade, earned }                grade: "bronze" | "silver" | "gold" | "platinum"
 TitleTrophies { title_id, trophies: [Trophy] }
 Count     { bronze, silver, gold, platinum }
+TrophyLevel { points, level, from, to }            level: 1 to 100; from: points where the level began; to: points where the next begins, null at 100
+Tally     { counts, points }                       counts: Count; points: their worth
+CompareSide { account, trophies, title, total, level }   trophies: [Trophy] in one title; title, total: Tally; level: TrophyLevel of total
+TrophyCompare { title_id, you, them }              you, them: CompareSide
 Card      { account, trophies, avatar }            trophies: Count, or null when hidden; avatar: hash, or absent
 Privacy   { trophies, about, favourites, avatar, playtime, feed }   each "friends" | "everyone" | "nobody"
 Profile   { account, about, favourites, avatar, playtime }    each part null when unset or hidden from the caller
-ProfilePage { ...Profile, trophies, links }        trophies: Count or null when hidden; links: [ProfileLink], possibly empty
+ProfilePage { ...Profile, trophies, level, links }  trophies: Count or null when hidden; level: TrophyLevel, absent when hidden; links: [ProfileLink], possibly empty
 ProfileLink { provider, name }                     provider: "discord" | "steam"; name: what the provider shows, or absent
 FeedItem  { id, account, at, kind, ..., reactions, mine }   kind and its fields: see Feed
 Reactions { reactions, mine }                      reactions: { nice, gg, wow, same } counts; mine: a reaction or null
@@ -234,6 +238,9 @@ The cloud keeps a **trophy record** per trophy a player earned: the title, the t
 |---|---|---|
 | `PUT /v1/me/trophies/{title_id}` | `{trophies: [Trophy]}` | `{added}`: how many records are new |
 | `GET /v1/accounts/{id}/trophies` | | `{titles: [TitleTrophies]}`, or `not_found` when the account's trophies are hidden from the caller |
+| `PUT /v1/me/trophies/{title_id}/secret` | `{numbers: [u16]}` | `{changed}`: how many of the numbers are newly marked secret |
+| `PUT /v1/me/trophies/{title_id}/reveal` | `{numbers: [u16]}` | `{changed}`: how many secret trophies are revealed now |
+| `GET /v1/accounts/{id}/compare/{title_id}` | | `TrophyCompare`: the caller (`you`) next to the account `{id}` (`them`) in one title; `not_found` when that account does not exist or its trophies are hidden from the caller; `bad_request` for the caller's own ID |
 | `GET /v1/titles/{title_id}/rarity` | | `{title_id, players, trophies: [{number, earned_by}]}` |
 | `GET /v1/cards?accounts=1,2,3` | | `{cards: [Card]}` for the accounts the caller may see, at most 100 |
 | `GET /v1/me/privacy` | | `Privacy` |
@@ -241,8 +248,11 @@ The cloud keeps a **trophy record** per trophy a player earned: the title, the t
 
 - `number` is 0 to 2047 and `earned` is in Unix seconds. One upload carries at most 512 trophies. A trophy recorded already keeps its first `earned` and grade.
 - Who sees an account's trophies: the account itself always; its friends unless `trophies` is `nobody`; everyone else only with `everyone`. A block in either direction hides them.
+- **Points and level** ([ADR 0029](../docs/adr/0029-trophy-points-and-levels.md)). A trophy is worth 10 (bronze), 25 (silver), 60 (gold) or 150 (platinum) points. Level `L` (1 to 100) starts at `6 * (L - 1) * (L + 10)` points: 0, 72, 156, 252, ... 65,340 for level 100. The cloud always sends the numbers (`TrophyLevel`), clients only draw them. They follow the visibility of `trophies`: wherever the counts are null, points and level are absent.
+- **Secret trophies.** `secret` marks the numbers as secret (a game hides them; the launcher knows which). Marking can come before or after the upload; it is idempotent, at most 512 numbers each below 2048 per request, and a revealed number stays revealed when it is marked again. `reveal` shows a secret trophy to everyone who may see the account's trophies; there is no way back. Until then only the account itself sees the record: `GET /v1/accounts/{id}/trophies`, the gamer card and profile counts, points, levels, comparisons and the feed leave it out for everyone else, and a secret trophy earned makes no feed item. (So the account's own counts and level can be higher than what others see.) Rarity counts it like any record.
+- **Comparing.** The answer has, for each side, the trophies of the title ordered by number (`number`, `grade`, `earned`: ids only, no names, texts or art), `title` (those trophies counted by grade, with their points), `total` (every trophy the caller may see of the account, in all titles) and `level` (the level of `total.points`). `you` is the caller's own full view; `them` follows the rules above, so the caller sees only what the profile would show. Trophies the other has and the caller has not, and the reverse, are found by comparing the numbers. Anyone can compare with an account whose trophies they may see, friends or not. A title without records gives empty lists and zero counts.
 - `players` counts the accounts with at least one record for the title. Rarity is only given once 10 players have the title; below that `players` is 0 and `trophies` empty, so it cannot tell which trophies one person earned.
-- A gamer card's `trophies` counts the account's records by grade, or is null when its trophies are hidden from the caller. Its `avatar` is the hash of the account's avatar, absent when there is none or the caller may not see it. Nothing else is on a card.
+- A gamer card's `trophies` counts the account's records by grade, or is null when its trophies are hidden from the caller. Its `avatar` is the hash of the account's avatar, absent when there is none or the caller may not see it. Nothing else is on a card. (Points and level are on the profile and the comparison, not on the card.)
 
 ## Run reports
 
