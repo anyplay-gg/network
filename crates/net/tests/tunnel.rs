@@ -342,7 +342,9 @@ async fn a_tunnel_that_ends_at_once_is_redialed_with_a_growing_pause() {
 async fn a_tunnel_that_held_for_a_while_is_redialed_quickly() {
     let relay = support::relay::start().await;
     let (mut dialer, mut acceptor) = dialer_and_acceptor(&relay).await;
-    let listed = |of: &Side, account, address| HashMap::from([(of.tunnels.id(), peer(account, address, of))]);
+    let listed = |of: &Side, account, address| {
+        HashMap::from([(of.tunnels.id(), peer(account, address, of))])
+    };
     dialer.tunnels.set_peers(listed(&acceptor, 2, B));
     acceptor.tunnels.set_peers(listed(&dialer, 1, A));
     linked(&mut dialer.changes).await;
