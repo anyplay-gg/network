@@ -7,7 +7,7 @@
 use std::collections::{HashMap, HashSet};
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::{Arc, Mutex, RwLock};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyplay_bridge_protocol::{BindResult, STREAM_KEY_LEN, TrafficHeader, Transport};
 use bytes::{BufMut, Bytes, BytesMut};
@@ -97,7 +97,7 @@ impl Traffic {
             routes: Arc::default(),
             drops: Arc::default(),
             broadcasts: Arc::default(),
-            limiter: Arc::new(Mutex::new(Limiter::new(Instant::now()))),
+            limiter: Arc::new(Mutex::new(Limiter::new(std::time::Instant::now()))),
         };
         tokio::spawn(traffic.clone().carry_datagrams());
         tokio::spawn(traffic.clone().carry_streams(tcp));
@@ -264,7 +264,7 @@ impl Traffic {
             .limiter
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .admit(Instant::now(), game.len());
+            .admit(std::time::Instant::now(), game.len());
         match verdict {
             Verdict::TooLarge => return BroadcastStats::add(&self.broadcasts.too_large, 1),
             Verdict::TooFast => return BroadcastStats::add(&self.broadcasts.too_fast, 1),
