@@ -20,6 +20,7 @@ pub mod traffic;
 pub mod tunnel;
 mod typing;
 pub mod voice;
+pub mod webapi;
 pub mod worker_process;
 
 pub use service::{Config, run};

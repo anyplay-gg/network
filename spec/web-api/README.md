@@ -5,6 +5,7 @@ What games send to the platform's web API, group by group, as observed in games 
 | Group | Status | Seen in |
 |---|---|---|
 | [`userProfile`](userProfile.md) | observed | Minecraft Dungeons II |
+| [`communicationRestrictionStatus`](communicationRestrictionStatus.md) | offered (shape unconfirmed) | Overcooked! All You Can Eat |
 
 ## How requests reach the bridge
 

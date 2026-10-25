@@ -44,6 +44,7 @@ use crate::screen::{self, WorkerSet};
 use crate::traffic::Traffic;
 use crate::tunnel::{self, Link, LinkChange, LinkTotals, RelayAccess, Tunnels};
 use crate::voice::{self, Audio, Hub};
+use crate::webapi;
 
 mod discord;
 
@@ -203,6 +204,8 @@ pub struct Service {
     restrictions: Vec<control::Restriction>,
     discord: discord::DiscordSide,
     restriction_answers: Answers,
+    /// When the restrictions were last asked of the cloud, for the web API answers.
+    restrictions_asked: Option<Instant>,
     sessions: HashMap<String, Session>,
     /// Per session, so that a session read on going online never undoes a newer push.
     session_answers: HashMap<String, Answers>,
@@ -312,6 +315,7 @@ impl Service {
             restrictions: Vec::new(),
             discord,
             restriction_answers: Answers::default(),
+            restrictions_asked: None,
             sessions: HashMap::new(),
             session_answers: HashMap::new(),
             invitations: HashMap::new(),
@@ -1742,6 +1746,7 @@ impl Service {
             return;
         };
         let question = self.restriction_answers.ask();
+        self.restrictions_asked = Some(Instant::now());
         self.spawn(
             async move { cloud.actions().await },
             move |service, result| {
@@ -3788,6 +3793,7 @@ impl Service {
             self.own_api(connection, request, web);
             return;
         }
+        let reply = self.offered_web_reply(&web);
         let mut input = serde_json::json!({
             "user_id": web.user_id,
             "api_group": web.api_group,
@@ -3803,13 +3809,30 @@ impl Service {
             &self.title(),
             "web",
             input,
-            serde_json::json!({"status": 0}),
+            serde_json::json!({"status": reply.status}),
         );
-        self.bridge_reply(
-            connection,
-            request,
-            Message::WebReply(WebReply::not_offered()),
-        );
+        self.bridge_reply(connection, request, Message::WebReply(reply));
+    }
+
+    /// The answer of a group the net service offers, or "not offered". The restrictions come
+    /// from what the service already holds; a game polling many times a second causes a read
+    /// from the cloud at most once per [`webapi::RESTRICTIONS_MAX_AGE`].
+    fn offered_web_reply(&mut self, web: &bridge::WebRequest) -> WebReply {
+        let stale = self
+            .restrictions_asked
+            .is_none_or(|asked| asked.elapsed() >= webapi::RESTRICTIONS_MAX_AGE);
+        if stale && web.api_group == webapi::COMMUNICATION_RESTRICTION {
+            self.fetch_restrictions();
+        }
+        let state = self.bridge_state_now();
+        let overrides = std::env::var_os(webapi::OVERRIDES_VAR).map(PathBuf::from);
+        let context = webapi::Context {
+            account: state.signed_in.then_some(state.account_id),
+            restrictions: &self.restrictions,
+            now: now(),
+            overrides: overrides.as_deref(),
+        };
+        webapi::answer(web, &context).unwrap_or_else(WebReply::not_offered)
     }
 
     /// The network's own API group: sessions in the cloud's format, for the fake game and for
