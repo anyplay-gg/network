@@ -1515,6 +1515,80 @@ pub fn is_message_text(text: &str) -> bool {
             .any(|c| c.is_control() && !matches!(c, '\n' | '\t'))
 }
 
+// Join codes
+
+/// A code the cloud issued to the caller, and the address of the page it opens.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JoinCode {
+    /// Ten characters; lower case letters and digits without `0`, `1`, `l` and `o`.
+    pub code: String,
+    /// The join page of the account web, ending in `/join/<code>`.
+    pub url: String,
+    pub expires: u64,
+}
+
+/// What a redeemed join code made: an ordinary invitation, which the caller still has to accept.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "invitation", rename_all = "lowercase")]
+pub enum Redeemed {
+    Session(Invitation),
+    Party(PartyInvitation),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum JoinKind {
+    Session,
+    Party,
+}
+
+/// The public face of a join code, for the page that opens it. Nothing else is revealed.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JoinView {
+    pub handle: String,
+    /// The game's title as text; null for a party.
+    pub title: Option<String>,
+    pub members: u16,
+    pub max_members: u16,
+    pub kind: JoinKind,
+}
+
+/// The characters of a join code, and its length.
+pub const JOIN_CODE_ALPHABET: &str = "23456789abcdefghijkmnpqrstuvwxyz";
+pub const JOIN_CODE_LEN: usize = 10;
+
+/// The code written in `text` (a code, a `anyps5://v1/join/<code>` link or a `…/join/<code>` web
+/// address), in lower case; none when `text` holds no well-formed code.
+pub fn join_code_from_text(text: &str) -> Option<String> {
+    let text = text.trim();
+    let tail = text.rsplit('/').find(|part| !part.is_empty())?;
+    let tail = tail.split(['?', '#']).next()?.to_ascii_lowercase();
+    (tail.len() == JOIN_CODE_LEN && tail.chars().all(|c| JOIN_CODE_ALPHABET.contains(c)))
+        .then_some(tail)
+}
+
+#[cfg(test)]
+mod join_code_tests {
+    use super::*;
+
+    #[test]
+    fn the_code_is_read_out_of_a_link() {
+        assert_eq!(join_code_from_text("k3x9m2pqra").as_deref(), Some("k3x9m2pqra"));
+        assert_eq!(
+            join_code_from_text("anyps5://v1/join/K3X9M2PQRA/").as_deref(),
+            Some("k3x9m2pqra")
+        );
+        assert_eq!(
+            join_code_from_text("https://anyplaynet.com/join/k3x9m2pqra?x=1").as_deref(),
+            Some("k3x9m2pqra")
+        );
+        assert_eq!(join_code_from_text("k3x9m2pqr0"), None);
+        assert_eq!(join_code_from_text("short"), None);
+        assert_eq!(join_code_from_text(""), None);
+    }
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1919,78 +1993,5 @@ mod tests {
             .filter(|s| is_assignable(virtual_address(*s).unwrap()))
             .count() as u32;
         assert_eq!(counted, ASSIGNABLE_ADDRESSES);
-    }
-}
-
-// Join codes
-
-/// A code the cloud issued to the caller, and the address of the page it opens.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct JoinCode {
-    /// Ten characters; lower case letters and digits without `0`, `1`, `l` and `o`.
-    pub code: String,
-    /// The join page of the account web, ending in `/join/<code>`.
-    pub url: String,
-    pub expires: u64,
-}
-
-/// What a redeemed join code made: an ordinary invitation, which the caller still has to accept.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", content = "invitation", rename_all = "lowercase")]
-pub enum Redeemed {
-    Session(Invitation),
-    Party(PartyInvitation),
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum JoinKind {
-    Session,
-    Party,
-}
-
-/// The public face of a join code, for the page that opens it. Nothing else is revealed.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct JoinView {
-    pub handle: String,
-    /// The game's title as text; null for a party.
-    pub title: Option<String>,
-    pub members: u16,
-    pub max_members: u16,
-    pub kind: JoinKind,
-}
-
-/// The characters of a join code, and its length.
-pub const JOIN_CODE_ALPHABET: &str = "23456789abcdefghijkmnpqrstuvwxyz";
-pub const JOIN_CODE_LEN: usize = 10;
-
-/// The code written in `text` (a code, a `anyps5://v1/join/<code>` link or a `…/join/<code>` web
-/// address), in lower case; none when `text` holds no well-formed code.
-pub fn join_code_from_text(text: &str) -> Option<String> {
-    let text = text.trim();
-    let tail = text.rsplit('/').find(|part| !part.is_empty())?;
-    let tail = tail.split(['?', '#']).next()?.to_ascii_lowercase();
-    (tail.len() == JOIN_CODE_LEN && tail.chars().all(|c| JOIN_CODE_ALPHABET.contains(c)))
-        .then_some(tail)
-}
-
-#[cfg(test)]
-mod join_code_tests {
-    use super::*;
-
-    #[test]
-    fn the_code_is_read_out_of_a_link() {
-        assert_eq!(join_code_from_text("k3x9m2pqra").as_deref(), Some("k3x9m2pqra"));
-        assert_eq!(
-            join_code_from_text("anyps5://v1/join/K3X9M2PQRA/").as_deref(),
-            Some("k3x9m2pqra")
-        );
-        assert_eq!(
-            join_code_from_text("https://anyplaynet.com/join/k3x9m2pqra?x=1").as_deref(),
-            Some("k3x9m2pqra")
-        );
-        assert_eq!(join_code_from_text("k3x9m2pqr0"), None);
-        assert_eq!(join_code_from_text("short"), None);
-        assert_eq!(join_code_from_text(""), None);
     }
 }
