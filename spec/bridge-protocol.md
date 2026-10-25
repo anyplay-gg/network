@@ -115,6 +115,79 @@ Game packets do not travel in frames.
 - **Datagrams.** The bridge sends each datagram from the loopback UDP socket it bound, to `127.0.0.1:<udp_port>`. Each starts with an 8-byte header: `address: addr` (the peer), `vport: u16` (the peer's port), `source_vport: u16` (the game socket's own port), then the game's bytes. The net service drops datagrams from loopback ports nobody bound. It delivers a datagram from a peer to the bound loopback port, with the same header where `address` is the sender's virtual address, `vport` the receiving port and `source_vport` the sender's port.
 - **Streams.** For a reliable peer-to-peer stream the bridge opens a TCP connection to `127.0.0.1:<tcp_port>` and sends `stream_key` (the 16 bytes from welcome) and then the 8-byte header. After that the connection carries the game's bytes both ways, and closing it closes the stream. For a stream from a peer, the net service connects to the bound listening port and sends the same 16-byte key and an 8-byte header naming the sender.
 
+#### Broadcasts and the virtual LAN
+
+A game that looks for others on a local network sends a datagram to a broadcast address. The net service carries such a datagram to every other member of the player's session, so that the session behaves like one LAN. This is the virtual LAN of [ADR 0021](../docs/adr/0021-the-line-is-drawn-at-the-law.md): the network answers a game's local-network calls between the members of one session and nothing else.
+
+**No new frame.** A broadcast is an ordinary datagram. The bridge sends it from the loopback UDP socket it bound, to `127.0.0.1:<udp_port>`, with the usual 8-byte header, and `address` is one of two broadcast destinations:
+
+| Destination | Address |
+|---|---|
+| limited broadcast | `255.255.255.255` |
+| broadcast of the virtual subnet | `198.19.255.255` (the subnet is `198.18.0.0/15`, netmask `255.254.0.0`) |
+
+`vport` is the port the game sent to, `source_vport` the port of the sending socket. The tunnels do not change, and a net service that does not know broadcasts counts the datagram as sent to an unknown peer and drops it. No other destination is a broadcast: multicast (`224.0.0.0/4`, mDNS) and the broadcast address of any real network are not carried, and the bridge drops them.
+
+**Who receives it.** The net service copies the datagram into the tunnel of every other member of the player's current session whose tunnel is up at that moment: the session the launcher shows, the one that gave the player its address in `state` ([ADR 0020](../docs/adr/0020-virtual-addresses-belong-to-sessions.md)). The audience follows the session as members come and go and is empty while the player is in no session. The sender gets no copy, and a member whose tunnel is not up gets none later, as on a LAN. A broadcast needs no `activate`: a game that never calls the session functions (LAN modes usually do not) reaches its session all the same.
+
+**What a receiver sees.** Each copy arrives like any datagram from a peer: `address` is the sender's virtual address as the receiving net service knows it, `vport` the receiving port, `source_vport` the sender's port. It is delivered only when the receiver has bound `vport` for datagrams; else it is dropped and counted as an unbound port. Nothing marks it as a broadcast: a receiver cannot tell it from a unicast datagram and has no need to. A reply to the sender is an ordinary datagram to `address` and `source_vport`.
+
+**Limits.** They are the sending net service's, per player, and excess datagrams are dropped silently (UDP does not promise delivery):
+
+- at most 1,200 bytes of game data per datagram;
+- at most 40 broadcasts per second, with a burst of 80;
+- at most 32 KiB of game data per second, counting 8 bytes per datagram for its header;
+- any `vport` the receiver bound, with no allow-list. The receiver's own `bind` decides who listens, and the limits above bound the cost whichever port a game chooses.
+
+Unicast datagrams are not limited by these.
+
+**Nothing leaves the session.** The net service sends a broadcast only into tunnels, and a tunnel exists only between members of a session they share. It never writes to a real network interface, never to a member of another session (a member of two sessions gets the broadcasts of the sender's current session only), and never answers a broadcast itself. The bridge must hold up its side: it never sends a broadcast or multicast datagram of the game to the real network.
+
+**Counters.** The net service counts broadcasts accepted, copies made, broadcasts with nobody to send to, and those dropped for size or rate, and writes the totals to its log (target `anyplay::broadcast`) once a minute while they change. The counts name no one.
+
+##### What the bridge does with the game's sockets
+
+This is the whole of the bridge's part:
+
+1. **Bind every UDP socket.** Each UDP socket the game binds, including one bound to port 0 (the bridge picks the number, and the game sees it as the local port), is sent to the net service with **bind**, with `vport` equal to the local port the game sees. When two sockets share a port (`SO_REUSEADDR`, `SO_REUSEPORT`), the bridge binds it once and delivers each incoming datagram to every socket on that port. A socket is bound before it first sends, so its datagrams are not dropped as coming from an unbound socket.
+2. **Present the virtual interface.** While `state.address` is not 0, the game's interface queries show an interface with that address, netmask `255.254.0.0`, broadcast address `198.19.255.255` and MTU 1,200. It is the only non-loopback interface with an IPv4 address; IPv6 stays unavailable. Without it a game computes no subnet broadcast and gathers no candidates the peers can reach. While `state.address` is 0, the bridge presents what it presents today.
+3. **Send.** A `sendto` to either broadcast address from a UDP socket with `SO_BROADCAST` set becomes one datagram to the net service with that `address`, `vport` the destination port and `source_vport` the socket's local port. Without `SO_BROADCAST` the call fails as it does on the platform. The bridge reports the send as done at once.
+4. **Receive.** A datagram the net service delivers to a bound loopback port is handed to the game's socket as received from `address:source_vport`, with the game's bytes unchanged. A broadcast arrives like a unicast datagram, so a socket bound to `0.0.0.0` or to the virtual address receives it. The bridge does not loop the game's own broadcasts back to it.
+5. **Do not touch the real network** for a datagram to a virtual address or a broadcast address. A datagram to any other address fails at once with "network unreachable", so a game's attempt to reach a server on the internet (a STUN server, say) ends in an error and not in a timeout.
+
+##### Connections between players inside the virtual LAN
+
+A game may find another by broadcast and then open a peer-to-peer connection over UDP with ICE, DTLS and SCTP (WebRTC). Inside the virtual LAN that works with the datagram path above and needs nothing else:
+
+- **Candidates are the virtual addresses.** Because the game sees one interface with the virtual address (step 2), the host candidates it gathers are that address with the port of the ICE socket, and the candidates it receives from a peer are the peer's virtual address with the peer's port. The ICE socket is bound with `vport` equal to its local port (step 1), so a connectivity check addressed to a candidate reaches the peer's socket. The address in a peer's candidates is the peer's own address in its session, which is the address this PC holds for it except after the rare clash that [ADR 0020](../docs/adr/0020-virtual-addresses-belong-to-sessions.md) describes.
+- **No STUN, no TURN.** A host candidate on the virtual subnet is reachable by every member, so a connection needs no reflexive or relayed candidate. The net service runs no STUN or TURN server, issues no credentials for one, reads no game payload, and rewrites no address. A relayed tunnel (see `peer info`) only adds delay that ICE's timeouts already allow for.
+- **Unicast on any port.** Every datagram between two members goes by `address` and `vport` on any bound port, up to 64 KiB. A datagram that fits goes as one QUIC datagram (about 1,200 bytes) and a larger one over a stream of its own, which is why the interface reports an MTU of 1,200: DTLS and SCTP then fit in single datagrams. Order and delivery are not promised.
+- **Signals after discovery.** Some games, NetherNet among them, send the offer, the answer and the candidates as unicast datagrams to the address and port the other side's last datagram came from. That is why `source_vport` must be the sending socket's local port and `address` the sender's virtual address.
+
+Services of the platform or of a publisher that a game uses next to this (a session directory, a signaling server, a STUN or TURN server of a publisher) are not reached and not answered. The network does not stand in for them ([ADR 0021](../docs/adr/0021-the-line-is-drawn-at-the-law.md)).
+
+##### What the games do (Minecraft: Bedrock Edition)
+
+The first user is Minecraft: Bedrock Edition in its LAN mode. What public sources say about it, as of 25 October 2026:
+
+| | RakNet (up to 26.50) | NetherNet (from 26.60) |
+|---|---|---|
+| Discovery | An unconnected ping (`0x01`) to the broadcast address on UDP 19132 (19133 for IPv6); the host answers with an unconnected pong that carries the server name. | An encrypted request on UDP 7551 to `255.255.255.255`, sent every 2 seconds by a client that is looking; the host answers with a response that carries name, level, game mode and player counts. Packets are AES-ECB under the SHA-256 of `0xdeadbeef` with an HMAC-SHA-256 in front. The net service does not read them. |
+| Answer | To the sender of the ping. | An implementation answers the request's sender by unicast; the specification of the format says "broadcast back". The network handles both. |
+| Connection | RakNet over UDP with the pong's source. | After discovery both sides exchange signals (`CONNECTREQUEST` with the SDP offer, `CONNECTRESPONSE`, `CANDIDATEADD`) as discovery message packets on UDP 7551, by unicast to the address and port the other side's last packet came from. Then WebRTC: ICE over UDP, DTLS, SCTP, with a reliable and an unreliable data channel. |
+| Candidates | none | Host candidates of the local interfaces. Mojang's configuration for the HTTP path has no STUN or TURN servers, UDP candidates only and no trickle ICE; the LAN implementations pass no ICE servers either. |
+
+- RakNet is deprecated in 26.60 and NetherNet is the default transport of dedicated servers since 26.50 ([Bedrock Edition protocol](https://minecraft.wiki/w/Bedrock_Edition_protocol)); 26.60 is due on 27 October 2026.
+- Sources: [NetherNet, Minecraft Wiki](https://minecraft.wiki/w/NetherNet); [NetherNet HTTP Signaling, Partner Onboarding Guide, Mojang](https://mojang.github.io/bedrock-protocol-docs/guides/nether-net-onboarding-guide) (configuration: no STUN or TURN, UDP only, full ICE); [df-mc/nethernet-spec](https://github.com/df-mc/nethernet-spec) (LAN discovery, packet types, signal format, candidate format); [df-mc/go-nethernet, discovery/listener.go](https://github.com/df-mc/go-nethernet/blob/main/discovery/listener.go) (default broadcast `255.255.255.255:7551`, request every 2 seconds, unicast answer, signals to the last address seen for a network ID); [RakNet, Minecraft Wiki](https://minecraft.wiki/w/RakNet) (unconnected ping and pong); [bedrock-v nethernet](https://vpm.vlang.io/packages/bedrock-v.nethernet) (a LAN channel hands out no ICE servers; a server binds 7551).
+- No public source describes the console builds' exact behaviour. The observation log of the first run settles three open points for the bridge: whether the game answers a request by broadcast or by unicast, which interface call it gathers its addresses with, and whether it sends to the limited broadcast, the subnet broadcast or both. The spec above works for each answer.
+
+##### Considered options
+
+- **A frame kind or a flag for broadcasts.** The header's `address` already says where a datagram goes, and a receiver needs no more than for a unicast. A new kind would make every old net service drop the datagram, which a datagram to an unknown address does anyway.
+- **An allow-list of ports** (19132, 19133, 7551). Another game's discovery would need a new release of every net service. The receiver decides what it hears by binding, and the limits bound the cost, so the list would only add a place to be wrong.
+- **Broadcast to every session of the game.** A member of two sessions would receive both, which is two LANs seen as one. The session the launcher shows already gives the player its address, so it is the one LAN the player stands in.
+- **Receiver-side limits.** A receiver cannot tell a broadcast from a unicast, and a peer may send unicast at any rate to a bound port anyway, so a limit there would only slow honest game traffic.
+
 ### Join intents and the invitation dialog (`0x04xx`)
 
 | Kind | Name | Direction | Payload |

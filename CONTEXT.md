@@ -115,6 +115,14 @@ The check that two players run the same game version and a compatible AnyPS5 bui
 The address a game sees for a player in a session. It belongs to the player's place in that session, is different for every member of it, and leads into the tunnel; it exists only on the players' PCs. Another session may give it to someone else.
 _Avoid_: Peer IP, fake IP
 
+**Virtual LAN**:
+The members of one session seen as one local network by the game: their virtual addresses are in one subnet, and what a game sends to the broadcast address reaches all of them and nobody outside the session.
+_Avoid_: VPN, overlay network
+
+**Game broadcast**:
+A datagram a game sends to a broadcast address to find others on its network. The net service copies it to the other members of the player's session.
+_Avoid_: Multicast (not carried), discovery packet (that is one use of it)
+
 ### Games
 
 **Title class**:

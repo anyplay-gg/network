@@ -6,7 +6,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::net::{Ipv4Addr, SocketAddr};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
 use anyplay_bridge_protocol::{BindResult, STREAM_KEY_LEN, TrafficHeader, Transport};
@@ -16,6 +16,8 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
 use tokio::sync::mpsc;
 use tokio::time::Instant;
+
+use crate::broadcast::{BroadcastStats, Limiter, Verdict, is_broadcast};
 
 /// The header in front of game bytes inside a tunnel: the receiving and the sending virtual
 /// port. The addresses follow from the tunnel itself.
@@ -52,6 +54,9 @@ struct Routes {
     streams: HashMap<u16, u16>,
     /// Loopback ports of bound datagram sockets: only these may send.
     senders: HashSet<u16>,
+    /// The other members of the player's current session, by virtual address: where a broadcast
+    /// goes. Nobody else ever gets one.
+    audience: HashSet<Ipv4Addr>,
 }
 
 /// Counts what the data path drops, for the log and for tests.
@@ -75,6 +80,8 @@ pub struct Traffic {
     key: [u8; STREAM_KEY_LEN],
     routes: Arc<RwLock<Routes>>,
     pub drops: Arc<Drops>,
+    pub broadcasts: Arc<BroadcastStats>,
+    limiter: Arc<Mutex<Limiter>>,
 }
 
 impl Traffic {
@@ -89,9 +96,12 @@ impl Traffic {
             key: rand::random(),
             routes: Arc::default(),
             drops: Arc::default(),
+            broadcasts: Arc::default(),
+            limiter: Arc::new(Mutex::new(Limiter::new(std::time::Instant::now()))),
         };
         tokio::spawn(traffic.clone().carry_datagrams());
         tokio::spawn(traffic.clone().carry_streams(tcp));
+        tokio::spawn(traffic.clone().summarize_broadcasts());
         Ok(traffic)
     }
 
@@ -177,6 +187,33 @@ impl Traffic {
         };
     }
 
+    /// Writes the broadcast counters to the log once a minute while they change. They name no one.
+    async fn summarize_broadcasts(self) {
+        let mut last = self.broadcasts.totals();
+        loop {
+            tokio::time::sleep(crate::broadcast::SUMMARY_EVERY).await;
+            let totals = self.broadcasts.totals();
+            if totals != last {
+                last = totals;
+                tracing::info!(
+                    target: "anyplay::broadcast",
+                    accepted = totals.accepted,
+                    copies = totals.copies,
+                    alone = totals.alone,
+                    too_large = totals.too_large,
+                    too_fast = totals.too_fast,
+                    "game broadcasts"
+                );
+            }
+        }
+    }
+
+    /// Makes `members` the addresses a broadcast goes to: the other members of the player's
+    /// current session. Called whenever the session or its members change.
+    pub fn set_audience(&self, members: HashSet<Ipv4Addr>) {
+        self.write().audience = members;
+    }
+
     /// Bridge to tunnel: every datagram from a bound loopback socket goes to its peer.
     async fn carry_datagrams(self) {
         let mut buf = vec![0u8; LARGEST_DATAGRAM + TrafficHeader::LEN];
@@ -196,6 +233,10 @@ impl Traffic {
             let Some((header, game)) = TrafficHeader::split(&buf[..len]) else {
                 continue;
             };
+            if is_broadcast(header.address) {
+                self.broadcast(header.vport, header.source_vport, game);
+                continue;
+            }
             let route = self
                 .read()
                 .peers
@@ -213,6 +254,38 @@ impl Traffic {
                 header.source_vport,
                 game,
             );
+        }
+    }
+
+    /// Copies a broadcast into the tunnel of every member of the audience, within the limits. The
+    /// receivers see it as an ordinary datagram from this player's address and port.
+    fn broadcast(&self, vport: u16, source_vport: u16, game: &[u8]) {
+        let verdict = self
+            .limiter
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .admit(std::time::Instant::now(), game.len());
+        match verdict {
+            Verdict::TooLarge => return BroadcastStats::add(&self.broadcasts.too_large, 1),
+            Verdict::TooFast => return BroadcastStats::add(&self.broadcasts.too_fast, 1),
+            Verdict::Send => {}
+        }
+        let routes: Vec<(Connection, mpsc::Sender<Queued>)> = {
+            let routes = self.read();
+            routes
+                .audience
+                .iter()
+                .filter_map(|address| routes.peers.get(address))
+                .map(|p| (p.connection.clone(), p.oversize.clone()))
+                .collect()
+        };
+        BroadcastStats::add(&self.broadcasts.accepted, 1);
+        if routes.is_empty() {
+            return BroadcastStats::add(&self.broadcasts.alone, 1);
+        }
+        BroadcastStats::add(&self.broadcasts.copies, routes.len() as u64);
+        for (connection, oversize) in &routes {
+            send_datagram(connection, oversize, &self.drops, vport, source_vport, game);
         }
     }
 

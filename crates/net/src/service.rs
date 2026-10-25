@@ -2817,6 +2817,27 @@ impl Service {
             }
         }
         tunnels.set_peers(peers);
+        self.sync_audience();
+    }
+
+    /// Tells the traffic path who a broadcast of the game reaches: the other members of the
+    /// session the launcher shows, the one that gave the player its address. Never another
+    /// session's members, and no one when the player is in none.
+    fn sync_audience(&self) {
+        let me = self.me.as_ref().map(|m| m.id);
+        let audience = self
+            .current_session()
+            .and_then(|id| self.sessions.get(&id))
+            .map(|session| {
+                session
+                    .members
+                    .iter()
+                    .filter(|m| Some(m.account.id) != me)
+                    .filter_map(|m| self.peer_addresses.of(m.account.id.0))
+                    .collect()
+            })
+            .unwrap_or_default();
+        self.traffic.set_audience(audience);
     }
 
     fn link_change(&mut self, change: LinkChange) {
@@ -3134,6 +3155,7 @@ impl Service {
             }
         }
         self.traffic.unbind_all();
+        self.sync_audience();
         if let Some(bridge) = &mut self.bridge {
             bridge.activated.clear();
         }
@@ -3548,6 +3570,7 @@ impl Service {
                         if let (Ok(Some(session)), Some(game)) = (&result, &mut service.game) {
                             game.sessions.insert(session.id.clone());
                         }
+                        service.sync_audience();
                         finish(service, result);
                     },
                 );
@@ -3568,6 +3591,7 @@ impl Service {
                         if let (Ok(Some(session)), Some(game)) = (&result, &mut service.game) {
                             game.sessions.insert(session.id.clone());
                         }
+                        service.sync_audience();
                         finish(service, result);
                     },
                 );
