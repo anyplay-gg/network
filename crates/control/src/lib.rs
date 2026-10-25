@@ -453,10 +453,13 @@ pub struct Failure {
     pub code: String,
     pub message: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub expected: Option<Expected>,
+    pub expected: Option<Box<Expected>>,
     /// With the codes `restricted` and `banned`: what is restricted and until when.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub restriction: Option<Box<Restriction>>,
+    /// With the code `client_too_old`: the oldest launcher version the cloud accepts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub minimum: Option<String>,
 }
 
 /// What limits an account, as the player is told. Plain strings and numbers, like the code of a
@@ -570,6 +573,7 @@ impl Failure {
             message: message.into(),
             expected: None,
             restriction: None,
+            minimum: None,
         }
     }
 
@@ -578,8 +582,9 @@ impl Failure {
         Self {
             code: error.error.as_str().to_owned(),
             message: error.message.clone(),
-            expected: error.expected.clone(),
+            expected: error.expected.clone().map(Box::new),
             restriction: Restriction::of_error(error).map(Box::new),
+            minimum: error.minimum.as_deref().map(str::to_owned),
         }
     }
 
@@ -1029,6 +1034,11 @@ pub enum Event {
     /// The account was banned and is signed out. A `notice` with the code `banned` comes too.
     Banned {
         restriction: Restriction,
+    },
+    /// The cloud refuses this launcher because it is older than `minimum`. Sent once per run of
+    /// the net service; the service stays offline until it is restarted.
+    ClientTooOld {
+        minimum: String,
     },
     // Parties and messages
     /// The player's party changed, began (a party) or ended (null).
@@ -1962,6 +1972,39 @@ mod tests {
             bare.restriction.as_deref(),
             Some(&Restriction::new(Restriction::BANNED, Some(2000)))
         );
+    }
+
+    #[test]
+    fn client_too_old_is_a_failure_and_an_event() {
+        let mut error = api_error(ErrorCode::ClientTooOld, None);
+        error.until = None;
+        error.minimum = Some("0.3.0".into());
+        let failure = Failure::api(&error);
+        assert_eq!(failure.code, "client_too_old");
+        assert_eq!(failure.minimum.as_deref(), Some("0.3.0"));
+        assert!(failure.is(ErrorCode::ClientTooOld));
+        let text = output_line(&Output::Answer(Answer::error(4, failure.clone())));
+        assert!(text.contains(r#""minimum":"0.3.0""#), "{text}");
+        match parse_output(&text) {
+            Some(Output::Answer(answer)) => {
+                assert_eq!(answer.into_result::<()>().unwrap_err(), failure);
+            }
+            other => panic!("{other:?}"),
+        }
+        // A failure from an older service has no minimum, and others never print one.
+        let older: Failure = serde_json::from_str(r#"{"code":"offline","message":"x"}"#).unwrap();
+        assert_eq!(older.minimum, None);
+        assert!(!output_line(&Output::Answer(Answer::error(1, older))).contains("minimum"));
+
+        let event = Event::ClientTooOld {
+            minimum: "0.3.0".into(),
+        };
+        let line = output_line(&Output::Event(event.clone()));
+        assert_eq!(
+            line.trim_end(),
+            r#"{"event":"client_too_old","minimum":"0.3.0"}"#
+        );
+        assert_eq!(parse_output(&line), Some(Output::Event(event)));
     }
 
     #[test]

@@ -3,6 +3,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use anyplay_api::client::{CLIENT_HEADER, ClientId};
 use anyplay_api::{
     AccountId, AccountLink, AccountTrophies, AddToConversation, Added, ApiError, AppealRequest,
     AppearOffline, BrowserTokenRequest, Cards, CodeAnswer, CodeRequest, Conversation,
@@ -19,6 +20,17 @@ use anyplay_proof::{DeviceKey, Subject};
 use reqwest::{Method, StatusCode};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
+
+/// The environment variable with which the launcher names itself when it starts the service.
+pub const CLIENT_ENV: &str = "ANYPLAY_CLIENT";
+
+/// The `X-AnyPlay-Client` value: `env` when it is a valid `<product>/<version>`, else this crate.
+pub fn client_value(env: Option<&str>) -> String {
+    match env {
+        Some(value) if ClientId::parse(value).is_some() => value.to_owned(),
+        _ => concat!("net/", env!("CARGO_PKG_VERSION")).to_owned(),
+    }
+}
 
 /// Why a request to the cloud failed.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -57,6 +69,8 @@ pub type TokenSink = Arc<dyn Fn(Option<(&Tokens, Option<&DeviceKey>)>) + Send + 
 pub struct Cloud {
     base: String,
     http: reqwest::Client,
+    /// What `X-AnyPlay-Client` says on every request.
+    client: String,
     tokens: Arc<Mutex<Option<Tokens>>>,
     /// The key the refresh token is bound to. Absent for a legacy sign-in until its first refresh.
     key: Arc<Mutex<Option<Arc<DeviceKey>>>>,
@@ -65,9 +79,22 @@ pub struct Cloud {
 }
 
 impl Cloud {
+    /// A cloud that names this client by the environment variable [`CLIENT_ENV`], or as the net
+    /// service itself.
     pub fn new(base: &str, sink: TokenSink) -> Self {
+        let client = client_value(std::env::var(CLIENT_ENV).ok().as_deref());
+        Self::with_client(base, sink, client)
+    }
+
+    /// A cloud that sends `client` (a valid `<product>/<version>`) as `X-AnyPlay-Client`.
+    pub fn with_client(base: &str, sink: TokenSink, client: String) -> Self {
+        let mut headers = reqwest::header::HeaderMap::new();
+        if let Ok(value) = reqwest::header::HeaderValue::from_str(&client) {
+            headers.insert(CLIENT_HEADER, value);
+        }
         let http = reqwest::Client::builder()
             .user_agent(concat!("anyplay-net/", env!("CARGO_PKG_VERSION")))
+            .default_headers(headers)
             .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(30))
             .build()
@@ -75,6 +102,7 @@ impl Cloud {
         Self {
             base: base.trim_end_matches('/').to_owned(),
             http,
+            client,
             tokens: Arc::new(Mutex::new(None)),
             key: Arc::new(Mutex::new(None)),
             refreshing: Arc::new(tokio::sync::Mutex::new(())),
@@ -84,6 +112,26 @@ impl Cloud {
 
     pub fn base(&self) -> &str {
         &self.base
+    }
+
+    /// The value of `X-AnyPlay-Client`, which the event connection sends too.
+    pub fn client(&self) -> &str {
+        &self.client
+    }
+
+    /// Asks the event path with a plain request for the version the cloud requires, after the
+    /// handshake was refused with 426 (a refused upgrade carries no body the WebSocket client
+    /// keeps). Empty when the cloud does not say.
+    pub async fn required_version(&self, access: &str) -> String {
+        match self
+            .send::<(), serde_json::Value>(Method::GET, path::EVENTS, None, Some(access))
+            .await
+        {
+            Err(CloudError::Api(error)) if error.error == ErrorCode::ClientTooOld => {
+                error.minimum.as_deref().unwrap_or_default().to_owned()
+            }
+            _ => String::new(),
+        }
     }
 
     /// The URL of the event connection: the base with `ws` in place of `http`.
@@ -1260,5 +1308,91 @@ mod tests {
         cloud.resume(1, "refresh-0".into(), None);
         let error = cloud.account_link().await.unwrap_err();
         assert!(error.is(ErrorCode::Unauthorized));
+    }
+
+    #[test]
+    fn the_client_value_is_the_launchers_when_valid_and_the_crates_otherwise() {
+        let own = concat!("net/", env!("CARGO_PKG_VERSION"));
+        assert_eq!(client_value(None), own);
+        assert_eq!(client_value(Some("launcher/0.3.0")), "launcher/0.3.0");
+        assert_eq!(
+            client_value(Some("launcher/0.3.0-beta.1")),
+            "launcher/0.3.0-beta.1"
+        );
+        for bad in [
+            "",
+            "launcher",
+            "Launcher/0.3.0",
+            "launcher/0.3",
+            "launcher/0.3.0\r\nX: y",
+        ] {
+            assert_eq!(client_value(Some(bad)), own, "{bad:?}");
+        }
+        assert!(ClientId::parse(own).is_some());
+    }
+
+    /// A cloud that answers `/v1/info` with the `X-AnyPlay-Client` it saw as the version, and
+    /// `426` with a minimum on the event path.
+    async fn echo_cloud() -> String {
+        let app = axum::Router::new()
+            .route(
+                path::INFO,
+                axum::routing::get(|headers: HeaderMap| async move {
+                    let seen = headers
+                        .get(CLIENT_HEADER)
+                        .and_then(|v| v.to_str().ok())
+                        .unwrap_or("none")
+                        .to_owned();
+                    axum::Json(
+                        serde_json::json!({ "name": seen, "version": "1", "min_protocol": 0 }),
+                    )
+                }),
+            )
+            .route(
+                path::EVENTS,
+                axum::routing::get(|| async {
+                    (
+                        axum::http::StatusCode::UPGRADE_REQUIRED,
+                        axum::Json(serde_json::json!({
+                            "error": "client_too_old", "message": "Update.", "minimum": "0.3.0"
+                        })),
+                    )
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await });
+        base
+    }
+
+    #[tokio::test]
+    async fn every_request_names_the_client() {
+        let base = echo_cloud().await;
+        let (sink, _) = recording_sink();
+        let default = Cloud::new(&base, sink.clone());
+        assert_eq!(
+            default.client(),
+            client_value(std::env::var(CLIENT_ENV).ok().as_deref())
+        );
+        let named = Cloud::with_client(&base, sink, "launcher/0.3.0".into());
+        assert_eq!(named.client(), "launcher/0.3.0");
+        let seen: serde_json::Value = named
+            .send::<(), _>(Method::GET, path::INFO, None, None)
+            .await
+            .unwrap();
+        assert_eq!(seen["name"], "launcher/0.3.0");
+    }
+
+    #[tokio::test]
+    async fn a_426_is_a_client_too_old_error_with_its_minimum() {
+        let base = echo_cloud().await;
+        let (sink, _) = recording_sink();
+        let cloud = Cloud::with_client(&base, sink, "launcher/0.2.0".into());
+        let error = cloud
+            .send::<(), serde_json::Value>(Method::GET, path::EVENTS, None, Some("a"))
+            .await
+            .unwrap_err();
+        assert!(error.is(ErrorCode::ClientTooOld));
+        assert_eq!(cloud.required_version("a").await, "0.3.0");
     }
 }

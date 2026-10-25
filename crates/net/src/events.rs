@@ -29,6 +29,10 @@ pub enum EventInput {
     SignedOut,
     /// The account is banned. The connection ends for good.
     Banned(Restriction),
+    /// The cloud refuses this client because it is older than the version named (empty when the
+    /// cloud did not say). The connection ends for good; it is not retried until the service
+    /// is started again.
+    ClientTooOld(String),
 }
 
 /// Quiet time after which a connection counts as dead. The cloud pings every 20 seconds.
@@ -51,6 +55,10 @@ pub fn spawn(cloud: Cloud, out: UnboundedSender<EventInput>) -> JoinHandle<()> {
                 }
                 Ending::Banned(restriction) => {
                     let _ = out.send(EventInput::Banned(restriction));
+                    return;
+                }
+                Ending::ClientTooOld(minimum) => {
+                    let _ = out.send(EventInput::ClientTooOld(minimum));
                     return;
                 }
                 Ending::Refresh => {
@@ -95,6 +103,9 @@ fn final_ending(error: &CloudError) -> Option<EventInput> {
         CloudError::Api(api) if api.error == ErrorCode::Banned => {
             Restriction::of_error(api).map(EventInput::Banned)
         }
+        CloudError::Api(api) if api.error == ErrorCode::ClientTooOld => Some(
+            EventInput::ClientTooOld(api.minimum.as_deref().unwrap_or_default().to_owned()),
+        ),
         _ => None,
     }
 }
@@ -102,6 +113,7 @@ fn final_ending(error: &CloudError) -> Option<EventInput> {
 enum Ending {
     SignedOut,
     Banned(Restriction),
+    ClientTooOld(String),
     Refresh,
     Broken {
         reason: String,
@@ -117,6 +129,7 @@ async fn session(cloud: &Cloud, out: &UnboundedSender<EventInput>) -> Ending {
         Err(error) => {
             return match final_ending(&error) {
                 Some(EventInput::Banned(restriction)) => Ending::Banned(restriction),
+                Some(EventInput::ClientTooOld(minimum)) => Ending::ClientTooOld(minimum),
                 Some(_) => Ending::SignedOut,
                 None => Ending::Broken {
                     reason: error.to_string(),
@@ -129,6 +142,12 @@ async fn session(cloud: &Cloud, out: &UnboundedSender<EventInput>) -> Ending {
         reason,
         was_online: false,
     };
+    let Ok(client) = cloud.client().parse::<http::HeaderValue>() else {
+        return Ending::Broken {
+            reason: "the client name is not a header value".into(),
+            was_online: false,
+        };
+    };
     let Ok(uri) = cloud.events_url().parse() else {
         return broken("the cloud address is not a URL".into());
     };
@@ -138,7 +157,9 @@ async fn session(cloud: &Cloud, out: &UnboundedSender<EventInput>) -> Ending {
     let builder = match ClientBuilder::from_uri(uri)
         .limits(Limits::default().max_payload_len(Some(LARGEST_MESSAGE)))
         .add_header(http_authorization(), value)
-    {
+        .and_then(|builder| {
+            builder.add_header(http::HeaderName::from_static("x-anyplay-client"), client)
+        }) {
         Ok(builder) => builder,
         Err(error) => return broken(error.to_string()),
     };
@@ -153,6 +174,9 @@ async fn session(cloud: &Cloud, out: &UnboundedSender<EventInput>) -> Ending {
             // A ban or a revoked device: the refresh tells which, and ends the connection.
             return Ending::Refresh;
         }
+        Ok(Err(tokio_websockets::Error::Upgrade(
+            tokio_websockets::upgrade::Error::DidNotSwitchProtocols(426),
+        ))) => return Ending::ClientTooOld(cloud.required_version(&access).await),
         Ok(Err(error)) => return broken(error.to_string()),
         Err(_) => return broken("the cloud did not answer in time".into()),
     };
@@ -243,6 +267,7 @@ mod tests {
 
     use anyplay_api::{Tokens, path};
     use axum::extract::ws::{Message, WebSocketUpgrade};
+    use axum::response::IntoResponse;
     use axum::routing::{get, post};
     use tokio::sync::{Mutex, mpsc, oneshot};
 
@@ -415,6 +440,91 @@ mod tests {
             panic!("not a ban");
         };
         assert_eq!(restriction, Restriction::new(Restriction::BANNED, None));
+    }
+
+    /// A cloud that refuses the event handshake with 426 unless the client is at least
+    /// `0.3.0` as the header says; an accepted handshake reports the header it saw.
+    async fn cloud_with_a_gate(seen: Arc<Mutex<Vec<String>>>) -> Cloud {
+        crate::install_crypto();
+        let app = axum::Router::new()
+            .route(
+                path::AUTH_REFRESH,
+                post(|| async {
+                    axum::Json(Tokens {
+                        access: "access".into(),
+                        access_expires: now() + 3600,
+                        refresh: "refresh".into(),
+                        device: 1,
+                    })
+                }),
+            )
+            .route(
+                path::EVENTS,
+                get(
+                    move |headers: axum::http::HeaderMap,
+                          upgrade: Result<
+                        WebSocketUpgrade,
+                        axum::extract::ws::rejection::WebSocketUpgradeRejection,
+                    >| async move {
+                        let client = headers
+                            .get("x-anyplay-client")
+                            .and_then(|v| v.to_str().ok())
+                            .unwrap_or("")
+                            .to_owned();
+                        seen.lock().await.push(client.clone());
+                        if client == "launcher/0.2.0" {
+                            return (
+                                axum::http::StatusCode::UPGRADE_REQUIRED,
+                                axum::Json(serde_json::json!({
+                                    "error": "client_too_old",
+                                    "message": "Update.",
+                                    "minimum": "0.3.0"
+                                })),
+                            )
+                                .into_response();
+                        }
+                        match upgrade {
+                            Ok(upgrade) => upgrade.on_upgrade(|mut socket| async move {
+                                let _ = socket.send(Message::Close(None)).await;
+                            }),
+                            Err(_) => axum::http::StatusCode::BAD_REQUEST.into_response(),
+                        }
+                    },
+                ),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await });
+        Cloud::with_client(&base, Arc::new(|_| {}), "launcher/0.2.0".into())
+    }
+
+    #[tokio::test]
+    async fn the_handshake_names_the_client_and_a_426_ends_the_connection_for_good() {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let cloud = cloud_with_a_gate(seen.clone()).await;
+        cloud.resume(1, "refresh".into(), None);
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let task = spawn(cloud, tx);
+        assert!(matches!(rx.recv().await, Some(EventInput::Connecting)));
+        match rx.recv().await {
+            Some(EventInput::ClientTooOld(minimum)) => assert_eq!(minimum, "0.3.0"),
+            other => panic!("{other:?}"),
+        }
+        // The task ended: nothing more comes, however long it waits, and no second try was made.
+        assert!(
+            tokio::time::timeout(Duration::from_secs(3), task)
+                .await
+                .is_ok(),
+            "the loop kept running"
+        );
+        assert!(rx.recv().await.is_none());
+        let seen = seen.lock().await;
+        assert!(
+            !seen.is_empty() && seen.iter().all(|c| c == "launcher/0.2.0"),
+            "{seen:?}"
+        );
+        // One handshake, and one plain request that asked for the minimum.
+        assert_eq!(seen.len(), 2, "{seen:?}");
     }
 
     #[test]
