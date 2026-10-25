@@ -693,6 +693,67 @@ impl Service {
                     |_, rarity| rarity,
                 );
             }
+            Command::RunReport {
+                title_id,
+                version,
+                toolkit,
+                verdict,
+            } => {
+                if !is_title_id(&title_id) {
+                    self.fail(id, bad_title());
+                    return;
+                }
+                if !anyplay_api::is_run_version(&version) || !anyplay_api::is_run_version(&toolkit)
+                {
+                    self.fail(id, bad_run_version());
+                    return;
+                }
+                let Some(os) = this_os() else {
+                    self.fail(
+                        id,
+                        Failure::new(
+                            ErrorCode::BadRequest.as_str(),
+                            "Run reports come from Windows, Linux and macOS.",
+                        ),
+                    );
+                    return;
+                };
+                let Some(cloud) = self.signed_in_cloud(id) else {
+                    return;
+                };
+                let report = anyplay_api::RunReport {
+                    version,
+                    toolkit,
+                    verdict,
+                    os,
+                };
+                self.request(
+                    id,
+                    async move { cloud.run_report(&title_id, &report).await },
+                    |_, ()| Done {},
+                );
+            }
+            Command::RunReports { title_id, version } => {
+                if !is_title_id(&title_id) {
+                    self.fail(id, bad_title());
+                    return;
+                }
+                if version
+                    .as_deref()
+                    .is_some_and(|v| !anyplay_api::is_run_version(v))
+                {
+                    self.fail(id, bad_run_version());
+                    return;
+                }
+                let Some(cloud) = self.signed_in_cloud(id) else {
+                    return;
+                };
+                self.request(
+                    id,
+                    async move { cloud.run_summary(&title_id, version.as_deref()).await },
+                    |_, summary| summary,
+                );
+            }
             Command::Cards { accounts } => {
                 let Some(cloud) = self.signed_in_cloud(id) else {
                     return;
@@ -3265,6 +3326,23 @@ fn bad_title() -> Failure {
         ErrorCode::BadRequest.as_str(),
         "A title ID has 1 to 64 letters, digits, underscores and hyphens.",
     )
+}
+
+fn bad_run_version() -> Failure {
+    Failure::new(
+        ErrorCode::BadRequest.as_str(),
+        "A version has 1 to 32 letters, digits, dots, underscores, plus signs and hyphens.",
+    )
+}
+
+/// The system this service runs on, as a run report names it.
+fn this_os() -> Option<anyplay_api::Os> {
+    match std::env::consts::OS {
+        "windows" => Some(anyplay_api::Os::Windows),
+        "linux" => Some(anyplay_api::Os::Linux),
+        "macos" => Some(anyplay_api::Os::Macos),
+        _ => None,
+    }
 }
 
 /// What is wrong with playtime entries, if anything, before they go to the cloud.

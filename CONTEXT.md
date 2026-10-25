@@ -148,6 +148,10 @@ _Avoid_: Achievement (the word of other platforms), trophy (alone, when the reco
 **Rarity**:
 The share of players with a title who earned a trophy, counted from trophy records.
 
+**Run report**:
+A player's answer to "How did it run?" for one title, game version and toolkit version: a verdict (does not start, menus, in game, playable) and the system. The game page shows the most reported verdict once three players answered.
+_Avoid_: Compatibility rating, review
+
 **Feed**:
 Recent activity of a player's friends: trophies, first starts of a game, sessions opened to friends.
 _Avoid_: Timeline, wall

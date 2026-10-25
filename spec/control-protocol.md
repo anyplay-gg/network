@@ -86,6 +86,8 @@ A **restriction** has a `kind` and, when they apply, `until`, `rule`, `reason`, 
 | `upload_trophies` | `title_id`, `trophies` | `{added}` |
 | `trophies` | `account` | `{titles}`, or the error `not_found` when they are hidden |
 | `rarity` | `title_id` | `{title_id, players, trophies}` |
+| `run_report` | `title_id`, `version`, `toolkit`, `verdict` (`no_start`, `menus`, `in_game`, `playable`) | `{}`; the service adds the player's system |
+| `run_reports` | `title_id`, `version` (or null) | `{title_id, version, reports, verdict, counts}` |
 | `cards` | `accounts` | `{cards}` |
 | `privacy` | | the player's `Privacy` |
 | `set_privacy` | `privacy` | the new `Privacy` |

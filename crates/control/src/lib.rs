@@ -109,6 +109,18 @@ pub enum Command {
     Rarity {
         title_id: String,
     },
+    /// How a game ran; the net service adds the player's system.
+    RunReport {
+        title_id: String,
+        version: String,
+        toolkit: String,
+        verdict: anyplay_api::Verdict,
+    },
+    /// What players found; `version` asks for that game version first.
+    RunReports {
+        title_id: String,
+        version: Option<String>,
+    },
     Cards {
         accounts: Vec<AccountId>,
     },
@@ -787,6 +799,30 @@ mod tests {
                         grade: anyplay_api::Grade::Gold,
                         earned: 1_800_000_000,
                     }],
+                }
+            ))
+        );
+        assert_eq!(
+            parse_command(
+                r#"{"id":6,"do":"run_report","title_id":"GAME00001","version":"01.000","toolkit":"0.2.0","verdict":"in_game"}"#
+            ),
+            Ok((
+                6,
+                Command::RunReport {
+                    title_id: "GAME00001".into(),
+                    version: "01.000".into(),
+                    toolkit: "0.2.0".into(),
+                    verdict: anyplay_api::Verdict::InGame,
+                }
+            ))
+        );
+        assert_eq!(
+            parse_command(r#"{"id":7,"do":"run_reports","title_id":"GAME00001","version":null}"#),
+            Ok((
+                7,
+                Command::RunReports {
+                    title_id: "GAME00001".into(),
+                    version: None,
                 }
             ))
         );

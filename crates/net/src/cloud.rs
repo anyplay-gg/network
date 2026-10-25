@@ -10,8 +10,8 @@ use anyplay_api::{
     FriendRequest, FriendRequestAnswer, Info, Invite, Invited, JoinSession, MarkRead, Me, Message,
     Messages, MoveParty, Party, PartyEndpoint, PartyInvitations, PlaytimeAdded, PlaytimeEntry,
     PlaytimeUpload, PresenceRequest, Privacy, Profile, Rarity, RefreshRequest, Relays, Report,
-    SendMessage, Session, SignedIn, SignupRequest, Statement, Statements, TicketRequest, Tokens,
-    TrophiesAdded, Trophy, TrophyUpload, UpdateParty, UpdateSession, path,
+    RunReport, RunSummary, SendMessage, Session, SignedIn, SignupRequest, Statement, Statements,
+    TicketRequest, Tokens, TrophiesAdded, Trophy, TrophyUpload, UpdateParty, UpdateSession, path,
 };
 use anyplay_proof::{DeviceKey, Subject};
 use reqwest::{Method, StatusCode};
@@ -556,6 +556,33 @@ impl Cloud {
     pub async fn rarity(&self, title_id: &str) -> Result<Rarity, CloudError> {
         self.call::<(), _>(Method::GET, &path::fill(path::RARITY, title_id), None)
             .await
+    }
+
+    /// Tells how a game ran. `title_id` must pass [`anyplay_api::is_title_id`]. A new report for
+    /// the same title, game version and toolkit replaces the old one.
+    pub async fn run_report(&self, title_id: &str, report: &RunReport) -> Result<(), CloudError> {
+        self.call::<_, serde_json::Value>(
+            Method::PUT,
+            &path::fill(path::MY_RUN_REPORTS, title_id),
+            Some(report),
+        )
+        .await
+        .map(drop)
+    }
+
+    /// What players found. `version` asks for that game version when it has enough reports.
+    /// `title_id` must pass [`anyplay_api::is_title_id`], `version` [`anyplay_api::is_run_version`].
+    pub async fn run_summary(
+        &self,
+        title_id: &str,
+        version: Option<&str>,
+    ) -> Result<RunSummary, CloudError> {
+        let mut path = path::fill(path::RUNS, title_id);
+        if let Some(version) = version {
+            path.push_str("?version=");
+            path.push_str(version);
+        }
+        self.call::<(), _>(Method::GET, &path, None).await
     }
 
     pub async fn cards(&self, accounts: &[AccountId]) -> Result<Cards, CloudError> {
