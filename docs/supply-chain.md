@@ -1,6 +1,6 @@
 # Supply chain
 
-What is pinned in this repository, how updates arrive, and what is not covered yet. The network ships no binary of its own: players get the net service inside the [launcher](https://github.com/anyplay-gg/launcher), whose release workflow builds it from a commit of this repository, records that commit in the release's `BUILD-INFO.txt` and attests the result ([launcher docs/supply-chain.md](https://github.com/anyplay-gg/launcher/blob/main/docs/supply-chain.md)). So what matters here is that the source and the CI around it are hard to tamper with.
+What is pinned in this repository, how updates arrive, and what is not covered yet. The network ships no binary of its own: players get the net service inside the [launcher](https://github.com/anyplaynet/launcher), whose release workflow builds it from a commit of this repository, records that commit in the release's `BUILD-INFO.txt` and attests the result ([launcher docs/supply-chain.md](https://github.com/anyplaynet/launcher/blob/main/docs/supply-chain.md)). So what matters here is that the source and the CI around it are hard to tamper with.
 
 ## What is pinned
 
@@ -12,7 +12,7 @@ What is pinned in this repository, how updates arrive, and what is not covered y
 | Crates | `Cargo.lock` is committed. `cargo-fuzz` is installed with `--locked` at an exact version. |
 | Licences, advisories, sources | `cargo deny` with [deny.toml](../deny.toml) on every pull request (the shared `rules` workflow) and every Monday (`advisories.yml`). The licences must allow use under both MIT and Apache-2.0 and under the GPL-2.0 of the launcher that links the bridge protocol; unknown registries and git sources are refused. |
 
-The shared `rules` workflow comes from `anyplay-gg/.github@main`, which is the organisation's own code and is not pinned to a commit.
+The shared `rules` workflow comes from `anyplaynet/.github@main`, which is the organisation's own code and is not pinned to a commit.
 
 ## How updates arrive
 

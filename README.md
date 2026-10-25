@@ -2,7 +2,7 @@
 
 Online play for games that run on [AnyPS5](https://github.com/boykopovar/AnyPS5): accounts, friends, presence, sessions, invitations, and encrypted connections between players over the internet. Players open no ports and need no shared LAN. The network never talks to Sony's servers.
 
-**Status: in development.** The net service, the fake game and the tunnel probe run. In the end-to-end tests of [anyplay-gg/cloud](https://github.com/anyplay-gg/cloud), two players sign in, become friends, open a session and exchange game packets through a tunnel, directly and through a relay. No real game plays online yet: the bridge in AnyPS5 is under review, and the formats of games are learned one by one ([docs/gaps.md](docs/gaps.md)). Start with the [design](docs/DESIGN.md); the words are in [CONTEXT.md](CONTEXT.md) and the decisions in [docs/adr](docs/adr). Questions and ideas: the [AnyPlay Discord](https://discord.gg/9zYqf8fEsh).
+**Status: in development.** The net service, the fake game and the tunnel probe run. In the end-to-end tests of [anyplaynet/cloud](https://github.com/anyplaynet/cloud), two players sign in, become friends, open a session and exchange game packets through a tunnel, directly and through a relay. No real game plays online yet: the bridge in AnyPS5 is under review, and the formats of games are learned one by one ([docs/gaps.md](docs/gaps.md)). Start with the [design](docs/DESIGN.md); the words are in [CONTEXT.md](CONTEXT.md) and the decisions in [docs/adr](docs/adr). Questions and ideas: the [AnyPlay Discord](https://discord.gg/9zYqf8fEsh).
 
 ## The idea
 
@@ -37,7 +37,7 @@ AnyPS5 already replaces the console's system libraries with its own code. So the
 - It opens [iroh](https://www.iroh.computer/) tunnels to other players: QUIC with hole punching, end-to-end encryption keyed to each device, and relays as the fallback ([ADR 0002](docs/adr/0002-tunnels-on-iroh.md)). Each player in a session gets a virtual address from `198.18.0.0/15`, a range reserved for testing and never routed on the internet. The game sends to that address and the tunnel carries it.
 - It checks game version and AnyPS5 build before every join, so only matching versions play together.
 
-**The cloud** keeps accounts, friends, presence, sessions and invitations, and signs the tickets that let a player use a relay. It lives in [anyplay-gg/cloud](https://github.com/anyplay-gg/cloud): one program that runs on a home server with `docker compose up` and is being built to run as a cluster. The launcher can point at any cloud, so nobody depends on one operator.
+**The cloud** keeps accounts, friends, presence, sessions and invitations, and signs the tickets that let a player use a relay. It lives in [anyplaynet/cloud](https://github.com/anyplaynet/cloud): one program that runs on a home server with `docker compose up` and is being built to run as a cluster. The launcher can point at any cloud, so nobody depends on one operator.
 
 ## A join, step by step
 
@@ -96,7 +96,7 @@ The launcher starts the net service by itself. To run one by hand: `cargo run -p
 
 ## Testing
 
-Every pull request runs formatting, Clippy with warnings as errors and all tests on Windows and Linux. The parsers of the bridge frames, the game traffic headers, the control lines and the voice frames are fuzzed for 15 minutes each every night, and for a minute on pull requests that touch them. The end-to-end tests in [anyplay-gg/cloud](https://github.com/anyplay-gg/cloud) run a cloud, a relay that checks tickets, two net services and two fake games in one process.
+Every pull request runs formatting, Clippy with warnings as errors and all tests on Windows and Linux. The parsers of the bridge frames, the game traffic headers, the control lines and the voice frames are fuzzed for 15 minutes each every night, and for a minute on pull requests that touch them. The end-to-end tests in [anyplaynet/cloud](https://github.com/anyplaynet/cloud) run a cloud, a relay that checks tickets, two net services and two fake games in one process.
 
 ## License
 
