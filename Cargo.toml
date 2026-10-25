@@ -18,6 +18,13 @@ serde_json = "1"
 [profile.dev.package."*"]
 opt-level = 2
 
+# The picture code is per pixel: in a debug build the tests of a real stream would crawl.
+[profile.dev.package.anyplay-share]
+opt-level = 2
+
+[profile.dev.package.anyplay-share-worker]
+opt-level = 2
+
 [profile.release]
 lto = "thin"
 codegen-units = 1

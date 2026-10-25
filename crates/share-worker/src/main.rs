@@ -6,12 +6,14 @@
 //! anyplay-share --capabilities
 //! anyplay-share --role host|guest [--link 127.0.0.1:PORT] [--token TOKEN]
 //!               [--source game|test_pattern] [--title TITLE] [--window HWND] [--pid PID]...
+//!               [--headless]
 //! ```
 //!
 //! `--link` and `--token` default to `ANYPLAY_SHARE_ENDPOINT` and `ANYPLAY_SHARE_TOKEN`.
 //! `--title` is the game's title: the viewer names its window after it. The streamer captures
 //! the window the launcher named (`--window`), else the largest window of the game's processes
 //! (`--pid`, repeated), and only without any process a window whose title contains `--title`.
+//! `--headless` draws no window on the viewer's side (tests on a machine without a desktop).
 
 use std::process::ExitCode;
 
@@ -29,6 +31,7 @@ fn main() -> ExitCode {
     let mut source = "game".to_owned();
     let mut title = String::new();
     let mut window: Option<i64> = None;
+    let mut headless = false;
     let mut pids: Vec<u32> = Vec::new();
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -50,6 +53,7 @@ fn main() -> ExitCode {
             "--token" => token = args.next(),
             "--source" => source = args.next().unwrap_or_default(),
             "--title" => title = args.next().unwrap_or_default(),
+            "--headless" => headless = true,
             "--window" => window = args.next().and_then(|v| v.parse().ok()),
             "--pid" => pids.extend(args.next().and_then(|v| v.parse::<u32>().ok())),
             _ => {}
@@ -73,7 +77,7 @@ fn main() -> ExitCode {
         },
         Role::Guest => {
             let decoders: DecoderFactory = Box::new(decoder_for);
-            viewer::run(decoders, sink(&title), port);
+            viewer::run(decoders, sink(&title, headless), port);
         }
     }
     ExitCode::SUCCESS
@@ -109,7 +113,10 @@ fn frame_source(
 /// The viewer's window: "title" and, until the game's sound is carried, a note that there is
 /// none.
 #[cfg(windows)]
-fn sink(title: &str) -> Box<dyn FrameSink> {
+fn sink(title: &str, headless: bool) -> Box<dyn FrameSink> {
+    if headless {
+        return Box::new(anyplay_share_worker::viewer::NullSink);
+    }
     let name = if title.is_empty() { "AnyPlay" } else { title };
     Box::new(anyplay_share_worker::window::WindowSink::new(&format!(
         "{name} - AnyPlay Share screen (no sound)"
@@ -117,6 +124,6 @@ fn sink(title: &str) -> Box<dyn FrameSink> {
 }
 
 #[cfg(not(windows))]
-fn sink(_title: &str) -> Box<dyn FrameSink> {
+fn sink(_title: &str, _headless: bool) -> Box<dyn FrameSink> {
     Box::new(anyplay_share_worker::viewer::NullSink)
 }

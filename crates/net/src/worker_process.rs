@@ -35,11 +35,18 @@ const LEAVE_TIMEOUT: Duration = Duration::from_secs(2);
 #[derive(Default)]
 pub struct ProcessWorkers {
     state: Mutex<Option<(PathBuf, Capabilities)>>,
+    headless: bool,
 }
 
 impl ProcessWorkers {
     pub fn new() -> ProcessWorkers {
         ProcessWorkers::default()
+    }
+
+    /// Workers that draw no window (`--headless`): for tests on a machine without a desktop.
+    pub fn headless(mut self) -> ProcessWorkers {
+        self.headless = true;
+        self
     }
 }
 
@@ -106,6 +113,7 @@ impl Workers for ProcessWorkers {
                     .iter()
                     .flat_map(|pid| ["--pid".to_owned(), pid.to_string()]),
             )
+            .args(self.headless.then_some("--headless"))
             .env("ANYPLAY_SHARE_ENDPOINT", address.to_string())
             .env("ANYPLAY_SHARE_TOKEN", &token)
             .stdin(Stdio::null())

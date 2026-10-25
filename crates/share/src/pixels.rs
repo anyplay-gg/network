@@ -190,22 +190,37 @@ pub fn nv12_to_bgra(nv12: &[u8], width: u32, height: u32, stride: usize) -> Opti
     }
     let (y_plane, uv_plane) = nv12.split_at(y_size);
     let mut out = vec![255u8; w * h * 4];
-    for (row, out_row) in out.chunks_exact_mut(w * 4).enumerate() {
-        let y_row = &y_plane[row * stride..row * stride + w];
-        let uv_row = &uv_plane[(row / 2) * stride..(row / 2) * stride + w];
-        for x in 0..w {
-            let y = 298 * (i32::from(y_row[x]) - 16);
-            let u = i32::from(uv_row[x & !1]) - 128;
-            let v = i32::from(uv_row[x | 1]) - 128;
-            let r = (y + 459 * v + 128) >> 8;
-            let g = (y - 54 * u - 136 * v + 128) >> 8;
-            let b = (y + 541 * u + 128) >> 8;
-            let o = &mut out_row[x * 4..x * 4 + 4];
-            o[0] = b.clamp(0, 255) as u8;
-            o[1] = g.clamp(0, 255) as u8;
-            o[2] = r.clamp(0, 255) as u8;
+    let threads = if w * h >= 640 * 360 {
+        thread::available_parallelism()
+            .map_or(1, |n| n.get())
+            .min(4)
+    } else {
+        1
+    };
+    let per = h.div_ceil(threads).max(1);
+    thread::scope(|scope| {
+        for (n, rows) in out.chunks_mut(per * w * 4).enumerate() {
+            scope.spawn(move || {
+                for (k, out_row) in rows.chunks_exact_mut(w * 4).enumerate() {
+                    let row = n * per + k;
+                    let y_row = &y_plane[row * stride..row * stride + w];
+                    let uv_row = &uv_plane[(row / 2) * stride..(row / 2) * stride + w];
+                    for x in 0..w {
+                        let y = 298 * (i32::from(y_row[x]) - 16);
+                        let u = i32::from(uv_row[x & !1]) - 128;
+                        let v = i32::from(uv_row[x | 1]) - 128;
+                        let r = (y + 459 * v + 128) >> 8;
+                        let g = (y - 54 * u - 136 * v + 128) >> 8;
+                        let b = (y + 541 * u + 128) >> 8;
+                        let o = &mut out_row[x * 4..x * 4 + 4];
+                        o[0] = b.clamp(0, 255) as u8;
+                        o[1] = g.clamp(0, 255) as u8;
+                        o[2] = r.clamp(0, 255) as u8;
+                    }
+                }
+            });
         }
-    }
+    });
     Some(out)
 }
 
