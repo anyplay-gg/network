@@ -62,6 +62,20 @@ pub const MAX_MESSAGE_CHARS: usize = 2000;
 pub const MAX_CONVERSATION_NAME: usize = 64;
 /// The most messages one fetch answers with.
 pub const MAX_MESSAGES_PAGE: u32 = 100;
+/// How long after it was written the writer may edit a message, in seconds.
+pub const EDIT_WINDOW_SECS: u64 = 15 * 60;
+/// The longest text of a quoted message in a reply, in characters.
+pub const MAX_QUOTE_CHARS: usize = 140;
+/// The most conversations an account pins.
+pub const MAX_PINNED: i64 = 5;
+/// How long the text an unsend or an edit removed stays readable for a report, in seconds.
+pub const REPORT_HOLD_SECS: u64 = 7 * 24 * 60 * 60;
+/// How long a typing signal counts, in seconds. A client sends it again every
+/// [`TYPING_RESEND_SECS`] while the player types and drops it after this long.
+/// (The cloud itself accepts one per account and conversation every 2 seconds.)
+pub const TYPING_TTL_SECS: u64 = 6;
+/// The pace of a client's typing signals for one conversation.
+pub const TYPING_RESEND_SECS: u64 = 3;
 
 /// The number of an account. Games see it as the player's 64-bit account ID.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -1421,6 +1435,26 @@ pub enum Event {
         account: AccountId,
         seq: u64,
     },
+    /// A member's device received a direct conversation's messages up to `seq`.
+    Delivered {
+        conversation: String,
+        account: AccountId,
+        seq: u64,
+    },
+    /// A member is typing in the conversation, or stopped. Never stored; a client drops it
+    /// after [`TYPING_TTL_SECS`].
+    Typing {
+        conversation: String,
+        account: AccountId,
+        typing: bool,
+    },
+    /// A message was edited, unsent or reacted to. Fetch the changes with
+    /// `GET /v1/conversations/{id}/messages?changed_after=<last rev known>`.
+    MessageUpdate {
+        conversation: String,
+        seq: u64,
+        rev: u64,
+    },
     /// The members or the name of a conversation changed, or there is a new one. Fetch it.
     Conversation {
         id: String,
@@ -1744,11 +1778,79 @@ pub enum ConversationKind {
     Party,
 }
 
-/// How far a member read a conversation.
+/// How far a member read a conversation, and how far their devices received it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReadMark {
     pub account: AccountId,
+    /// Read up to this number.
     pub seq: u64,
+    /// A device received the messages up to this number (never below `seq`). 0 from a cloud
+    /// that does not count.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub delivered: u64,
+}
+
+fn is_zero(n: &u64) -> bool {
+    *n == 0
+}
+
+/// One of the six reactions to a message. Nothing else can be sent. A client draws them itself;
+/// the wire carries the name.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MessageReaction {
+    Nice,
+    Love,
+    Laugh,
+    Gg,
+    Wow,
+    Sad,
+}
+
+impl MessageReaction {
+    /// All six, in the order a client shows them.
+    pub const ALL: [MessageReaction; 6] = [
+        MessageReaction::Nice,
+        MessageReaction::Love,
+        MessageReaction::Laugh,
+        MessageReaction::Gg,
+        MessageReaction::Wow,
+        MessageReaction::Sad,
+    ];
+
+    /// The name on the wire and in the database.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            MessageReaction::Nice => "nice",
+            MessageReaction::Love => "love",
+            MessageReaction::Laugh => "laugh",
+            MessageReaction::Gg => "gg",
+            MessageReaction::Wow => "wow",
+            MessageReaction::Sad => "sad",
+        }
+    }
+
+    pub fn parse(text: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|r| r.as_str() == text)
+    }
+}
+
+/// The accounts that chose one reaction on a message.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReactionOn {
+    pub reaction: MessageReaction,
+    pub accounts: Vec<AccountId>,
+}
+
+/// The message a reply quotes, as the reader sees it now.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Quote {
+    pub seq: u64,
+    pub sender: Account,
+    /// The first [`MAX_QUOTE_CHARS`] characters; empty when the quoted message was unsent.
+    pub text: String,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub deleted: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1773,6 +1875,46 @@ pub struct Conversation {
     pub request: bool,
     /// The party, for a party's chat.
     pub party: Option<String>,
+    /// Messages of others above `read` that the caller can see: what an unread badge counts.
+    /// The cloud counts, so every device shows the same number.
+    #[serde(default)]
+    pub unread: u64,
+    /// The caller muted the conversation: no toast, no badge, no notification.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub muted: bool,
+    /// The caller pinned it: it comes first in the list.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub pinned: bool,
+    /// Counts the changes to the conversation's messages (edits, unsends, reactions).
+    #[serde(default)]
+    pub rev: u64,
+}
+
+/// Changes the caller's own settings for a conversation. A field left out stays.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConversationSettings {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub muted: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pinned: Option<bool>,
+}
+
+/// Says that the caller types in a conversation, or stopped.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TypingSignal {
+    pub typing: bool,
+}
+
+/// Changes the text of a message.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EditMessage {
+    pub text: String,
+}
+
+/// Sets the caller's reaction to a message, replacing an earlier one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReactToMessage {
+    pub reaction: MessageReaction,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -1805,6 +1947,9 @@ pub struct Added {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SendMessage {
     pub text: String,
+    /// The number of a message in this conversation that this one answers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1812,16 +1957,36 @@ pub struct Message {
     pub conversation: String,
     pub seq: u64,
     pub sender: Account,
+    /// Empty for an unsent message.
     pub text: String,
     pub created: u64,
+    /// The message this one answers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply: Option<Quote>,
+    /// Unix seconds of the last edit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub edited: Option<u64>,
+    /// The writer unsent it: `text` is empty and nothing more can be done with it.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub deleted: bool,
+    /// Who chose which reaction, in the order of [`MessageReaction::ALL`]. Reactions of an
+    /// account a block lies between are left out.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reactions: Vec<ReactionOn>,
+    /// The conversation's `rev` at this message's last change; 0 for one never changed.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub rev: u64,
 }
 
-/// Messages in ascending order of `seq`.
+/// Messages in ascending order of `seq`, or of `rev` for `changed_after`.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Messages {
     pub messages: Vec<Message>,
     /// The number of the conversation's newest message.
     pub last: u64,
+    /// The conversation's `rev` now.
+    #[serde(default)]
+    pub rev: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -2093,6 +2258,54 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_message_of_an_older_cloud_reads_and_a_plain_one_stays_small() {
+        let old: Message = serde_json::from_str(
+            r#"{"conversation":"c","seq":1,"sender":{"id":4,"handle":"Ann"},"text":"hi","created":9}"#,
+        )
+        .unwrap();
+        assert_eq!(old.reply, None);
+        assert!(!old.deleted && old.reactions.is_empty() && old.rev == 0);
+        assert_eq!(
+            serde_json::to_string(&old).unwrap(),
+            r#"{"conversation":"c","seq":1,"sender":{"id":4,"handle":"Ann"},"text":"hi","created":9}"#
+        );
+    }
+
+    #[test]
+    fn reactions_have_names_and_nothing_else_parses() {
+        for reaction in MessageReaction::ALL {
+            assert_eq!(MessageReaction::parse(reaction.as_str()), Some(reaction));
+            assert_eq!(
+                serde_json::to_string(&reaction).unwrap(),
+                format!("\"{}\"", reaction.as_str())
+            );
+        }
+        assert_eq!(MessageReaction::parse("thumbs_up"), None);
+        assert!(serde_json::from_str::<ReactToMessage>(r#"{"reaction":"\ud83d\udc4d"}"#).is_err());
+    }
+
+    #[test]
+    fn typing_and_update_events_are_pointers() {
+        let typing = Event::Typing {
+            conversation: "c".into(),
+            account: AccountId(4),
+            typing: true,
+        };
+        assert_eq!(
+            serde_json::to_string(&typing).unwrap(),
+            r#"{"type":"typing","conversation":"c","account":4,"typing":true}"#
+        );
+        let update = Event::MessageUpdate {
+            conversation: "c".into(),
+            seq: 3,
+            rev: 2,
+        };
+        assert_eq!(
+            serde_json::to_string(&update).unwrap(),
+            r#"{"type":"message_update","conversation":"c","seq":3,"rev":2}"#
+        );
+    }
     #[test]
     fn a_party_without_a_revision_reads_as_zero() {
         let party: Party = serde_json::from_str(

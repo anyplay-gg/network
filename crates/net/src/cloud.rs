@@ -908,8 +908,12 @@ impl Cloud {
         after: Option<u64>,
         before: Option<u64>,
         limit: Option<u32>,
+        changed_after: Option<u64>,
     ) -> Result<Messages, CloudError> {
         let mut query = Vec::new();
+        if let Some(changed_after) = changed_after {
+            query.push(format!("changed_after={changed_after}"));
+        }
         if let Some(after) = after {
             query.push(format!("after={after}"));
         }
@@ -926,14 +930,90 @@ impl Cloud {
         self.call::<(), _>(Method::GET, &path, None).await
     }
 
-    pub async fn send_message(&self, id: &str, text: &str) -> Result<Message, CloudError> {
+    pub async fn send_message(
+        &self,
+        id: &str,
+        text: &str,
+        reply: Option<u64>,
+    ) -> Result<Message, CloudError> {
         let body = SendMessage {
             text: text.to_owned(),
+            reply,
         };
         self.call(
             Method::POST,
             &path::fill(path::CONVERSATION_MESSAGES, id),
             Some(&body),
+        )
+        .await
+    }
+
+    pub async fn edit_message(
+        &self,
+        id: &str,
+        seq: u64,
+        text: &str,
+    ) -> Result<Message, CloudError> {
+        let body = anyplay_api::EditMessage {
+            text: text.to_owned(),
+        };
+        self.call(
+            Method::PATCH,
+            &path::fill_seq(path::CONVERSATION_MESSAGE, id, seq),
+            Some(&body),
+        )
+        .await
+    }
+
+    pub async fn unsend_message(&self, id: &str, seq: u64) -> Result<Message, CloudError> {
+        self.call::<(), _>(
+            Method::DELETE,
+            &path::fill_seq(path::CONVERSATION_MESSAGE, id, seq),
+            None,
+        )
+        .await
+    }
+
+    /// Sets the caller's reaction to a message, or takes it back with `None`.
+    pub async fn react_to_message(
+        &self,
+        id: &str,
+        seq: u64,
+        reaction: Option<anyplay_api::MessageReaction>,
+    ) -> Result<Message, CloudError> {
+        let path = path::fill_seq(path::CONVERSATION_REACTION, id, seq);
+        match reaction {
+            Some(reaction) => {
+                self.call(
+                    Method::PUT,
+                    &path,
+                    Some(&anyplay_api::ReactToMessage { reaction }),
+                )
+                .await
+            }
+            None => self.call::<(), _>(Method::DELETE, &path, None).await,
+        }
+    }
+
+    pub async fn typing(&self, id: &str, typing: bool) -> Result<(), CloudError> {
+        self.call::<_, serde_json::Value>(
+            Method::PUT,
+            &path::fill(path::CONVERSATION_TYPING, id),
+            Some(&anyplay_api::TypingSignal { typing }),
+        )
+        .await
+        .map(drop)
+    }
+
+    pub async fn conversation_settings(
+        &self,
+        id: &str,
+        settings: &anyplay_api::ConversationSettings,
+    ) -> Result<Conversation, CloudError> {
+        self.call(
+            Method::PATCH,
+            &path::fill(path::CONVERSATION_SETTINGS, id),
+            Some(settings),
         )
         .await
     }

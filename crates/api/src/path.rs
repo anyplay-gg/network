@@ -83,6 +83,10 @@ pub const CONVERSATION_ACCEPT: &str = "/v1/conversations/{id}/accept";
 pub const CONVERSATION_MEMBERS: &str = "/v1/conversations/{id}/members";
 pub const CONVERSATION_MESSAGES: &str = "/v1/conversations/{id}/messages";
 pub const CONVERSATION_READ: &str = "/v1/conversations/{id}/read";
+pub const CONVERSATION_TYPING: &str = "/v1/conversations/{id}/typing";
+pub const CONVERSATION_SETTINGS: &str = "/v1/conversations/{id}/settings";
+pub const CONVERSATION_MESSAGE: &str = "/v1/conversations/{id}/messages/{seq}";
+pub const CONVERSATION_REACTION: &str = "/v1/conversations/{id}/messages/{seq}/reaction";
 
 /// The path with `{id}` replaced by `id`. IDs are numbers or URL-safe tokens, so nothing needs
 /// escaping.
@@ -93,6 +97,11 @@ pub fn fill(path: &str, id: impl std::fmt::Display) -> String {
 /// The path with `{id}` and `{account}` replaced.
 pub fn fill2(path: &str, id: impl std::fmt::Display, account: impl std::fmt::Display) -> String {
     fill(path, id).replacen("{account}", &account.to_string(), 1)
+}
+
+/// The path with `{id}` and `{seq}` replaced.
+pub fn fill_seq(path: &str, id: impl std::fmt::Display, seq: u64) -> String {
+    fill(path, id).replacen("{seq}", &seq.to_string(), 1)
 }
 
 /// The path with `{id}` and `{title}` replaced.
@@ -118,6 +127,10 @@ mod tests {
         assert_eq!(
             fill(CONVERSATION_MESSAGES, "c1"),
             "/v1/conversations/c1/messages"
+        );
+        assert_eq!(
+            fill_seq(CONVERSATION_REACTION, "c1", 9),
+            "/v1/conversations/c1/messages/9/reaction"
         );
         assert_eq!(
             fill(PARTY_INVITATION_ACCEPT, "i"),
