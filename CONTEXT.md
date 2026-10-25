@@ -165,7 +165,7 @@ A player's answer to "How did it run?" for one title, game version and toolkit v
 _Avoid_: Compatibility rating, review
 
 **Feed**:
-Recent activity of a player's friends: trophies, first starts of a game, sessions opened to friends.
+Recent activity of a player and their friends: trophies, new friends, first starts of a game, parties. Answered with one of four fixed reactions, never with text.
 _Avoid_: Timeline, wall
 
 **Party**:

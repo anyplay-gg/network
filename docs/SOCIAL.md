@@ -16,7 +16,7 @@ The social layer runs in the same three places as the rest of the network. The c
 
 ### Profile
 
-A handle, an avatar, a short text (160 characters, no links), up to three favourite games, playtime and a visibility for each part: friends, everyone, or nobody. The gamer card is the short form that friends see in their list: avatar, handle, what they play, their trophy count. Avatars are pictures the player uploads (PNG or JPEG, 1 MB), which the cloud decodes, crops square, scales to 256 by 256 pixels and stores without metadata; they are not taken from games. The details are in [the API](../spec/cloud-api.md#profiles-avatars-and-playtime).
+A handle, an avatar, a short text (160 characters, no links), up to three favourite games, playtime, the trophy counts by grade, the connections to other services the player chose to show, and a visibility for each part: friends, everyone, or nobody. The gamer card is the short form that friends see in their list: avatar, handle, what they play, their trophy count. Avatars are pictures the player uploads (PNG or JPEG, 1 MB), which the cloud decodes, crops square, scales to 256 by 256 pixels and stores without metadata; they are not taken from games. The details are in [the API](../spec/cloud-api.md#profiles-avatars-and-playtime).
 
 ### Trophies and playtime
 
@@ -28,7 +28,7 @@ Later, when AnyPS5 builds report trophy unlocks through the bridge, the net serv
 
 ### Feed
 
-Activity of friends, newest first: a trophy earned, a game started for the first time, a session opened to friends, a profile change. Items are short and point to the thing they are about; the cloud keeps them 30 days. Players choose what of theirs appears there.
+Activity of friends, newest first: a trophy earned (with its grade and how rare it is), a friend added, a game played for the first time, and a party started (only its members see that). Items are short and point to the thing they are about. A player answers with one of four fixed reactions (Nice, GG, Wow, Same), one per item, and sees the counts; there are no comments, so nothing needs moderating beyond what a profile already needs ([ADR 0024](adr/0024-the-feed-has-four-reactions-and-no-comments.md)). The cloud keeps items 90 days. The visibility is the player's `feed` setting, friends by default. Only the launcher shows the feed; the website leaves it out, since a trophy there is a number without a name. The details are in [the API](../spec/cloud-api.md#feed).
 
 ### Messages
 
@@ -48,7 +48,7 @@ Party members talk over the tunnels' own iroh endpoint: Opus frames, one voice c
 
 ### Share screen
 
-A player streams the game they are playing to their party, who watch it in their launcher. Watch only: nothing comes back, so no one plays and no pad is involved. It uses share play's media path (the share worker, the datagrams, the loss protection) on a connection of its own, `anyplay/screen/0`, dialed by the streamer to the party's members, and asks the cloud for nothing. The decision is [ADR 0022](adr/0022-share-screen-is-watch-only-and-asks-the-cloud-for-nothing.md) and the protocol the [spec](../spec/screen-share.md).
+A player streams the game they are playing to their party, who watch it in their launcher. Watch only: nothing comes back, so no one plays and no pad is involved. It uses share play's media path (the share worker, the datagrams, the loss protection) on a connection of its own, `anyplay/screen/0`, dialed by the streamer to the party's members, and asks the cloud for nothing. The decision is [ADR 0023](adr/0023-share-screen-is-watch-only-and-asks-the-cloud-for-nothing.md) and the protocol the [spec](../spec/screen-share.md).
 
 ### Share play
 

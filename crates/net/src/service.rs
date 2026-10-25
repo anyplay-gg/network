@@ -82,6 +82,8 @@ enum Input {
 const OFFLINE_GRACE: Duration = Duration::from_secs(30);
 /// How often the launcher hears about friends at most.
 const FRIENDS_PACE: Duration = Duration::from_millis(250);
+/// The least time between two `feed` events.
+const FEED_PACE: Duration = Duration::from_secs(2);
 /// How long a quitting service waits for its last requests to the cloud.
 const GOODBYE: Duration = Duration::from_secs(3);
 /// The most a member can be turned up to, in percent.
@@ -166,6 +168,9 @@ pub struct Service {
     friends: FriendLists,
     friends_dirty: bool,
     friends_sent: Instant,
+    /// When the `feed` event was last sent.
+    feed_sent: Instant,
+    feed_dirty: bool,
     friends_answers: Answers,
     party: Option<anyplay_api::Party>,
     party_answers: Answers,
@@ -259,6 +264,8 @@ impl Service {
             friends: FriendLists::default(),
             friends_dirty: false,
             friends_sent: Instant::now() - FRIENDS_PACE,
+            feed_sent: Instant::now() - FEED_PACE,
+            feed_dirty: false,
             friends_answers: Answers::default(),
             party: None,
             party_answers: Answers::default(),
@@ -788,6 +795,26 @@ impl Service {
                     id,
                     async move { cloud.profile(account).await },
                     |_, profile| profile,
+                );
+            }
+            Command::Feed { before, limit } => {
+                let Some(cloud) = self.signed_in_cloud(id) else {
+                    return;
+                };
+                self.request(
+                    id,
+                    async move { cloud.feed(before, limit).await },
+                    |_, feed| feed,
+                );
+            }
+            Command::React { item, reaction } => {
+                let Some(cloud) = self.signed_in_cloud(id) else {
+                    return;
+                };
+                self.request(
+                    id,
+                    async move { cloud.react(item, reaction).await },
+                    |_, reactions| reactions,
                 );
             }
             Command::UploadPlaytime { entries } => {
@@ -1862,6 +1889,7 @@ impl Service {
             Event::ConversationGone { id } => {
                 self.event(control::Event::ConversationGone { id });
             }
+            Event::Feed => self.feed_dirty = true,
             _ => {}
         }
     }
@@ -3135,6 +3163,11 @@ impl Service {
             self.friends_dirty = false;
             self.friends_sent = Instant::now();
             self.event(control::Event::Friends(self.friends.clone()));
+        }
+        if self.feed_dirty && self.feed_sent.elapsed() >= FEED_PACE {
+            self.feed_dirty = false;
+            self.feed_sent = Instant::now();
+            self.event(control::Event::Feed);
         }
         if self.me.is_some() && self.relays_expire != 0 && self.relays_expire < now() + 3600 {
             self.ask_relays();

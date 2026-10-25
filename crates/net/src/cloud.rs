@@ -9,9 +9,10 @@ use anyplay_api::{
     CreateConversation, CreateSession, Device, EmailAnswer, EmailRequest, ErrorCode, FriendLists,
     FriendRequest, FriendRequestAnswer, Info, Invite, Invited, JoinSession, MarkRead, Me, Message,
     Messages, MoveParty, Party, PartyEndpoint, PartyInvitations, PlaytimeAdded, PlaytimeEntry,
-    PlaytimeUpload, PresenceRequest, Privacy, Profile, Rarity, RefreshRequest, Relays, Report,
-    RunReport, RunSummary, SendMessage, Session, SignedIn, SignupRequest, Statement, Statements,
-    TicketRequest, Tokens, TrophiesAdded, Trophy, TrophyUpload, UpdateParty, UpdateSession, path,
+    PlaytimeUpload, PresenceRequest, Privacy, ProfilePage, Rarity, ReactionRequest, Reactions,
+    RefreshRequest, Relays, Report, RunReport, RunSummary, SendMessage, Session, SignedIn,
+    SignupRequest, Statement, Statements, TicketRequest, Tokens, TrophiesAdded, Trophy,
+    TrophyUpload, UpdateParty, UpdateSession, path,
 };
 use anyplay_proof::{DeviceKey, Subject};
 use reqwest::{Method, StatusCode};
@@ -619,13 +620,49 @@ impl Cloud {
     }
 
     /// The profile of an account, with the parts the caller may see.
-    pub async fn profile(&self, account: AccountId) -> Result<Profile, CloudError> {
+    pub async fn profile(&self, account: AccountId) -> Result<ProfilePage, CloudError> {
         self.call::<(), _>(
             Method::GET,
             &path::fill(path::ACCOUNT_PROFILE, account),
             None,
         )
         .await
+    }
+
+    /// A page of the feed, newest first.
+    pub async fn feed(
+        &self,
+        before: Option<u64>,
+        limit: Option<u32>,
+    ) -> Result<anyplay_api::Feed, CloudError> {
+        let mut query = Vec::new();
+        if let Some(before) = before {
+            query.push(format!("before={before}"));
+        }
+        if let Some(limit) = limit {
+            query.push(format!("limit={limit}"));
+        }
+        let mut path = path::FEED.to_owned();
+        if !query.is_empty() {
+            path = format!("{path}?{}", query.join("&"));
+        }
+        self.call::<(), _>(Method::GET, &path, None).await
+    }
+
+    /// Sets the caller's reaction to a feed item, or takes it back.
+    pub async fn react(
+        &self,
+        item: u64,
+        reaction: Option<anyplay_api::Reaction>,
+    ) -> Result<Reactions, CloudError> {
+        let path = path::fill(path::FEED_REACTION, item);
+        match reaction {
+            Some(reaction) => {
+                self.call(Method::PUT, &path, Some(&ReactionRequest { reaction }))
+                    .await
+            }
+            None => self.call::<(), _>(Method::DELETE, &path, None).await,
+        }
     }
 
     /// Sends minutes played per title and day. The cloud keeps the highest number it has seen for

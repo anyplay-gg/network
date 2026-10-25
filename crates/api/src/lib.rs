@@ -42,6 +42,10 @@ pub const MAX_AVATAR_UPLOAD: usize = 1024 * 1024;
 pub const AVATAR_SIZE: u32 = 256;
 /// The most playtime entries one upload carries.
 pub const MAX_PLAYTIME_UPLOAD: usize = 512;
+/// The most items one feed page carries.
+pub const MAX_FEED_PAGE: u32 = 50;
+/// The items a feed page carries when the caller names no number.
+pub const DEFAULT_FEED_PAGE: u32 = 30;
 /// A day has this many minutes, the most one title can have on one day.
 pub const MAX_DAY_MINUTES: u32 = 24 * 60;
 /// Account IDs stay below 2^53 so every JSON parser reads them exactly.
@@ -704,6 +708,9 @@ pub struct Privacy {
     pub favourites: Audience,
     pub avatar: Audience,
     pub playtime: Audience,
+    /// Who sees the player's activity in their feeds. `nobody` also stops the cloud from
+    /// recording new items.
+    pub feed: Audience,
 }
 
 /// A part of a profile that has a visibility of its own.
@@ -714,6 +721,7 @@ pub enum Part {
     Favourites,
     Avatar,
     Playtime,
+    Feed,
 }
 
 impl Privacy {
@@ -725,6 +733,7 @@ impl Privacy {
             Part::Favourites => self.favourites,
             Part::Avatar => self.avatar,
             Part::Playtime => self.playtime,
+            Part::Feed => self.feed,
         }
     }
 }
@@ -873,6 +882,153 @@ pub struct ProfileUpdate {
     pub favourites: Option<Vec<String>>,
 }
 
+// Profile page and feed
+
+/// A connection (a linked Discord or Steam account) on a profile, as the viewer may see it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProfileLink {
+    /// `discord` or `steam`; a client treats a name it does not know as plain text.
+    pub provider: String,
+    /// The name the provider shows, when it gave one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
+/// A profile with what a profile page shows besides it: the trophy counts and the connections the
+/// viewer may see. The answer of `GET /v1/accounts/{id}/profile`; a client that knows only
+/// [`Profile`] reads the same JSON.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProfilePage {
+    #[serde(flatten)]
+    pub profile: Profile,
+    /// The trophies by grade; `None` when they are hidden from the caller.
+    #[serde(default)]
+    pub trophies: Option<Count>,
+    /// Never null: an empty list does not say whether there are hidden connections.
+    #[serde(default)]
+    pub links: Vec<ProfileLink>,
+}
+
+/// One of the four reactions to a feed item. Nothing else can be sent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Reaction {
+    Nice,
+    Gg,
+    Wow,
+    Same,
+}
+
+impl Reaction {
+    /// All four, in the order a client shows them.
+    pub const ALL: [Reaction; 4] = [Reaction::Nice, Reaction::Gg, Reaction::Wow, Reaction::Same];
+
+    /// The name on the wire and in the database.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Reaction::Nice => "nice",
+            Reaction::Gg => "gg",
+            Reaction::Wow => "wow",
+            Reaction::Same => "same",
+        }
+    }
+
+    pub fn parse(text: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|r| r.as_str() == text)
+    }
+}
+
+/// How many accounts chose each reaction.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReactionCounts {
+    pub nice: u32,
+    pub gg: u32,
+    pub wow: u32,
+    pub same: u32,
+}
+
+impl ReactionCounts {
+    pub fn of(&self, reaction: Reaction) -> u32 {
+        match reaction {
+            Reaction::Nice => self.nice,
+            Reaction::Gg => self.gg,
+            Reaction::Wow => self.wow,
+            Reaction::Same => self.same,
+        }
+    }
+
+    pub fn add(&mut self, reaction: Reaction) {
+        let slot = match reaction {
+            Reaction::Nice => &mut self.nice,
+            Reaction::Gg => &mut self.gg,
+            Reaction::Wow => &mut self.wow,
+            Reaction::Same => &mut self.same,
+        };
+        *slot = slot.saturating_add(1);
+    }
+}
+
+/// What happened. The cloud records no names or texts of games or trophies: a title and a trophy
+/// are numbers, and a client shows their names from its own copy of the game.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum FeedEvent {
+    /// The account earned a trophy. `rarity` is the share of the title's players who earned it,
+    /// in percent with one decimal, or null while too few players have the title
+    /// ([`RARITY_MIN_PLAYERS`]).
+    Trophy {
+        title_id: String,
+        number: u16,
+        grade: Grade,
+        #[serde(default)]
+        rarity: Option<f32>,
+    },
+    /// The account and `with` became friends.
+    Friend { with: Account },
+    /// The account played the title for the first time.
+    FirstPlayed { title_id: String },
+    /// The account started a party. Only its members see this item.
+    Party { members: Vec<Account> },
+}
+
+/// One entry in a feed.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct FeedItem {
+    /// Rises with time; pass the smallest one held as `before` to read older items.
+    pub id: u64,
+    pub account: Account,
+    /// Unix seconds.
+    pub at: u64,
+    #[serde(flatten)]
+    pub event: FeedEvent,
+    pub reactions: ReactionCounts,
+    /// The caller's own reaction.
+    #[serde(default)]
+    pub mine: Option<Reaction>,
+}
+
+/// A page of a feed, newest first.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Feed {
+    pub items: Vec<FeedItem>,
+    /// Pass it as `before` for the next page; null at the end.
+    #[serde(default)]
+    pub next: Option<u64>,
+}
+
+/// The body of `PUT /v1/feed/{id}/reaction`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReactionRequest {
+    pub reaction: Reaction,
+}
+
+/// An item's reactions after a change.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Reactions {
+    pub reactions: ReactionCounts,
+    pub mine: Option<Reaction>,
+}
+
 /// The answer to an avatar upload.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AvatarSet {
@@ -994,6 +1150,9 @@ pub enum Event {
     ConversationGone {
         id: String,
     },
+    /// A feed has news: a friend did something, or someone reacted to an item of this account.
+    /// It carries nothing; fetch `GET /v1/feed`.
+    Feed,
     /// An event this version does not know.
     #[serde(other)]
     Unknown,
@@ -1440,6 +1599,70 @@ mod tests {
         )
         .unwrap();
         assert_eq!((report.verdict, report.os), (Verdict::NoStart, Os::Macos));
+    }
+
+    #[test]
+    fn a_feed_item_is_flat_json_with_a_kind() {
+        let item = FeedItem {
+            id: 7,
+            account: Account {
+                id: AccountId(2),
+                handle: "Lumen".into(),
+            },
+            at: 1_800_000_000,
+            event: FeedEvent::Trophy {
+                title_id: "GAME00001".into(),
+                number: 4,
+                grade: Grade::Gold,
+                rarity: Some(2.5),
+            },
+            reactions: ReactionCounts {
+                gg: 3,
+                ..Default::default()
+            },
+            mine: Some(Reaction::Gg),
+        };
+        let json = serde_json::to_value(&item).unwrap();
+        assert_eq!(json["kind"], "trophy");
+        assert_eq!(json["grade"], "gold");
+        assert_eq!(json["mine"], "gg");
+        assert_eq!(json["reactions"]["gg"], 3);
+        assert_eq!(serde_json::from_value::<FeedItem>(json).unwrap(), item);
+        let friend: FeedItem = serde_json::from_str(
+            r#"{"id":8,"account":{"id":2,"handle":"Lumen"},"at":1,"kind":"friend",
+                "with":{"id":3,"handle":"Nox"},"reactions":{"nice":0,"gg":0,"wow":0,"same":0}}"#,
+        )
+        .unwrap();
+        assert_eq!(friend.mine, None);
+        assert!(matches!(friend.event, FeedEvent::Friend { .. }));
+    }
+
+    #[test]
+    fn only_four_reactions_exist() {
+        for reaction in Reaction::ALL {
+            assert_eq!(Reaction::parse(reaction.as_str()), Some(reaction));
+        }
+        assert_eq!(Reaction::parse("angry"), None);
+        assert!(serde_json::from_str::<ReactionRequest>(r#"{"reaction":"lol"}"#).is_err());
+        let mut counts = ReactionCounts::default();
+        counts.add(Reaction::Wow);
+        assert_eq!(counts.of(Reaction::Wow), 1);
+    }
+
+    #[test]
+    fn a_profile_page_reads_as_a_profile_too() {
+        let json = r#"{"account":{"id":1,"handle":"Alec"},"about":"Hi","favourites":null,
+            "avatar":null,"playtime":null,"trophies":{"bronze":1,"silver":0,"gold":0,"platinum":0},
+            "links":[{"provider":"discord","name":"alec#1"}]}"#;
+        let page: ProfilePage = serde_json::from_str(json).unwrap();
+        assert_eq!(page.profile.about.as_deref(), Some("Hi"));
+        assert_eq!(page.links.len(), 1);
+        let plain: Profile = serde_json::from_str(json).unwrap();
+        assert_eq!(plain, page.profile);
+        let bare = r#"{"account":{"id":1,"handle":"A"},"about":null,"favourites":null,
+            "avatar":null,"playtime":null}"#;
+        let old: ProfilePage = serde_json::from_str(bare).unwrap();
+        assert!(old.links.is_empty() && old.trophies.is_none());
     }
 
     #[test]
