@@ -196,6 +196,8 @@ pub struct Service {
     voice: VoiceSide,
     screen: ScreenSide,
     conversation_answers: Answers,
+    /// The pace of typing signals to the cloud (see [`crate::typing`]).
+    typing: crate::typing::TypingThrottle,
     /// The mutes that limit the account, as the launcher was last told.
     restrictions: Vec<control::Restriction>,
     discord: discord::DiscordSide,
@@ -305,6 +307,7 @@ impl Service {
             voice: VoiceSide::default(),
             screen: ScreenSide::default(),
             conversation_answers: Answers::default(),
+            typing: crate::typing::TypingThrottle::default(),
             restrictions: Vec::new(),
             discord,
             restriction_answers: Answers::default(),
@@ -686,7 +689,15 @@ impl Service {
                 account,
                 reason,
                 details,
+                conversation,
+                seq,
             } => {
+                if conversation.as_deref().is_some_and(|c| !is_title_id(c))
+                    || conversation.is_some() != seq.is_some()
+                {
+                    self.fail(id, bad_id());
+                    return;
+                }
                 let Some(cloud) = self.signed_in_cloud(id) else {
                     return;
                 };
@@ -702,8 +713,8 @@ impl Service {
                                 account,
                                 reason,
                                 details,
-                                conversation: None,
-                                seq: None,
+                                conversation,
+                                seq,
                             })
                             .await
                     },
@@ -1351,6 +1362,11 @@ impl Service {
             | Command::OpenConversation { .. }
             | Command::Messages { .. }
             | Command::SendMessage { .. }
+            | Command::EditMessage { .. }
+            | Command::UnsendMessage { .. }
+            | Command::ReactMessage { .. }
+            | Command::Typing { .. }
+            | Command::ConversationSettings { .. }
             | Command::MarkRead { .. }
             | Command::AcceptRequest { .. }
             | Command::LeaveConversation { .. }
@@ -1986,6 +2002,70 @@ impl Service {
                 after,
                 before,
                 limit,
+                changed_after,
+            } => {
+                if !is_title_id(&conversation) {
+                    self.fail(id, bad_id());
+                    return;
+                }
+                if u8::from(after.is_some())
+                    + u8::from(before.is_some())
+                    + u8::from(changed_after.is_some())
+                    > 1
+                {
+                    self.fail(
+                        id,
+                        Failure::new(
+                            ErrorCode::BadRequest.as_str(),
+                            "Give after, before or changed_after, one of them.",
+                        ),
+                    );
+                    return;
+                }
+                self.request(
+                    id,
+                    async move {
+                        cloud
+                            .messages(&conversation, after, before, limit, changed_after)
+                            .await
+                    },
+                    |_, messages| messages,
+                );
+            }
+            Command::EditMessage {
+                conversation,
+                seq,
+                text,
+            } => {
+                if !is_title_id(&conversation) {
+                    self.fail(id, bad_id());
+                    return;
+                }
+                if !anyplay_api::is_message_text(&text) {
+                    self.fail(id, bad_message_text());
+                    return;
+                }
+                self.request(
+                    id,
+                    async move { cloud.edit_message(&conversation, seq, &text).await },
+                    |_, message| message,
+                );
+            }
+            Command::UnsendMessage { conversation, seq } => {
+                if !is_title_id(&conversation) {
+                    self.fail(id, bad_id());
+                    return;
+                }
+                self.request(
+                    id,
+                    async move { cloud.unsend_message(&conversation, seq).await },
+                    |_, message| message,
+                );
+            }
+            Command::ReactMessage {
+                conversation,
+                seq,
+                reaction,
             } => {
                 if !is_title_id(&conversation) {
                     self.fail(id, bad_id());
@@ -1993,28 +2073,64 @@ impl Service {
                 }
                 self.request(
                     id,
-                    async move { cloud.messages(&conversation, after, before, limit).await },
-                    |_, messages| messages,
+                    async move { cloud.react_to_message(&conversation, seq, reaction).await },
+                    |_, message| message,
                 );
             }
-            Command::SendMessage { conversation, text } => {
+            Command::Typing {
+                conversation,
+                typing,
+            } => {
+                if !is_title_id(&conversation) {
+                    self.fail(id, bad_id());
+                    return;
+                }
+                if typing {
+                    if !self.typing.allow(&conversation, Instant::now()) {
+                        self.ok(id, Done {});
+                        return;
+                    }
+                } else {
+                    self.typing.stop(&conversation);
+                }
+                self.request(
+                    id,
+                    async move { cloud.typing(&conversation, typing).await },
+                    |_, ()| Done {},
+                );
+            }
+            Command::ConversationSettings {
+                conversation,
+                muted,
+                pinned,
+            } => {
+                if !is_title_id(&conversation) {
+                    self.fail(id, bad_id());
+                    return;
+                }
+                let settings = anyplay_api::ConversationSettings { muted, pinned };
+                self.request(
+                    id,
+                    async move { cloud.conversation_settings(&conversation, &settings).await },
+                    |_, conversation| conversation,
+                );
+            }
+            Command::SendMessage {
+                conversation,
+                text,
+                reply,
+            } => {
                 if !is_title_id(&conversation) {
                     self.fail(id, bad_id());
                     return;
                 }
                 if !anyplay_api::is_message_text(&text) {
-                    self.fail(
-                        id,
-                        Failure::new(
-                            ErrorCode::BadRequest.as_str(),
-                            "A message has 1 to 2000 characters and is not only white space.",
-                        ),
-                    );
+                    self.fail(id, bad_message_text());
                     return;
                 }
                 self.request(
                     id,
-                    async move { cloud.send_message(&conversation, &text).await },
+                    async move { cloud.send_message(&conversation, &text, reply).await },
                     |_, message| message,
                 );
             }
@@ -2113,6 +2229,33 @@ impl Service {
                 conversation,
                 account,
                 seq,
+            }),
+            Event::Delivered {
+                conversation,
+                account,
+                seq,
+            } => self.event(control::Event::Delivered {
+                conversation,
+                account,
+                seq,
+            }),
+            Event::Typing {
+                conversation,
+                account,
+                typing,
+            } => self.event(control::Event::Typing {
+                conversation,
+                account,
+                typing,
+            }),
+            Event::MessageUpdate {
+                conversation,
+                seq,
+                rev,
+            } => self.event(control::Event::MessageUpdate {
+                conversation,
+                seq,
+                rev,
             }),
             Event::Conversation { id } => self.event(control::Event::Conversation { id }),
             Event::ConversationGone { id } => {
@@ -3792,6 +3935,13 @@ fn launcher_party(mut party: anyplay_api::Party) -> anyplay_api::Party {
         member.relay = None;
     }
     party
+}
+
+fn bad_message_text() -> Failure {
+    Failure::new(
+        ErrorCode::BadRequest.as_str(),
+        "A message has 1 to 2000 characters and is not only white space.",
+    )
 }
 
 fn bad_id() -> Failure {

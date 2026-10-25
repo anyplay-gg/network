@@ -126,8 +126,13 @@ A **restriction** has a `kind` and, when they apply, `until`, `rule`, `reason`, 
 | `set_voice_device` | `kind`: `input` or `output`, `name` (null: the system's default) | `{}`; `not_found` when no device has the name |
 | `conversations` | | `{conversations, requests}` |
 | `open_conversation` | `accounts`, `name` | the `Conversation`: with one account the direct one, with more a new group |
-| `messages` | `conversation`, `after`, `before`, `limit` | `{messages, last}`; all but `conversation` may be left out |
-| `send_message` | `conversation`, `text` | the `Message` |
+| `messages` | `conversation`, `after`, `before`, `changed_after`, `limit` | `{messages, last, rev}`; all but `conversation` may be left out, and at most one of the first three given |
+| `send_message` | `conversation`, `text`, `reply` | the `Message`; `reply` (optional) is the number of the message it answers |
+| `edit_message` | `conversation`, `seq`, `text` | the `Message`, within 15 minutes of writing it |
+| `unsend_message` | `conversation`, `seq` | the `Message` with `deleted` true |
+| `react_message` | `conversation`, `seq`, `reaction` | the `Message`; `reaction` is `nice`, `love`, `laugh`, `gg`, `wow`, `sad`, or null to take it back |
+| `typing` | `conversation`, `typing` | `{}`: the net service passes on at most one `true` every 3 seconds per conversation |
+| `conversation_settings` | `conversation`, `muted`, `pinned` | the `Conversation`; a field left out stays |
 | `mark_read` | `conversation`, `seq` | `{}` |
 | `accept_request` | `conversation` | the `Conversation` |
 | `leave_conversation` | `conversation` | `{}`: leaves a group or declines a request |
@@ -183,7 +188,10 @@ A **restriction** has a `kind` and, when they apply, `until`, `rule`, `reason`, 
 | `message` | `conversation`, `seq` | a new message; fetch it with `messages` |
 | `message_request` | `conversation` | a stranger wrote for the first time |
 | `read` | `conversation`, `account`, `seq` | a member read up to `seq` |
-| `conversation` | `id` | a conversation is new or its members changed |
+| `delivered` | `conversation`, `account`, `seq` | a member's device received a direct conversation up to `seq` |
+| `typing` | `conversation`, `account`, `typing` | a member types, or stopped; show it for 6 seconds |
+| `message_update` | `conversation`, `seq`, `rev` | a message was edited, unsent or reacted to; fetch `messages` with `changed_after` |
+| `conversation` | `id` | a conversation is new, or its members, name, mute or pin changed |
 | `conversation_gone` | `id` | the player is no longer in the conversation |
 | `screen` | `can_share`, `can_watch`, `hosting`, `offers`, `watching` | share screen changed; while a stream runs its numbers at most twice a second |
 | `feed` | | the feed has news; fetch `feed`. The net service sends at most one every two seconds, with one trailing event for news inside that time |
@@ -192,6 +200,8 @@ A **restriction** has a `kind` and, when they apply, `until`, `rule`, `reason`, 
 - To appeal: a mute is appealed with the `appeal` command. A ban signs the account out, so it is appealed on the account web: the launcher starts `browser_sign_in`, and the cloud's sign-in ends on the page with the statement and the form (after a ban the player proves who they are there, as in [ADR 0015](../docs/adr/0015-moderators-are-accounts.md)).
 - `cloud` is `offline`, `connecting` or `online`. `account` is `{id, handle, email}` or null. `pending` is `code` (an e-mail is out), `handle` (the account needs a handle), `browser` (the system browser has the sign-in) or null.
 - `friends` carries the whole lists each time, with each friend's presence as in the cloud API. The net service sends at most four of them per second.
+- `report` takes the optional `conversation` and `seq` together: it reports that message of the account ([cloud API](cloud-api.md#reporting-a-message)).
+- Edits, unsends, reactions, typing and the settings are the [cloud API](cloud-api.md#changes-to-messages) one to one, with its errors. `typing` is fire and forget: the launcher sends it on every key if it likes, and the net service drops all but one `true` in three seconds for a conversation (`false` always goes) and answers `{}`.
 - `message` carries no text: the launcher keeps the highest number it has for each conversation and calls `messages` with `after`. The `conversations` event after a reconnect carries every conversation's newest number (`last`), so what arrived while the connection was down is fetched the same way.
 - `muted` and `deafened` in the `voice` event say what `mic_mute` and `deafen` set (both false after the service starts, and remembered while it runs). Both silence `me`: its `speaking` is false.
 - `voice.state` is `off` (switched off, no party, or the devices could not be opened), `connecting` (switched on in a party: the devices are opening, or members who take part are not reached yet) or `on` (the devices run and at least one member who takes part is reached, or none takes part). `enabled` is whether the player switched voice on, which stays true across parties. `mode` is `push_to_talk` or `voice_activity`. `me` is `{level, speaking}` for the player's own microphone after the gate. `peers` has one entry for each other member of the party: `{account, level, speaking, link}`, with `link` `connecting`, `direct` or `relay` for the voice connection to that member and null when there is none (they have voice off, or have not been reached). `level` is the recent loudness in percent (0 to 100) before the player's volume setting; `speaking` is what a speaking indicator should show. While voice is off, `me` is silent and `peers` is empty. While voice runs, the net service reports levels and links only when they changed.

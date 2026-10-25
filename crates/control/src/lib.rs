@@ -71,6 +71,11 @@ pub enum Command {
         reason: anyplay_api::ReportReason,
         #[serde(default)]
         details: String,
+        /// With `seq`: the message being reported, in a conversation the player can read.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        conversation: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        seq: Option<u64>,
     },
     Playing {
         game: Option<Game>,
@@ -304,10 +309,48 @@ pub enum Command {
         before: Option<u64>,
         #[serde(default)]
         limit: Option<u32>,
+        /// The messages that changed after this `rev`, in the order of the change. Not with
+        /// `after` or `before`.
+        #[serde(default)]
+        changed_after: Option<u64>,
     },
     SendMessage {
         conversation: String,
         text: String,
+        /// The number of the message this one answers.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reply: Option<u64>,
+    },
+    /// Changes the text of the player's own message, within 15 minutes of writing it.
+    EditMessage {
+        conversation: String,
+        seq: u64,
+        text: String,
+    },
+    /// Removes the text of the player's own message for everyone.
+    UnsendMessage {
+        conversation: String,
+        seq: u64,
+    },
+    /// Sets the player's reaction to a message; `reaction` null takes it back.
+    ReactMessage {
+        conversation: String,
+        seq: u64,
+        reaction: Option<anyplay_api::MessageReaction>,
+    },
+    /// The player types in the conversation (`typing` true), or stopped. The net service sends
+    /// at most one `true` every three seconds per conversation and drops the rest.
+    Typing {
+        conversation: String,
+        typing: bool,
+    },
+    /// Mutes or pins a conversation for the player. A field left out stays.
+    ConversationSettings {
+        conversation: String,
+        #[serde(default)]
+        muted: Option<bool>,
+        #[serde(default)]
+        pinned: Option<bool>,
     },
     MarkRead {
         conversation: String,
@@ -1009,7 +1052,25 @@ pub enum Event {
         account: AccountId,
         seq: u64,
     },
-    /// A conversation's members or name changed, or it is new; fetch `conversations`.
+    /// A member's device received a direct conversation up to `seq`.
+    Delivered {
+        conversation: String,
+        account: AccountId,
+        seq: u64,
+    },
+    /// A member types in a conversation, or stopped. Drop it after six seconds.
+    Typing {
+        conversation: String,
+        account: AccountId,
+        typing: bool,
+    },
+    /// A message was edited, unsent or reacted to; fetch `messages` with `changed_after`.
+    MessageUpdate {
+        conversation: String,
+        seq: u64,
+        rev: u64,
+    },
+    /// A conversation's members, name, mute or pin changed, or it is new; fetch `conversations`.
     Conversation {
         id: String,
     },
@@ -1323,13 +1384,54 @@ mod tests {
                     conversation: "c".into(),
                     after: Some(7),
                     before: None,
-                    limit: None
+                    limit: None,
+                    changed_after: None
+                }
+            ))
+        );
+        assert_eq!(
+            parse_command(
+                r#"{"id":4,"do":"react_message","conversation":"c","seq":3,"reaction":"gg"}"#
+            ),
+            Ok((
+                4,
+                Command::ReactMessage {
+                    conversation: "c".into(),
+                    seq: 3,
+                    reaction: Some(anyplay_api::MessageReaction::Gg)
+                }
+            ))
+        );
+        assert_eq!(
+            parse_command(
+                r#"{"id":5,"do":"react_message","conversation":"c","seq":3,"reaction":null}"#
+            ),
+            Ok((
+                5,
+                Command::ReactMessage {
+                    conversation: "c".into(),
+                    seq: 3,
+                    reaction: None
+                }
+            ))
+        );
+        assert_eq!(
+            parse_command(
+                r#"{"id":6,"do":"conversation_settings","conversation":"c","muted":true}"#
+            ),
+            Ok((
+                6,
+                Command::ConversationSettings {
+                    conversation: "c".into(),
+                    muted: Some(true),
+                    pinned: None
                 }
             ))
         );
         let send = Command::SendMessage {
             conversation: "c".into(),
             text: "hej \u{1F600}".into(),
+            reply: Some(2),
         };
         assert_eq!(
             parse_command(&command_line(9, &send)),
@@ -1592,6 +1694,21 @@ mod tests {
         for event in [
             Event::Message {
                 conversation: "c".into(),
+                seq: 3,
+            },
+            Event::Typing {
+                conversation: "c".into(),
+                account: AccountId(4),
+                typing: true,
+            },
+            Event::MessageUpdate {
+                conversation: "c".into(),
+                seq: 3,
+                rev: 2,
+            },
+            Event::Delivered {
+                conversation: "c".into(),
+                account: AccountId(4),
                 seq: 3,
             },
             Event::Conversation { id: "c".into() },
@@ -1898,6 +2015,8 @@ mod tests {
                     account: AccountId(41),
                     reason: anyplay_api::ReportReason::Spam,
                     details: "äb".into(),
+                    conversation: Some("c1".into()),
+                    seq: Some(3),
                 },
             ),
             command_line(
@@ -1921,6 +2040,7 @@ mod tests {
                 &Command::SendMessage {
                     conversation: "c1".into(),
                     text: "hej 😀".into(),
+                    reply: None,
                 },
             ),
             output_line(&Output::Event(Event::Message {

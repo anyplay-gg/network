@@ -17,6 +17,7 @@ pub mod screen;
 pub mod service;
 pub mod traffic;
 pub mod tunnel;
+mod typing;
 pub mod voice;
 pub mod worker_process;
 

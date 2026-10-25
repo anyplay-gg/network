@@ -287,6 +287,38 @@ _Avoid_: Sequence ID, timestamp
 The message number a member has read a conversation up to.
 _Avoid_: Seen flag
 
+**Reply**:
+A message that quotes an earlier message of the same conversation. The quote is a copy of the first 140 characters, marked when the quoted message was unsent.
+_Avoid_: Thread (a reply starts no thread), forward
+
+**Reaction**:
+One of six fixed names an account puts on a message: Nice, Love, Laugh, GG, Wow, Sad. One per account and message. Not the feed's four reactions, which belong to feed items.
+_Avoid_: Emoji, sticker, like
+
+**Edit**:
+A change of the text of one's own message within 15 minutes. The message shows "edited"; the cloud keeps no earlier text.
+_Avoid_: Revision (that counts changes to a conversation), update
+
+**Unsend**:
+The writer removes the text of their own message for everyone. A marker with the same number stays. Not leaving a conversation, not a moderator removing a message.
+_Avoid_: Delete (deleting an account deletes messages), retract, recall
+
+**Message revision**:
+The counter of a conversation that rises with every edit, unsend and reaction. A client asks for what changed after the revision it holds, as it asks for messages after the number it holds.
+_Avoid_: Version, etag
+
+**Delivered**:
+A direct message the other account's device has fetched. Between sent and read.
+_Avoid_: Received, seen (groups say seen by)
+
+**Mute (a conversation)**:
+The player's own setting: no toast, no badge, no notification for that conversation. Not a moderator's mute of an account, which is a restriction.
+_Avoid_: Silence, snooze
+
+**Pin**:
+The player's own setting: the conversation stays at the top of the list. At most five.
+_Avoid_: Favourite, star
+
 **Message request**:
 A message from someone who is not a friend, held until the receiver accepts the conversation.
 _Avoid_: Spam folder

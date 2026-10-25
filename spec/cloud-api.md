@@ -71,9 +71,11 @@ JoinCode  { code, url, expires }                   code: 10 characters; url: the
 Redeemed  { kind, invitation }                     kind: "session" | "party"; invitation: Invitation or PartyInvitation
 PartyInvitation { id, from, party, members, expires, call }   call: true for a ringing call, absent otherwise
 MissedCall { from, at }                              a call nobody answered; at: Unix seconds
-Conversation { id, kind, name, members, last, read, marks, updated, request, party }   kind: "direct" | "group" | "party"
-ReadMark  { account, seq }
-Message   { conversation, seq, sender, text, created }
+Conversation { id, kind, name, members, last, read, marks, updated, request, party, unread, muted, pinned, rev }   kind: "direct" | "group" | "party"; muted, pinned: absent when false
+ReadMark  { account, seq, delivered }              delivered: absent when 0
+Message   { conversation, seq, sender, text, created, reply, edited, deleted, reactions, rev }   reply, edited, deleted, reactions, rev: absent when empty
+Quote     { seq, sender, text, deleted }           deleted: absent when false
+ReactionOn{ reaction, accounts }                   reaction: "nice" | "love" | "laugh" | "gg" | "wow" | "sad"
 ```
 
 - A **handle** has 3 to 16 characters from `A-Z a-z 0-9 _ -` and starts with a letter. Handles are unique without regard to case; the spelling of the owner is kept. Handles that look alike are one handle: the **skeleton** of a handle (`handle_skeleton` in `anyplay-api`) is the handle in lower case without `_` and `-`, with `rn` read as `m`, `vv` as `w`, `1` and `i` as `l`, and `0` as `o`, and an account can take a handle only when no other account has its skeleton (so `Flokzy`, `FIokzy`, `F1okzy` and `Flok_zy` are one). A skeleton that is taken answers `handle_taken`, like a taken handle. Some handles are reserved (names of the network, of staff roles, and of platforms), and reserved names are matched by skeleton too.
@@ -476,16 +478,62 @@ Every message has a number `seq` that counts up by one in its conversation, star
 | `GET /v1/conversations/{id}/messages?after=N` | | `{messages: [Message], last}`: the next messages after number `N`, oldest first |
 | `GET /v1/conversations/{id}/messages?before=N` | | the newest messages below `N`, oldest first |
 | `GET /v1/conversations/{id}/messages` | | the newest messages |
+| `GET /v1/conversations/{id}/messages?changed_after=R` | | `{messages, last, rev}`: the messages that were edited, unsent or reacted to after `rev` `R`, in the order of the change |
 | `PUT /v1/conversations/{id}/read` | `{seq}` | 204 |
+| `PATCH /v1/conversations/{id}/messages/{seq}` | `{text}` | `Message`: edits the caller's own message |
+| `DELETE /v1/conversations/{id}/messages/{seq}` | | `Message`: unsends the caller's own message |
+| `PUT /v1/conversations/{id}/messages/{seq}/reaction` | `{reaction}` | `Message`: sets the caller's reaction, replacing an earlier one |
+| `DELETE /v1/conversations/{id}/messages/{seq}/reaction` | | `Message`: takes the caller's reaction back |
+| `PUT /v1/conversations/{id}/typing` | `{typing}` | 204: the caller types, or stopped |
+| `PATCH /v1/conversations/{id}/settings` | `{muted, pinned}` | `Conversation`: the caller's own settings; a field left out stays |
 
-- A fetch answers at most `limit` messages (default 50, at most 100). `last` is the number of the conversation's newest message. A conversation that the caller is not in answers `not_found`.
+- A fetch answers at most `limit` messages (default 50, at most 100). `last` is the number of the conversation's newest message and `rev` its change counter (see Changes to messages). A conversation that the caller is not in answers `not_found`. `after`, `before` and `changed_after` exclude each other (`bad_request`).
 - `Conversation.last` is the newest number, `read` the number the caller read up to, `marks` how far the others read, `request` whether the caller still has to accept it. A client keeps the highest number it has fetched for each conversation. After a break it reads the list, and for each conversation whose `last` is above its own number it fetches `after` its own number until it has reached `last`. Messages a block kept away are missing from a fetch, so numbers can skip.
 - **Groups.** The creator names friends only (`forbidden` otherwise, also for a block in either direction). Any member may add its own friends; those who are members already, who are no friends of the adder, whom a member blocked or who blocked a member are left out of `added`. A new member sees messages written from then on. An account is in at most 50 groups. A group is `full` at 32.
 - **Message requests.** Opening a conversation with an account that is no friend makes a request for that account. It is listed in `requests` once it holds a message, and the receiver can read it; links in it stay inactive in the launcher, and nothing tells the sender that it was read. The receiver is told once (`message_request`). The receiver accepts it, declines it, or answers, which accepts it. A decline is silent: the sender can write on, but nothing reaches the receiver. A stranger may send 5 messages before the receiver answers (`limit`) and may open at most 10 conversations with strangers an hour (`rate_limited`); an account holds at most 100 requests. An account younger than the cloud's `new_account_hours` (24 by default) may not open a conversation with a stranger (`restricted`, `restriction: "new_account"`, `until`). It may write to its friends at once. A muted account may not send messages at all (`restricted`, `restriction: "muted"`). Once the two are friends, a request is an ordinary conversation.
 - **Blocks.** If the caller blocked the other account of a direct conversation, writing and opening it answer `forbidden`. If the other blocked the caller, writing succeeds and nothing is delivered. In a group, a block hides one sender's messages from one member, in both directions. A message a block kept away stays away after the block is lifted.
 - **Read marks.** `PUT .../read` moves the caller's mark forward to `seq` (at most `last`); a lower value changes nothing. Marks are shown to the members who accepted the conversation; the marks of a request stay with the receiver's own devices. Writing reads up to the message written.
 - A conversation with a friend cannot be left. A party's chat ends with the party.
-- **Limits.** 30 messages per account per minute (`rate_limited`). Deleting an account deletes its messages and its direct conversations; the export lists the messages the account wrote and its conversations.
+- **Limits.** 30 messages per account per minute (`rate_limited`). Edits, unsends and reactions share a second limit of 60 per account per minute. Typing signals are not counted separately (see Typing). Deleting an account deletes its messages, their reactions and its direct conversations; the export lists the messages the account wrote (an unsent one without text, an edited one with its current text and the time of the edit), the reactions it set, and its conversations with their settings.
+
+### Replies
+
+`POST .../messages` takes an optional `reply`: the number of a message in the same conversation. The new message carries `reply`, a `Quote` of that message as the reader sees it: the sender, the first 140 characters of the text (empty and `deleted: true` when it was unsent), and its number. The quote is a copy made when the messages are fetched; a client that holds the quoted message prefers its own copy, which is the newer one after an edit. A reply to a message the writer cannot see (a block kept it away, it is from before the writer joined, or it was unsent or swept) answers `not_found` or `bad_request` (unsent). A reader who cannot see the quoted message gets the reply without `reply`. Replies cost nothing extra: they are messages (30 a minute).
+
+### Changes to messages
+
+A message keeps its number when it is edited, unsent or reacted to, so the numbers alone do not tell a client what changed. Each conversation has a counter `rev` that rises by one with every such change, taken in the same transaction that changes the message and under the same row lock as the numbers of messages (as in [ADR 0013](../docs/adr/0013-messages-are-numbered-per-conversation.md)). The changed message carries the `rev` of its last change. A client keeps the highest `rev` it has for each conversation, and after a `message_update` event or a break fetches `messages?changed_after=<its rev>` until the answer's `rev` is reached. It applies a changed message only to a message it holds and drops the rest; the numbers it holds do not move. Messages that the caller cannot see are never in the answer.
+
+- **Edit.** Only the writer, only within 15 minutes of writing (`forbidden` after), only the text (1 to 2,000 characters as for a new message), never an unsent message (`bad_request`). The message gets `edited` (Unix seconds of the last edit). The cloud keeps no earlier text: what a report saved is the evidence ([ADR 0030](../docs/adr/0030-messages-change-in-place.md)). An edit that changes nothing answers the message and counts for nothing. A muted account may not edit (`restricted`).
+- **Unsend.** Only the writer, at any time while the cloud still keeps the message. The text is deleted from the store, the reactions with it; the message stays with `deleted: true`, an empty `text`, the same number and time, so that numbers do not skip and a reply can say what it quoted. It cannot be edited or reacted to afterwards and cannot be reported (`not_found`): a report that was filed before keeps its snapshot. A muted account may unsend. The export lists it without text.
+- **Reactions.** One reaction per account and message, chosen from six names: `nice`, `love`, `laugh`, `gg`, `wow`, `sad` (the `MessageReaction` enum; anything else is `bad_request`). A new one replaces the old; taking it back is `DELETE`. A message shows `reactions`: for each reaction in that order, the accounts that chose it; reactions of accounts a block lies between are left out for the reader. A member who has not accepted the conversation (a message request) cannot react (`forbidden`); a block between the two accounts of a direct conversation answers `forbidden` for the one who blocked and succeeds without telling the other. A muted account may not react (`restricted`).
+- **Who is told.** `message_update` goes to every member of the conversation who has not declined it and who can see the message, as a pointer: the message, the new `rev`. The actor's other devices are told too.
+
+### Delivered, read and seen
+
+- A direct conversation shows each of the caller's messages as **sent** (stored), **delivered** (the other account's device fetched it) or **read** (the other account's read mark is at or past it). `ReadMark.delivered` is the number the other account's device fetched up to; the cloud raises it when that account fetches messages (`GET .../messages` with `after`, with nothing, and with `before` for the newest message it returns), when it reads (`delivered` is never below `seq`) and when it writes. Raising it sends `delivered` to the other members of a direct conversation, once per change; groups are not told, and show no delivered state.
+- A group shows **seen by N** under the newest message the caller wrote and under any other message the reader selects: N is the number of other members whose mark `seq` is at or past the message (`marks` lists accepted members only). A client may name them from `marks`.
+- Marks are shown to the members who accepted the conversation, as for read marks.
+
+### Unread counts
+
+`Conversation.unread` is the number of messages above the caller's `read` mark, written by others, visible to the caller (no block, not from before the caller joined) and not unsent. The cloud counts, so every device shows the same number, in the list and in `GET /v1/conversations/{id}`. A client replaces its own count with the cloud's after every read of the list (after `welcome` and after every reconnect) and after its own `read` event, `message_update` and `conversation` events for the conversation. Between those it may add one for each message it fetched that counts. A muted conversation keeps its `unread` but a client shows no badge for it and sums none of it into a total. Requests are not part of any total; they have their own count.
+
+### Typing
+
+`PUT .../typing` with `{typing: true}` tells the other members who accepted the conversation that the caller is typing; `{typing: false}` that it stopped. Typing is never stored: the cloud sends the event `typing` and forgets it. A client sends `true` when the player starts typing and again every 3 seconds while they keep typing, `false` when the field is cleared or the message is sent (writing a message ends typing by itself), and shows a member as typing for 6 seconds after the last `true`. The cloud sends at most one `true` per account and conversation every 2 seconds and drops the others, with the same answer 204. Nothing is sent to a member a block lies between,, in a request that is not accepted, or for an account a moderator muted.
+
+### Mute and pin
+
+`PATCH .../settings` sets `muted` and `pinned` for the caller only, and sends `conversation` to the caller's own devices. A muted conversation sends the caller no web push notification and no toast: that is a rule for the cloud's notifications and for clients. `unread` and `last` go on. An account pins at most 5 conversations (`limit`). The list is ordered pinned first, then newest first. Mute has no end time yet.
+
+### Reporting a message
+
+A message is reported with `POST /v1/reports` and `conversation` plus `seq` (see Reports). The report saves the text as it was when the report was filed, so a later edit or unsend changes nothing about the evidence. A message that was unsent before the report cannot be reported. The clients offer it on every message of another account.
+
+### Not yet
+
+Attachments, images, voice notes, link previews, and end-to-end encryption are not part of this version: where attachments live and who reviews them is not decided ([ADR 0011](../docs/adr/0011-messages-are-stored-to-be-delivered.md) keeps the cloud able to read text for reports; pictures need storage, scanning and a review path first). Timed mutes, a setting to switch read receipts and typing off, and search are later steps.
 
 ## Events
 
@@ -513,7 +561,10 @@ Every message has a number `seq` that counts up by one in its conversation, star
 | `message` | `conversation, seq` | A new message. Fetch the messages after the number you hold. It carries no text. |
 | `message_request` | `conversation` | A stranger wrote for the first time. Fetch the requests. |
 | `read` | `conversation, account, seq` | A member read up to `seq`. |
-| `conversation` | `id` | A conversation is new or its members changed. Fetch it. |
+| `delivered` | `conversation, account, seq` | A member's device received a direct conversation up to `seq`. |
+| `typing` | `conversation, account, typing` | A member types, or stopped. Never stored; drop it after 6 seconds. |
+| `message_update` | `conversation, seq, rev` | A message was edited, unsent or reacted to. Fetch `messages?changed_after=<rev held>`. |
+| `conversation` | `id` | A conversation is new, or its members, name, mute or pin changed. Fetch it. |
 | `conversation_gone` | `id` | This account is no longer in the conversation. |
 | `appear_offline` | `appear_offline` | The setting of this account changed (on another device or in the portal). Sent to the account's own devices only. |
 | `feed` | | A feed has news (a friend's new item, or a reaction to one of this account's). Fetch `GET /v1/feed`. It carries nothing; a client fetches at most every two seconds. |
@@ -559,6 +610,8 @@ DiscordTokens { access, refresh, expires_in, scope }   expires_in: seconds; scop
 | `relays/tickets` | 20 per account per hour |
 | `PUT /v1/me/avatar` | 5 per account per hour, besides the limit below |
 | messages | 30 per account per minute |
+| edits, unsends and reactions | 60 per account per minute |
+| typing | 1 per account and conversation every 2 seconds (others are dropped) |
 | conversations with strangers | 10 per account per hour |
 | friend requests of a new account | 10 in its first day (`new_account_friend_requests_per_day`) |
 | `PUT /v1/me/run-reports/{title_id}` | 30 per account per hour |
