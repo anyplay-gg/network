@@ -81,7 +81,7 @@ Counted by the cloud's settings (`docs/configuration.md` of the cloud), per wind
 - Asking for a code (`sign-in/email`, `sign-in/code/resend`, `step-up/email`, `account/email`): per address and per client address, as for `/v1/auth/email`. Typing a code and `passkey/*`: per client address, as for `/v1/auth/code`.
 - A new browser session (`GET /session` without a live cookie): 300 per 15 minutes per client address, a bucket of its own, so many page loads behind one address (a shared network) cannot lock out signing in. A request that has its session is not counted. Every new session is a row in the store, because the CSRF token lives in it; the row ends with the session's idle time.
 - Every other request of a signed-in session: per account, shared with `/v1` (120 per minute).
-- Public profiles (`users/{name}...`): 120 per minute per client address.
+- Public profiles (`users/{name}...`) and `compatibility`: 120 per minute per client address.
 - Avatar uploads: 5 per hour per account.
 - Starting a connection (`me/links/{provider}/start`): 10 per hour per account.
 
@@ -345,6 +345,20 @@ PublicUser { account, about, favourites, avatar, playtime, trophies, links, view
 ```
 
 A handle that does not exist, and a name that cannot be a handle, are both `not_found`.
+
+### Compatibility
+
+`GET /compatibility` needs no session and names no player. It answers what players found for each title, from run reports ([cloud-api.md](cloud-api.md#run-reports)): `{titles: [CompatTitle]}`, the best reported first (then by title ID), at most 1000.
+
+```text
+CompatTitle { titleId, verdict, reports, counts, versions }
+  verdict    the most reported verdict over all versions (a tie goes to the lower one): "no_start", "menus", "in_game" or "playable"
+  reports    players who reported, counted once each by their latest report; at least 3
+  counts     {noStart, menus, inGame, playable}
+  versions   [{version, reports, verdict, counts}], only game versions that have at least 3 players
+```
+
+A title with fewer than 3 players is not listed. The cloud knows no titles, so there is no `title`; the web page adds names from its own list. Counted per client address with the public profiles.
 
 ## Serving the portal
 
