@@ -138,6 +138,10 @@ The minutes a player spent in a title, counted per title and per day by the laun
 The link between an AnyPlay account and an account of a provider such as Discord or Steam, made in the portal. It holds who the account is there (ID, display name, picture), never a token or anything the player has on the provider. At most one per provider, and an account of a provider belongs to one AnyPlay account. Each has its own visibility (friends, everyone or nobody). Making one needs a fresh session; removing one does not.
 _Avoid_: Integration, social login (a connection is not a way to sign in)
 
+**Discord session**:
+The net service's signed-in state with Discord, made when a player connects Discord in the launcher: it shows the player's game and party on Discord and brings their Discord friends to the screen. It lives in the net service, holds a refresh token only in the credential store, and ends when the player disconnects. Not a connection, which is the portal's link.
+_Avoid_: Discord login, Discord account link (that is the connection)
+
 **Gamer card**:
 The short form of a profile that friends see in their list: avatar, handle, what they play, trophy count. It holds nothing else, so it stays small.
 
