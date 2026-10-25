@@ -60,7 +60,7 @@ An error is an HTTP status with a body `{"error": "<code>", "message": "<English
 | `handle_invalid` | 400 | The handle breaks the rules. `field` is `handle`. |
 | `unauthorized` | 401 | No live session, no or a wrong CSRF token, or the player is not signed in. The page reads `GET /session` and shows the sign-in. |
 | `banned` | 403 | The account is banned. A signed-in session that meets this one leads to the statement (`flow.step` is `banned` from then on). When an address is banned and its account is gone, the body adds `ban` with the `statement`; it never holds an appeal token. |
-| `forbidden` | 403 | The player may not do this (a closed cloud makes no new accounts; the passkey is registered already). |
+| `forbidden` | 403 | The player may not do this (a closed cloud makes no new accounts; the passkey is registered already; the cloud sends no notifications). |
 | `step_up_required` | 403 | The action needs a fresh session. See Step-up. |
 | `not_found` | 404 | There is nothing like that, or nothing the player may see. |
 | `unsupported_media_type` | 415 | A write without `Content-Type: application/json`. |
@@ -84,6 +84,7 @@ Counted by the cloud's settings (`docs/configuration.md` of the cloud), per wind
 - Public profiles (`users/{name}...`): 120 per minute per client address.
 - Avatar uploads: 5 per hour per account.
 - Starting a connection (`me/links/{provider}/start`): 10 per hour per account.
+- Notifications (`push`, `push/subscription`) count with every other request of a signed-in session. The cloud itself sends at most 16 requests at a time to push services from one node, and drops a notification when 2000 wait.
 
 ## The session and signing in
 
@@ -323,6 +324,57 @@ OpenID 2.0 against `https://steamcommunity.com/openid`. The address of step 1 is
 
 With `steam_api_key` the cloud then reads `ISteamUser/GetPlayerSummaries` for the persona name and the picture. A failure there does not fail the link: the connection is made with the ID only. The key is a secret and appears in no log. The page is `https://steamcommunity.com/profiles/{id}`.
 
+## Notifications (Web Push)
+
+A player can ask for a notification in the browser when something happens while the portal is closed: a friend request, an invitation, a message. The portal subscribes the browser with the Push API and the cloud sends to the browser's push service ([RFC 8030](https://www.rfc-editor.org/rfc/rfc8030)), encrypted for the browser ([RFC 8291](https://www.rfc-editor.org/rfc/rfc8291), `aes128gcm`) and signed with the cloud's VAPID key ([RFC 8292](https://www.rfc-editor.org/rfc/rfc8292)). The push service sees that a notification exists and how big it is, never what it says.
+
+Rules:
+
+- **Off until the player turns it on, per browser.** A subscription belongs to one browser profile, made by the browser's own permission prompt. Nothing is sent to a browser that did not subscribe, and the portal asks for the permission only when the player flips the switch, never on load.
+- **A cloud is on or off.** Notifications need the VAPID settings of the cloud (`vapid_private_key`, `vapid_subject`). Without them `GET /push` answers `enabled: false` and `PUT /push/subscription` is `forbidden`; the portal then does not show the switch.
+- **Three kinds.** `friend_request` (someone asked to be friends; becoming friends, and a request that was answered, send nothing), `party_invite` (a party or game invitation; invitations sent to a player who blocked the sender are never made, so never sent) and `message` (a message in a conversation the player is a member of and has accepted, or the first message of a request; never the sender's own, and nothing for a sender in either direction of a block). A subscription lists the kinds it wants; the default is all three.
+- **No content.** A payload names who it is from and what happened, never the text of a message. The portal or the launcher shows the rest after the player opens it.
+- **Where the address is allowed to point.** The cloud posts to the address in the subscription, so it accepts only HTTPS addresses on a host of the browser makers' push services (Google, Mozilla, Apple, Microsoft), without a port or credentials. Any other address is `bad_request`.
+- **Ten per account.** More is `limit`. The same address under another account moves to the account that sent it last: the browser belongs to whoever signed in on it.
+- **Clean-up.** The cloud deletes a subscription at once when the push service answers 404 or 410, and after five failed sends in a row (a success resets the count). A browser that unsubscribed or was reset is gone from the cloud within a few notifications.
+- Deleting the account deletes its subscriptions. `GET /account/export` lists them as `notification_devices`, with name, kinds and date, and without the address and the keys.
+
+| Request | Body | Answer |
+|---|---|---|
+| `GET /push` | | `PushState` |
+| `PUT /push/subscription` | `PushSubscribe` | `PushSubscription` |
+| `DELETE /push/subscription` | `{endpoint}` | `{"ok": true}`; also when there was no such subscription |
+
+```text
+PushState { enabled, public_key, subscriptions }
+  enabled        the cloud sends notifications
+  public_key     the cloud's VAPID public key, the uncompressed P-256 point in unpadded base64url: the
+                 applicationServerKey for pushManager.subscribe; null when not enabled
+  subscriptions  [PushSubscription], the account's browsers, oldest first
+PushSubscribe { endpoint, keys, label?, kinds? }
+  endpoint  the subscription's endpoint, as the browser gives it
+  keys      {p256dh, auth}, as in PushSubscription.toJSON(): unpadded base64url
+  label     a name for the device, at most 60 printable characters; default ""
+  kinds     a subset of ["friend_request", "party_invite", "message"]; default all three
+PushSubscription { id, label, kinds, created_at }
+```
+
+`PUT` makes the subscription or, when the address is known, replaces its keys, name and kinds (and resets its failure count): that is also how the portal changes the kinds of a browser. The answer never holds the address or the keys. `DELETE` takes the address, not the number: a browser knows its own address, and it cannot remove another account's.
+
+**What arrives.** A push message is the JSON text below, encrypted. The service worker of the portal shows it and opens `url` on a click.
+
+```text
+{kind, title, body, url, tag}
+  kind   friend_request, party_invite or message
+  title  "Friend request", "Party invitation", "Game invitation" or "New message"
+  body   "<handle> sent you a friend request", "<handle> invited you to a party",
+         "<handle> invited you to play" or "<handle> sent you a message"
+  url    a path on the portal: /account/friends for friend_request and message, /account for party_invite
+  tag    "<kind>:<who or conversation>": a newer notification with the same tag replaces the older
+```
+
+The cloud sends with `TTL` of 3 days (friend request), 15 minutes (invitation) or 1 day (message), `Urgency: normal` for friend requests and `high` for the others. A push service that cannot deliver in that time drops the message.
+
 ## Other players
 
 These work without a session; with one, they know the viewer. **A part the viewer may not see is `null`**, as in `Profile`. The rule is one for the whole network ([ADR 0012](../docs/adr/0012-private-by-default.md)): the player always sees everything of themselves; friends see a part unless the player shows it to nobody; anyone else sees it only if the player shows it to everyone; A visitor who is not signed in is a stranger. **A block does not show on a public page**: a viewer whom the player blocked, and a viewer who blocked the player, see exactly what a stranger sees, with `relation: "none"`. Hiding more from them than from a visitor who is not signed in would tell them about the block. A block still keeps them from friend-only parts, from friend requests and from messages.
@@ -366,4 +418,5 @@ With it:
 - Recovery codes, and a list of recent sign-ins with a rough place.
 - Renaming a device, and the choice of a visibility preset for the whole profile.
 - A feed and live updates for the portal. The events a launcher gets over its WebSocket have no portal counterpart yet.
+- Notification kinds beyond the three (a friend who comes online, a game session that opens), and quiet hours.
 - Compressed assets: the cloud sends files as they are; a proxy in front compresses.
