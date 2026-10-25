@@ -9,9 +9,12 @@ use std::collections::{BTreeMap, HashMap};
 use std::hash::{DefaultHasher, Hash as _, Hasher as _};
 use std::path::Path;
 
+use anyplay_api::FriendLists;
 use anyplay_bridge_protocol::{WebReply, WebRequest};
 use anyplay_control::Restriction;
 use serde::Deserialize;
+
+use crate::user_profile;
 
 /// The environment variable that names a test-only file with replacements for the default
 /// answers (see [`Override`]). Unset means the defaults. Meant for testers who try answer
@@ -28,6 +31,10 @@ pub const COMMUNICATION_RESTRICTION: &str = "communicationRestrictionStatus";
 pub struct Context<'a> {
     /// The signed-in account, if the game may act as one.
     pub account: Option<u64>,
+    /// The signed-in account's handle, its online name for the game.
+    pub handle: &'a str,
+    /// The account's friends, as last read from the cloud and kept current by its pushes.
+    pub friends: &'a FriendLists,
     /// The restrictions that limit the account, as last read from the cloud.
     pub restrictions: &'a [Restriction],
     /// Unix seconds.
@@ -40,6 +47,7 @@ pub struct Context<'a> {
 pub fn answer(web: &WebRequest, ctx: &Context<'_>) -> Option<WebReply> {
     match web.api_group.as_str() {
         COMMUNICATION_RESTRICTION => communication_restriction(web, ctx),
+        user_profile::GROUP => user_profile::answer(web, ctx),
         _ => None,
     }
 }
@@ -124,7 +132,7 @@ fn communication_restriction(web: &WebRequest, ctx: &Context<'_>) -> Option<WebR
     Some(reply)
 }
 
-fn json_reply(status: u16, body: &serde_json::Value) -> WebReply {
+pub(crate) fn json_reply(status: u16, body: &serde_json::Value) -> WebReply {
     WebReply {
         status,
         headers: vec![("Content-Type".into(), "application/json".into())],
@@ -146,16 +154,18 @@ fn json_reply(status: u16, body: &serde_json::Value) -> WebReply {
 /// `body_text` is sent as it is (for an empty or non-JSON body). The file is read on every
 /// request, so a tester edits it while the game runs.
 #[derive(Deserialize)]
-struct Override {
+pub(crate) struct Override {
     status: Option<u16>,
     headers: Option<BTreeMap<String, String>>,
     body: Option<serde_json::Value>,
     body_text: Option<String>,
+    /// How the default answer of `userProfile` is shaped (see [`user_profile::Shape`]).
+    pub(crate) shape: Option<user_profile::Shape>,
 }
 
 type Overrides = HashMap<String, HashMap<String, Override>>;
 
-fn read_overrides(path: Option<&Path>) -> Option<Overrides> {
+pub(crate) fn read_overrides(path: Option<&Path>) -> Option<Overrides> {
     let path = path?;
     let text = match std::fs::read_to_string(path) {
         Ok(text) => text,
@@ -174,9 +184,27 @@ fn read_overrides(path: Option<&Path>) -> Option<Overrides> {
 }
 
 impl Override {
+    /// True when the entry gives a whole reply, not only a shape for the default one.
+    pub(crate) fn replaces_reply(&self) -> bool {
+        self.status.is_some()
+            || self.headers.is_some()
+            || self.body.is_some()
+            || self.body_text.is_some()
+    }
+
     fn into_reply(self) -> WebReply {
+        self.into_reply_with(&[])
+    }
+
+    /// The reply, with each `{name}` of `body_text` replaced by its value.
+    pub(crate) fn into_reply_with(self, values: &[(&str, String)]) -> WebReply {
         let body = match (self.body_text, self.body) {
-            (Some(text), _) => text.into_bytes(),
+            (Some(text), _) => values
+                .iter()
+                .fold(text, |text, (name, value)| {
+                    text.replace(&format!("{{{name}}}"), value)
+                })
+                .into_bytes(),
             (None, Some(value)) => serde_json::to_vec(&value).unwrap_or_default(),
             (None, None) => Vec::new(),
         };
@@ -195,6 +223,13 @@ impl Override {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    static NO_FRIENDS: FriendLists = FriendLists {
+        friends: Vec::new(),
+        incoming: Vec::new(),
+        outgoing: Vec::new(),
+        blocked: Vec::new(),
+    };
 
     const PATH: &str = "/v3/users/42/communication/restriction/status";
 
@@ -219,6 +254,8 @@ mod tests {
     fn ctx<'a>(restrictions: &'a [Restriction], overrides: Option<&'a Path>) -> Context<'a> {
         Context {
             account: Some(42),
+            handle: "me",
+            friends: &NO_FRIENDS,
             restrictions,
             now: 1000,
             overrides,

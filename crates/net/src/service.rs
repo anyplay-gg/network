@@ -3837,6 +3837,8 @@ impl Service {
         let overrides = std::env::var_os(webapi::OVERRIDES_VAR).map(PathBuf::from);
         let context = webapi::Context {
             account: state.signed_in.then_some(state.account_id),
+            handle: &state.handle,
+            friends: &self.friends,
             restrictions: &self.restrictions,
             now: now(),
             overrides: overrides.as_deref(),
