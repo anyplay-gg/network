@@ -11,7 +11,7 @@ Rules for every phase:
 
 Needs from earlier phases: parties and the party's messages (S2, done), the tunnels' endpoint with a second ALPN (done for voice), the launcher's online area (phase 1 of the network), and for phases 1 to 3 the bridge in an AnyPlay build of AnyPS5.
 
-Share screen ([ADR 0022](adr/0022-share-screen-is-watch-only-and-asks-the-cloud-for-nothing.md), [spec](../spec/screen-share.md)) takes the media path of phases 0 and 1 first, to the whole party and without the cloud's `Share`: `crates/share`, the net service's screen hub, the share link and the worker's test pattern, and then window capture in place of the engine tap. The phases below still hold for share play's own parts (the invitation, the cloud record, the pad), and their numbers measure the same pipeline.
+Share screen ([ADR 0023](adr/0023-share-screen-is-watch-only-and-asks-the-cloud-for-nothing.md), [spec](../spec/screen-share.md)) takes the media path of phases 0 and 1 first, to the whole party and without the cloud's `Share`: `crates/share`, the net service's screen hub, the share link and the worker's test pattern, and then window capture in place of the engine tap. The phases below still hold for share play's own parts (the invitation, the cloud record, the pad), and their numbers measure the same pipeline.
 
 ## Phase 0: a prototype without the engine
 

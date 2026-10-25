@@ -48,7 +48,7 @@ Party members talk over the tunnels' own iroh endpoint: Opus frames, one voice c
 
 ### Share screen
 
-A player streams the game they are playing to their party, who watch it in their launcher. Watch only: nothing comes back, so no one plays and no pad is involved. It uses share play's media path (the share worker, the datagrams, the loss protection) on a connection of its own, `anyplay/screen/0`, dialed by the streamer to the party's members, and asks the cloud for nothing. The decision is [ADR 0022](adr/0022-share-screen-is-watch-only-and-asks-the-cloud-for-nothing.md) and the protocol the [spec](../spec/screen-share.md).
+A player streams the game they are playing to their party, who watch it in their launcher. Watch only: nothing comes back, so no one plays and no pad is involved. It uses share play's media path (the share worker, the datagrams, the loss protection) on a connection of its own, `anyplay/screen/0`, dialed by the streamer to the party's members, and asks the cloud for nothing. The decision is [ADR 0023](adr/0023-share-screen-is-watch-only-and-asks-the-cloud-for-nothing.md) and the protocol the [spec](../spec/screen-share.md).
 
 ### Share play
 

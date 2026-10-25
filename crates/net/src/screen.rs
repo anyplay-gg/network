@@ -1,4 +1,4 @@
-//! Share screen on the tunnels' iroh endpoint (`spec/screen-share.md`, ADR 0022).
+//! Share screen on the tunnels' iroh endpoint (`spec/screen-share.md`, ADR 0023).
 //!
 //! One [`Hub`] is the screen side of this PC. It is a viewer all the time the player is in a
 //! party: connections from members arrive with the ALPN [`ALPN`], and each is an offer to
