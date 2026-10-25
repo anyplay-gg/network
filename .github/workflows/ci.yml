@@ -27,6 +27,15 @@ jobs:
           toolchain: stable
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      # The share worker on Linux: PipeWire's headers for window capture, and Cisco's OpenH264
+      # binary for the encoder round trip (the worker checks its SHA-256 before loading it).
+      - name: PipeWire headers and OpenH264
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update && sudo apt-get install -y libpipewire-0.3-dev clang
+          curl -sSfL http://ciscobinary.openh264.org/libopenh264-2.6.0-linux64.8.so.bz2 \
+            | bunzip2 > "$RUNNER_TEMP/libopenh264-2.6.0-linux64.8.so"
+          echo "ANYPLAY_OPENH264=$RUNNER_TEMP/libopenh264-2.6.0-linux64.8.so" >> "$GITHUB_ENV"
       - name: Format
         run: |
           cargo fmt --all -- --check
@@ -38,7 +47,7 @@ jobs:
 
   # The net service as released: with the real microphone and speakers (feature `devices`, cpal).
   # On Linux that needs the ALSA headers, so only this job installs them; the jobs above build
-  # without the feature and need no audio headers.
+  # without the feature and need no audio headers. Both need PipeWire's for the share worker.
   devices:
     strategy:
       fail-fast: false
@@ -54,9 +63,9 @@ jobs:
           toolchain: stable
           components: clippy
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-      - name: ALSA headers
+      - name: ALSA and PipeWire headers
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libpipewire-0.3-dev clang
       - name: Clippy with sound devices
         run: cargo clippy -p anyplay-voice -p anyplay-net --all-targets --features anyplay-voice/devices,anyplay-net/devices -- -D warnings
       - name: Build the release binary

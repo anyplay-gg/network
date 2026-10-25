@@ -59,7 +59,9 @@ Role names stay `host` and `guest` on the wire, as in share play; this file says
 
 ## Capture
 
-The streamer's worker takes the picture of one window with Windows Graphics Capture. Which window is decided in this order, and a window of a process the launcher did not start is never taken while it has named some:
+On Linux the worker asks the desktop portal's ScreenCast for one window: the player picks it in the system's dialog each time a stream starts, no choice is remembered, and the portal hands the worker a PipeWire stream of that window alone. The portal cannot be told which window is the game's, so `window` and `pids` are not used there. Cancelling the dialog ends the stream before it starts.
+
+On Windows the streamer's worker takes the picture of one window with Windows Graphics Capture. Which window is decided in this order, and a window of a process the launcher did not start is never taken while it has named some:
 
 1. `window`, the window the launcher found for the game, if it still exists, can be captured, is at least 200 by 150 and belongs to one of `pids` (a handle can be reused).
 2. The largest window of one of `pids` that is visible, not a tool window and at least 200 by 150. The worker looks for up to 8 seconds, because a game that has just started has no window yet. `pids` are the game's process and what it started, as the launcher's job object lists them.
@@ -119,7 +121,7 @@ None of it. Share screen adds no request, no state and no event to the [cloud AP
 ## Moderation and privacy
 
 - Party only: no link, no public stream, no spectator from outside the party. A report names the account; the cloud holds no video, so there is nothing for a moderator to view.
-- The picture comes from the game's window only. On Windows it is Windows Graphics Capture of that window; on Linux the portal's window picker, which the player confirms each time. The desktop and other windows are not captured.
+- The picture comes from the game's window only. On Windows it is Windows Graphics Capture of that window; on Linux the portal's window picker, which the player confirms each time (see Capture). The desktop and other windows are not captured.
 - A viewer's decoder runs in the worker, a process without account or file access of its own, and only after the viewer chose Watch; the parsers and the reassembler are fuzzed ([fuzz](../fuzz/README.md)).
 - Relay-only ("Hide Your IP Address") applies: with either side set, the stream goes through a relay and the launcher says so ("Through a relay: up to 720p60").
 
