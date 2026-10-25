@@ -13,6 +13,20 @@ Needs from earlier phases: parties and the party's messages (S2, done), the tunn
 
 Share screen ([ADR 0023](adr/0023-share-screen-is-watch-only-and-asks-the-cloud-for-nothing.md), [spec](../spec/screen-share.md)) takes the media path of phases 0 and 1 first, to the whole party and without the cloud's `Share`: `crates/share`, the net service's screen hub, the share link and the worker's test pattern, and then window capture in place of the engine tap. The phases below still hold for share play's own parts (the invitation, the cloud record, the pad), and their numbers measure the same pipeline.
 
+### Share screen: what is built and what is not
+
+| Part | State |
+|---|---|
+| Wire formats, loss protection, reassembly, rate controller, control messages (`crates/share`) | built, tested on a shaped link, fuzz targets |
+| Net service: screen hub, `screen_*` commands, worker as a child process (`crates/net`) | built, tested with real endpoints and real worker programs on the test pattern |
+| Viewer window | `window` feature of `crates/share-worker` (minifb); not yet tried on a screen |
+| Window capture of the game, Windows | `capture` feature (Windows Graphics Capture); compiles in CI, not yet tried on a game |
+| Window capture on Linux (the portal's window picker) | not built |
+| Real encoders and decoders: OpenH264 (downloaded binary), then hardware H.264 and AV1 | not built; the test codec stands in |
+| Game sound (system loopback of the game's process, Opus) | not built; the audio datagram is specified and implemented, nothing feeds it |
+| Scaling the picture to the ladder's size, delay trend in the viewer's report, the worker's download and hash check in the launcher | not built |
+| Presence flag "is streaming" and the operator's `share.screen` switch in the cloud | not built (see ADR 0022) |
+
 ## Phase 0: a prototype without the engine
 
 **Goal.** Find out whether video over QUIC datagrams between two real networks is good enough, before any engine, cloud or launcher work. Pick the encoder route.

@@ -35,6 +35,11 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Test
         run: cargo test --workspace
+      - name: Share worker with the viewer window
+        run: cargo clippy -p anyplay-share-worker --all-targets --features window -- -D warnings
+      - name: Share worker with window capture
+        if: runner.os == 'Windows'
+        run: cargo clippy -p anyplay-share-worker --all-targets --features capture -- -D warnings
 
   # The net service as released: with the real microphone and speakers (feature `devices`, cpal).
   # On Linux that needs the ALSA headers, so only this job installs them; the jobs above build

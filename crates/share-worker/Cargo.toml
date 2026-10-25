@@ -15,9 +15,20 @@ name = "anyplay_share_worker"
 name = "anyplay-share"
 path = "src/main.rs"
 
+[features]
+# A window for the viewer, through minifb (MIT or Apache-2.0). Off by default: on Linux it needs
+# the display libraries at run time, and the tests have no use for it.
+window = ["dep:minifb"]
+# Capture of the game's window, through Windows Graphics Capture. Windows only.
+capture = ["dep:windows-capture"]
+
 [dependencies]
 anyplay-share = { path = "../share" }
+minifb = { version = "0.28", optional = true }
 serde_json.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-capture = { version = "2", optional = true }
 
 [dev-dependencies]
 anyplay-control = { path = "../control" }

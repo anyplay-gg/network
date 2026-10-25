@@ -8,9 +8,13 @@
 //! (the test codec now, hardware codecs later) and [`viewer::FrameSink`] (where pictures go: a
 //! window, or a counter in tests).
 
+#[cfg(feature = "capture")]
+pub mod capture;
 pub mod host;
 pub mod socket;
 pub mod viewer;
+#[cfg(feature = "window")]
+pub mod window;
 
 use std::sync::mpsc;
 
@@ -23,8 +27,8 @@ pub struct Port {
     pub to_service: mpsc::Sender<FromWorker>,
 }
 
-/// What this build can do: the test codec, from the test pattern. Real codecs and window
-/// capture are added behind the same traits.
+/// What this build can do: the test codec, from the test pattern, and window capture when the
+/// build has it (Windows, feature `capture`). Real codecs are added behind the same traits.
 pub fn capabilities() -> Capabilities {
     let test = CodecCaps {
         codec: "test".into(),
@@ -36,6 +40,6 @@ pub fn capabilities() -> Capabilities {
     Capabilities {
         encode: vec![test.clone()],
         decode: vec![test],
-        capture: false,
+        capture: cfg!(all(windows, feature = "capture")),
     }
 }
