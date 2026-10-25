@@ -1573,7 +1573,10 @@ mod join_code_tests {
 
     #[test]
     fn the_code_is_read_out_of_a_link() {
-        assert_eq!(join_code_from_text("k3x9m2pqra").as_deref(), Some("k3x9m2pqra"));
+        assert_eq!(
+            join_code_from_text("k3x9m2pqra").as_deref(),
+            Some("k3x9m2pqra")
+        );
         assert_eq!(
             join_code_from_text("anyps5://v1/join/K3X9M2PQRA/").as_deref(),
             Some("k3x9m2pqra")
@@ -1586,8 +1589,69 @@ mod join_code_tests {
         assert_eq!(join_code_from_text("short"), None);
         assert_eq!(join_code_from_text(""), None);
     }
-}
 
+    fn person() -> Account {
+        Account {
+            id: AccountId(2),
+            handle: "lumen".into(),
+        }
+    }
+
+    #[test]
+    fn a_redeemed_code_is_its_kind_and_its_invitation() {
+        let party = Redeemed::Party(PartyInvitation {
+            id: "I1".into(),
+            from: person(),
+            party: "P1".into(),
+            members: 2,
+            expires: 5,
+        });
+        let json = serde_json::to_value(&party).unwrap();
+        assert_eq!(json["kind"], "party");
+        assert_eq!(json["invitation"]["party"], "P1");
+        assert_eq!(serde_json::from_value::<Redeemed>(json).unwrap(), party);
+
+        let session = Redeemed::Session(Invitation {
+            id: "I2".into(),
+            from: person(),
+            session: "S1".into(),
+            title_id: "GAME00001".into(),
+            title: "Game".into(),
+            version: "01.00".into(),
+            expires: 5,
+        });
+        let json = serde_json::to_value(&session).unwrap();
+        assert_eq!(json["kind"], "session");
+        assert_eq!(serde_json::from_value::<Redeemed>(json).unwrap(), session);
+    }
+
+    #[test]
+    fn the_join_types_keep_their_wire_shape() {
+        let code = JoinCode {
+            code: "k3x9m2pqra".into(),
+            url: "https://anyplaynet.com/join/k3x9m2pqra".into(),
+            expires: 9,
+        };
+        let json = serde_json::to_string(&code).unwrap();
+        assert_eq!(
+            json,
+            r#"{"code":"k3x9m2pqra","url":"https://anyplaynet.com/join/k3x9m2pqra","expires":9}"#
+        );
+        assert_eq!(serde_json::from_str::<JoinCode>(&json).unwrap(), code);
+
+        let view = JoinView {
+            handle: "lumen".into(),
+            title: None,
+            members: 1,
+            max_members: 8,
+            kind: JoinKind::Party,
+        };
+        let json = serde_json::to_value(&view).unwrap();
+        assert_eq!(json["kind"], "party");
+        assert!(json["title"].is_null());
+        assert_eq!(serde_json::from_value::<JoinView>(json).unwrap(), view);
+    }
+}
 
 #[cfg(test)]
 mod tests {
