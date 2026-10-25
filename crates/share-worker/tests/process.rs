@@ -9,7 +9,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyplay_control::{ScreenPhase, ScreenSource};
-use anyplay_net::screen::{GameWindow, Hub, Member, Members, Output, View, Workers};
+#[cfg(windows)]
+use anyplay_net::screen::GameWindow;
+use anyplay_net::screen::{Hub, Member, Members, Output, View, Workers};
 use anyplay_net::traffic::Traffic;
 use anyplay_net::tunnel::{Options, RelayAccess, Tunnels};
 use anyplay_net::worker_process::ProcessWorkers;
