@@ -748,6 +748,48 @@ impl Service {
                     |_, rarity| rarity,
                 );
             }
+            Command::Compare { account, title_id } => {
+                if !is_title_id(&title_id) {
+                    self.fail(id, bad_title());
+                    return;
+                }
+                let Some(cloud) = self.signed_in_cloud(id) else {
+                    return;
+                };
+                self.request(
+                    id,
+                    async move { cloud.compare(account, &title_id).await },
+                    |_, compare| compare,
+                );
+            }
+            Command::SecretTrophies { title_id, numbers } => {
+                if !is_title_id(&title_id) {
+                    self.fail(id, bad_title());
+                    return;
+                }
+                let Some(cloud) = self.signed_in_cloud(id) else {
+                    return;
+                };
+                self.request(
+                    id,
+                    async move { cloud.set_secret(&title_id, numbers, false).await },
+                    |_, changed| changed,
+                );
+            }
+            Command::RevealTrophies { title_id, numbers } => {
+                if !is_title_id(&title_id) {
+                    self.fail(id, bad_title());
+                    return;
+                }
+                let Some(cloud) = self.signed_in_cloud(id) else {
+                    return;
+                };
+                self.request(
+                    id,
+                    async move { cloud.set_secret(&title_id, numbers, true).await },
+                    |_, changed| changed,
+                );
+            }
             Command::RunReport {
                 title_id,
                 version,
