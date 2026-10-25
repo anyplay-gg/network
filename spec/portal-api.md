@@ -81,7 +81,7 @@ Counted by the cloud's settings (`docs/configuration.md` of the cloud), per wind
 - Asking for a code (`sign-in/email`, `sign-in/code/resend`, `step-up/email`, `account/email`): per address and per client address, as for `/v1/auth/email`. Typing a code and `passkey/*`: per client address, as for `/v1/auth/code`.
 - A new browser session (`GET /session` without a live cookie): 300 per 15 minutes per client address, a bucket of its own, so many page loads behind one address (a shared network) cannot lock out signing in. A request that has its session is not counted. Every new session is a row in the store, because the CSRF token lives in it; the row ends with the session's idle time.
 - Every other request of a signed-in session: per account, shared with `/v1` (120 per minute).
-- Public profiles (`users/{name}...`) and `compatibility`: 120 per minute per client address.
+- Public profiles (`users/{name}...`), `compatibility` and join pages (`join/{code}`): 120 per minute per client address.
 - Avatar uploads: 5 per hour per account.
 - Starting a connection (`me/links/{provider}/start`): 10 per hour per account.
 - Notifications (`push`, `push/subscription`) count with every other request of a signed-in session. The cloud itself sends at most 16 requests at a time to push services from one node, and drops a notification when 2000 wait.
@@ -163,6 +163,14 @@ When the player has signed in, the step is `handoff` and `flow.redirect` is the 
 | `POST /ban/appeal` | `{text}` | `{filed}`. One appeal per action, 1 to 1,000 characters. |
 | `GET /link/{code}` | | `{handle}`: the account the link opens. Needs no session. `not_found` when the code is unknown, used or older than 60 seconds. Counted per client address, as `passkey/*`. |
 | `POST /link/{code}` | `{}` | `SessionView` of a new session signed in as that account (`flow.step` is `done`; the answer sets the cookie, and the browser's earlier session ends). Uses the code up, whatever comes of it. The browser's session and CSRF token are checked first, and a request that fails there leaves the code alone. `not_found` when the code is unknown, used or expired, or when the device that asked is no longer signed in to the account. `banned` when the account is banned: nobody is signed in, the session learns of the ban (`flow.step` is `banned`) and the page shows the statement (`GET /ban`) and the appeal. |
+
+### Join pages
+
+The page `/join/<code>` of the account web is what the link on a player's Discord profile opens ([join codes](cloud-api.md#join-codes)). It shows who invites and to what, and two actions: **Open in AnyPlay** (the launcher's link `anyps5://v1/join/<code>`) and **Get AnyPlay**. A visitor without a session is first asked to sign in or create an account and then comes back to the page. The page only reads: it joins nobody, and opening the launcher still ends in the launcher's own question.
+
+| Request | Body | Answer |
+|---|---|---|
+| `GET /join/{code}` | | `JoinView {handle, title, members, max_members, kind}`. `kind` is `session` or `party`; `title` is the game's title as text, null for a party; `members` and `max_members` count the session or the party. Needs no session and changes nothing. Nothing else is revealed: no account ID, no title ID, no member names. `not_found` when the code is unknown, expired, revoked or opens nothing now (one answer for all, so a visitor learns nothing from the difference). |
 
 ## Account
 
