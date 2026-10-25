@@ -46,6 +46,10 @@ A group of friends, up to 8, that stays together across games and game sessions:
 
 Party members talk over the tunnels' own iroh endpoint: Opus frames, one voice connection to each other member next to the game tunnel ([ADR 0017](adr/0017-voice-has-a-connection-of-its-own.md)), no media server. Only members the party names can connect. Push-to-talk or open microphone, mute per member, and a volume per member. In-game voice of games that use the platform's voice libraries can come later through the bridge.
 
+### Share screen
+
+A player streams the game they are playing to their party, who watch it in their launcher. Watch only: nothing comes back, so no one plays and no pad is involved. It uses share play's media path (the share worker, the datagrams, the loss protection) on a connection of its own, `anyplay/screen/0`, dialed by the streamer to the party's members, and asks the cloud for nothing. The decision is [ADR 0022](adr/0022-share-screen-is-watch-only-and-asks-the-cloud-for-nothing.md) and the protocol the [spec](../spec/screen-share.md).
+
 ### Share play
 
 A player streams their running game to one friend in their party, who watches, takes over their pad, or plays beside them as a second player. Video, sound and pad input go through the tunnels on a connection of their own, like voice, and the host decides and can stop at any time. The friend needs neither the game nor its files and gets neither. The engine only copies the picture and sound out and takes a pad in; a separate worker program encodes and decodes. The decisions are in [ADR 0019](adr/0019-share-play-streams-through-a-worker.md), the protocol in the [spec](../spec/share-play.md), and the order of work in the [plan](share-play-plan.md). The public cloud keeps it switched off until a legal review is done.

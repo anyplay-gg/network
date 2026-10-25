@@ -1,0 +1,26 @@
+# Share screen is watch only, and asks the cloud for nothing
+
+Extends [ADR 0019](0019-share-play-streams-through-a-worker.md).
+
+A player can stream the game they are playing to their party, like Go Live in a chat program or Share Screen on a console. Members see the picture and hear the sound; nothing comes back. This is the first slice of share play that can ship, and it differs from the rest of share play in four choices. The [spec](../../spec/screen-share.md) has the details.
+
+**It is not gated by `share.enabled`.** ADR 0019 keeps share play off on the public cloud until a legal review, for one reason: in `hand_over` and `together` a guest *plays* a game they may not own, on the host's copy. Share screen has no pad, no keyboard and no message that carries input, so nobody plays; a member watches the host's own copy running on the host's PC, as they would over the host's shoulder or on a video site. That is the case [ADR 0021](0021-the-line-is-drawn-at-the-law.md) allows ("play together by streaming"), at the lowest end of it. The patent question of the codecs (ADR 0019) is the same for every video feature and is not made smaller or larger by the gate, so it stays a review item of its own. What still holds: only members of the host's party, never a public stream; nothing starts without a person pressing a button on each side; nothing is recorded or stored by us. If the review finds that watching too needs a switch, the cloud's `GET /v1/info` gains `share.screen: false` and the launcher hides the button; the wire does not change. The input modes stay behind `share.enabled` as before.
+
+**The cloud learns nothing.** Share play needs a `Share` record, invitations and events because it is one host and one named guest with a pad. Share screen needs none: the party's member list already names every member's tunnel key and relay, and a connection from a proven member key is all the permission there is. The host dials the members; a member's connection arriving is the offer; the member's own `watch` message is the acceptance. So the cloud sees no new request, stores no new state, and needs no change to run it tonight. The cost is that the party cannot see from the cloud that someone is streaming (a presence flag can be added later), and that a relay quota for shares cannot be enforced centrally; the relay's per-client rate limit is the hard limit, as ADR 0007 says.
+
+**The host dials; viewers opt in.** Voice dials by the smaller key because both ends are equal. Here the roles differ, so the dialing side is the streamer, and the same pair may hold two such connections when both stream. A member who has not chosen to watch receives no video and decodes nothing: the host sends nothing but the small `hello` until the member's `watch` arrives. Up to four members watch at once (the host encodes once and sends the packets to each); the stream's rate follows the weakest watcher.
+
+**What is captured is the game's window, never the desktop.** The first stage reads the picture of the window of the game's process through the system's window capture (Windows Graphics Capture; on Linux the portal's window picker, which asks the player every time), so notifications, other windows and the launcher cannot leak into the stream. The engine tap that ADR 0019 chose (copy the presented frame into a ring) stays the better source, with less latency and no capture API, and replaces the window capture when AnyPS5 carries it; both sit behind the `FrameSource` seam of the share worker, so nothing else changes. Everything downstream is share play unchanged: the same share worker, the same video and audio datagrams, loss protection, rate controller and codecs (AV1 when both can, H.264 otherwise, never HEVC), on a QUIC connection with the ALPN `anyplay/screen/0` on the tunnels' endpoint.
+
+## Consequences
+
+- The wire formats of [share play](../../spec/share-play.md) are used as they are, so share play's modes later extend this connection instead of replacing it. A new ALPN is used because the roles and the permission rule differ; ADR 0019's `anyplay/share/0` stays reserved for the one-guest share with the cloud's record.
+- The net service starts the share worker for both sides (host: capture and encode; viewer: decode and a window). The launcher only commands and displays; it never decodes video.
+- Version 0 carries video from a test picture or from window capture and carries game sound only where the worker can tap it (system loopback for the game's process); where it cannot, the stream is silent and says so.
+
+## Considered options
+
+- **Reuse share play's invitation and `Share` record, mode `watch`:** one path for everything, but it needs the cloud (a deploy and a store) for a case that is a party feature, and it limits a stream to one guest.
+- **A cloud presence flag for "is streaming" now:** nicer in the friends list, but it needs a cloud change and a deploy for no function; the offer arrives over the tunnel anyway. Later.
+- **Viewers dial the host:** needs the viewers to learn that the host streams, which is exactly the cloud state avoided above.
+- **A public link or a spectator from outside the party:** out; the party is the privacy boundary, as in share play.
