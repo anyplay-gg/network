@@ -754,6 +754,128 @@ pub struct Count {
     pub platinum: u32,
 }
 
+impl Grade {
+    /// The trophy points a trophy of this grade is worth (ADR 0029, `docs/adr`).
+    pub const fn points(self) -> u32 {
+        match self {
+            Grade::Bronze => 10,
+            Grade::Silver => 25,
+            Grade::Gold => 60,
+            Grade::Platinum => 150,
+        }
+    }
+}
+
+impl Count {
+    /// The trophy points of these trophies; saturates instead of overflowing.
+    pub fn points(&self) -> u32 {
+        let sum = u64::from(self.bronze) * u64::from(Grade::Bronze.points())
+            + u64::from(self.silver) * u64::from(Grade::Silver.points())
+            + u64::from(self.gold) * u64::from(Grade::Gold.points())
+            + u64::from(self.platinum) * u64::from(Grade::Platinum.points());
+        u32::try_from(sum).unwrap_or(u32::MAX)
+    }
+}
+
+/// The highest trophy level.
+pub const MAX_TROPHY_LEVEL: u16 = 100;
+
+/// The trophy points at which `level` starts: `6 * (level - 1) * (level + 10)`. Level 1 starts at
+/// 0 and each step costs 12 points more than the one before. A level above
+/// [`MAX_TROPHY_LEVEL`] counts as the highest.
+pub const fn level_floor(level: u16) -> u32 {
+    let level = if level > MAX_TROPHY_LEVEL {
+        MAX_TROPHY_LEVEL
+    } else {
+        level
+    } as u32;
+    if level <= 1 {
+        0
+    } else {
+        6 * (level - 1) * (level + 10)
+    }
+}
+
+/// A player's trophy points and the level they make (ADR 0029, `docs/adr`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TrophyLevel {
+    /// All the points the player's trophies are worth.
+    pub points: u32,
+    /// 1 to [`MAX_TROPHY_LEVEL`].
+    pub level: u16,
+    /// The points at which this level started.
+    pub from: u32,
+    /// The points at which the next level starts; `None` at the highest level.
+    pub to: Option<u32>,
+}
+
+impl TrophyLevel {
+    /// The level that `points` make.
+    pub fn of(points: u32) -> Self {
+        let mut level = 1;
+        while level < MAX_TROPHY_LEVEL && points >= level_floor(level + 1) {
+            level += 1;
+        }
+        Self {
+            points,
+            level,
+            from: level_floor(level),
+            to: (level < MAX_TROPHY_LEVEL).then(|| level_floor(level + 1)),
+        }
+    }
+}
+
+/// Trophies counted by grade, with the points they are worth.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Tally {
+    pub counts: Count,
+    pub points: u32,
+}
+
+impl Tally {
+    pub fn of(counts: Count) -> Self {
+        Self {
+            counts,
+            points: counts.points(),
+        }
+    }
+}
+
+/// One player's side of a trophy comparison.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CompareSide {
+    pub account: u64,
+    /// The player's trophies in the title, by number: only what the caller may see.
+    pub trophies: Vec<Trophy>,
+    /// The trophies above, counted, with their points.
+    pub title: Tally,
+    /// All of the player's trophies the caller may see, in every title.
+    pub total: Tally,
+    /// The level the `total` makes.
+    pub level: TrophyLevel,
+}
+
+/// The answer of `GET /v1/accounts/{id}/compare/{title}`: the caller (`you`) next to another
+/// player (`them`) in one title.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TrophyCompare {
+    pub title_id: String,
+    pub you: CompareSide,
+    pub them: CompareSide,
+}
+
+/// Trophy numbers of one title, to mark as secret or to reveal.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TrophyNumbers {
+    pub numbers: Vec<u16>,
+}
+
+/// How many trophies a mark or a reveal changed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SecretsChanged {
+    pub changed: u32,
+}
+
 /// The short form of a profile that friends see in their list.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Card {
@@ -986,6 +1108,9 @@ pub struct ProfilePage {
     /// The trophies by grade; `None` when they are hidden from the caller.
     #[serde(default)]
     pub trophies: Option<Count>,
+    /// The points and level of those trophies; `None` when they are hidden from the caller.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub level: Option<TrophyLevel>,
     /// Never null: an empty list does not say whether there are hidden connections.
     #[serde(default)]
     pub links: Vec<ProfileLink>,
@@ -2289,5 +2414,44 @@ mod tests {
             .filter(|s| is_assignable(virtual_address(*s).unwrap()))
             .count() as u32;
         assert_eq!(counted, ASSIGNABLE_ADDRESSES);
+    }
+
+    #[test]
+    fn points_and_levels_follow_the_adr() {
+        let count = Count {
+            bronze: 20,
+            silver: 8,
+            gold: 3,
+            platinum: 1,
+        };
+        assert_eq!(count.points(), 20 * 10 + 8 * 25 + 3 * 60 + 150);
+        assert_eq!(Count::default().points(), 0);
+        let max = Count {
+            bronze: u32::MAX,
+            ..Count::default()
+        };
+        assert_eq!(max.points(), u32::MAX);
+        assert_eq!(TrophyLevel::of(0).level, 1);
+        assert_eq!(TrophyLevel::of(71).level, 1);
+        assert_eq!(TrophyLevel::of(72).level, 2);
+        assert_eq!(level_floor(3), 6 * 2 * 13);
+        let first = TrophyLevel::of(10);
+        assert_eq!((first.from, first.to), (0, Some(72)));
+        assert_eq!(level_floor(100), 65_340);
+        assert_eq!(TrophyLevel::of(65_339).level, 99);
+        let top = TrophyLevel::of(65_340);
+        assert_eq!((top.level, top.to), (100, None));
+        assert_eq!(TrophyLevel::of(u32::MAX).level, 100);
+        // Every level starts where the formula says, and each step is 12 points longer.
+        for level in 1..MAX_TROPHY_LEVEL {
+            let reached = TrophyLevel::of(level_floor(level + 1));
+            assert_eq!(reached.level, level + 1);
+            assert_eq!(TrophyLevel::of(level_floor(level + 1) - 1).level, level);
+            if level > 1 {
+                let step = level_floor(level + 1) - level_floor(level);
+                let before = level_floor(level) - level_floor(level - 1);
+                assert_eq!(step, before + 12);
+            }
+        }
     }
 }

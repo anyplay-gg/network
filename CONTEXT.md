@@ -161,6 +161,21 @@ The short form of a profile that friends see in their list: avatar, handle, what
 The network's note that a player earned one trophy: title ID, the trophy's number in the game, its grade and the time. Names and pictures of trophies are not part of it; they come from each player's own copy of the game.
 _Avoid_: Achievement (the word of other platforms), trophy (alone, when the record is meant)
 
+**Trophy points**:
+The worth of a trophy record by its grade (bronze 10, silver 25, gold 60, platinum 150). A player's trophy points are the sum over the records the viewer may see. Our own numbers ([ADR 0029](docs/adr/0029-trophy-points-and-levels.md)).
+_Avoid_: Score, XP
+
+**Trophy level**:
+The level from 1 to 100 that a player's trophy points make, with the points at which it started and the next one starts. Shown on the profile next to the trophy counts and follows their visibility.
+_Avoid_: Rank, account level
+
+**Trophy comparison**:
+Two players' trophy records in one title side by side (ID, grade and time each), with their totals, points and levels. It shows only what each player's trophy visibility allows; ids only, never names or art.
+_Avoid_: Leaderboard (that ranks many players)
+
+**Secret trophy**:
+A trophy record that the owner's launcher marked as secret because the game hides it. Nobody but the owner sees, counts or hears of it until the owner reveals it; it then behaves like any record.
+
 **Rarity**:
 The share of players with a title who earned a trophy, counted from trophy records.
 

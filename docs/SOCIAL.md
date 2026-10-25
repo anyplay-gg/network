@@ -22,6 +22,8 @@ A handle, an avatar, a short text (160 characters, no links), up to three favour
 
 The launcher already reads a game's trophy list from the dump and the trophies the player earned from the records AnyPS5 writes while the game runs. It sends the cloud a **trophy record** for each earned trophy: title ID, trophy number, grade (bronze, silver, gold, platinum) and the time. Playtime goes the same way: title ID, day and minutes. The cloud keeps the highest number it has seen for each day, so the launcher can send its whole history again without counting twice.
 
+The grades are worth points (bronze 10 up to platinum 150) and the points make a level from 1 to 100, shown on the profile ([ADR 0029](adr/0029-trophy-points-and-levels.md)). A player can compare their trophies in one game with a friend's, side by side. A trophy the game keeps secret stays hidden from others until the owner reveals it.
+
 From the records of all players the cloud counts each trophy's **rarity**: the share of players with the title who earned it. A friend who owns the game sees names and pictures from their own copy; one who does not sees grades, counts and rarity.
 
 Later, when AnyPS5 builds report trophy unlocks through the bridge, the net service records them the moment they happen, without waiting for the launcher to read the files.
