@@ -533,9 +533,13 @@ mod pipewire_source {
         Ok(())
     }
 
-    /// The formats the worker takes: 32-bit RGB in either order, any size, at most 60 pictures a
-    /// second (the most a stream takes; more would only be copied and dropped). No DMA-BUF
-    /// modifiers are offered, so the compositor sends pictures in shared memory.
+    /// The most pictures a second taken from the compositor: what Linux's only encoder, OpenH264
+    /// in software, sends (more would only be copied and dropped).
+    const MAX_FPS: u32 = crate::limits::Limits::SOFTWARE.fps;
+
+    /// The formats the worker takes: 32-bit RGB in either order, any size, at most [`MAX_FPS`]
+    /// pictures a second. No DMA-BUF modifiers are offered, so the compositor sends pictures in
+    /// shared memory.
     fn format_param() -> Option<Vec<u8>> {
         let object = pw::spa::pod::object!(
             pw::spa::utils::SpaTypes::ObjectParamFormat,
@@ -584,9 +588,15 @@ mod pipewire_source {
                 Choice,
                 Range,
                 Fraction,
-                pw::spa::utils::Fraction { num: 60, denom: 1 },
+                pw::spa::utils::Fraction {
+                    num: MAX_FPS,
+                    denom: 1
+                },
                 pw::spa::utils::Fraction { num: 0, denom: 1 },
-                pw::spa::utils::Fraction { num: 60, denom: 1 }
+                pw::spa::utils::Fraction {
+                    num: MAX_FPS,
+                    denom: 1
+                }
             ),
         );
         pw::spa::pod::serialize::PodSerializer::serialize(
@@ -631,6 +641,41 @@ mod pipewire_source {
             if let Some(thread) = self.thread.take() {
                 let _ = thread.join();
             }
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use pw::spa::pod::{ChoiceValue, Value, deserialize::PodDeserializer};
+        use pw::spa::utils::{Choice, ChoiceEnum, Fraction};
+
+        #[test]
+        fn the_compositor_is_asked_for_no_more_pictures_than_the_encoder_sends() {
+            let bytes = format_param().unwrap();
+            let Ok((_, Value::Object(format))) = PodDeserializer::deserialize_any_from(&bytes)
+            else {
+                panic!("the format is not an object");
+            };
+            let rate = format
+                .properties
+                .iter()
+                .find(|p| {
+                    p.key == pw::spa::param::format::FormatProperties::VideoFramerate.as_raw()
+                })
+                .map(|p| &p.value);
+            let Some(Value::Choice(ChoiceValue::Fraction(Choice(
+                _,
+                ChoiceEnum::Range { default, max, .. },
+            )))) = rate
+            else {
+                panic!("no frame rate range: {rate:?}");
+            };
+            let most = Fraction {
+                num: crate::limits::Limits::SOFTWARE.fps,
+                denom: 1,
+            };
+            assert_eq!((*default, *max), (most, most));
         }
     }
 }

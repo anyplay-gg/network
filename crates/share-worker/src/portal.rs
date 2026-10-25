@@ -7,8 +7,9 @@
 //! refused, since some pickers offer screens whatever is asked for.
 //!
 //! The portal speaks D-Bus, which `ashpd` (MIT) does on a tokio runtime; the worker itself is
-//! not async, so the runtime lives here, one thread, for as long as the stream does. Dropping
-//! [`PortalWindow`] closes the portal session, which ends the PipeWire stream.
+//! not async, so a current-thread runtime of its own is kept with the window. It runs only while
+//! the worker waits on the portal (the dialog, and closing the session) and is idle otherwise.
+//! Dropping [`PortalWindow`] closes the portal session, which ends the PipeWire stream.
 
 use std::os::fd::OwnedFd;
 
