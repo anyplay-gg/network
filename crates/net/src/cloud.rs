@@ -1334,6 +1334,7 @@ mod tests {
     /// A cloud that answers `/v1/info` with the `X-AnyPlay-Client` it saw as the version, and
     /// `426` with a minimum on the event path.
     async fn echo_cloud() -> String {
+        crate::install_crypto();
         let app = axum::Router::new()
             .route(
                 path::INFO,
