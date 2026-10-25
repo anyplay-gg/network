@@ -11,9 +11,9 @@ use anyplay_api::{
     FriendRequestAnswer, Info, Invite, Invited, JoinCode, JoinSession, MarkRead, Me, Message,
     Messages, MoveParty, Party, PartyEndpoint, PartyInvitations, PlaytimeAdded, PlaytimeEntry,
     PlaytimeUpload, PresenceRequest, Privacy, ProfilePage, Rarity, ReactionRequest, Reactions,
-    Redeemed, RefreshRequest, Relays, Report, RunReport, RunSummary, SendMessage, Session,
-    SignedIn, SignupRequest, Statement, Statements, TicketRequest, Tokens, TrophiesAdded, Trophy,
-    TrophyUpload, UpdateParty, UpdateSession, path,
+    Redeemed, RefreshRequest, Relays, Report, RunReport, RunSummary, SecretsChanged, SendMessage,
+    Session, SignedIn, SignupRequest, Statement, Statements, TicketRequest, Tokens, TrophiesAdded,
+    Trophy, TrophyCompare, TrophyNumbers, TrophyUpload, UpdateParty, UpdateSession, path,
 };
 use anyplay_proof::{DeviceKey, Subject};
 use reqwest::{Method, StatusCode};
@@ -558,6 +558,42 @@ impl Cloud {
     pub async fn rarity(&self, title_id: &str) -> Result<Rarity, CloudError> {
         self.call::<(), _>(Method::GET, &path::fill(path::RARITY, title_id), None)
             .await
+    }
+
+    /// The player's trophies in a title next to another account's. `title_id` must pass
+    /// [`anyplay_api::is_title_id`].
+    pub async fn compare(
+        &self,
+        account: AccountId,
+        title_id: &str,
+    ) -> Result<TrophyCompare, CloudError> {
+        self.call::<(), _>(
+            Method::GET,
+            &path::fill_title(path::COMPARE, account, title_id),
+            None,
+        )
+        .await
+    }
+
+    /// Marks trophies of a title as secret, or reveals them when `reveal` is true. `title_id`
+    /// must pass [`anyplay_api::is_title_id`].
+    pub async fn set_secret(
+        &self,
+        title_id: &str,
+        numbers: Vec<u16>,
+        reveal: bool,
+    ) -> Result<SecretsChanged, CloudError> {
+        let route = if reveal {
+            path::MY_TROPHIES_REVEAL
+        } else {
+            path::MY_TROPHIES_SECRET
+        };
+        self.call(
+            Method::PUT,
+            &path::fill(route, title_id),
+            Some(&TrophyNumbers { numbers }),
+        )
+        .await
     }
 
     /// Tells how a game ran. `title_id` must pass [`anyplay_api::is_title_id`]. A new report for

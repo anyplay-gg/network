@@ -122,6 +122,24 @@ pub enum Command {
     Rarity {
         title_id: String,
     },
+    /// The player's trophies in one title next to another account's: the cloud's
+    /// `TrophyCompare`. `not_found` when that account's trophies are hidden from the player.
+    Compare {
+        account: AccountId,
+        title_id: String,
+    },
+    /// Marks trophies of a title as secret: the game hides them until they are revealed.
+    /// Answers `{changed}`.
+    SecretTrophies {
+        title_id: String,
+        numbers: Vec<u16>,
+    },
+    /// Reveals secret trophies of a title to everyone who may see the player's trophies.
+    /// Answers `{changed}`.
+    RevealTrophies {
+        title_id: String,
+        numbers: Vec<u16>,
+    },
     /// How a game ran; the net service adds the player's system.
     RunReport {
         title_id: String,
@@ -1183,6 +1201,40 @@ mod tests {
                 Command::React {
                     item: 77,
                     reaction: None
+                }
+            ))
+        );
+        assert_eq!(
+            parse_command(r#"{"id":8,"do":"compare","account":42,"title_id":"GAME00001"}"#),
+            Ok((
+                8,
+                Command::Compare {
+                    account: AccountId(42),
+                    title_id: "GAME00001".into()
+                }
+            ))
+        );
+        assert_eq!(
+            parse_command(
+                r#"{"id":8,"do":"secret_trophies","title_id":"GAME00001","numbers":[4,5]}"#
+            ),
+            Ok((
+                8,
+                Command::SecretTrophies {
+                    title_id: "GAME00001".into(),
+                    numbers: vec![4, 5]
+                }
+            ))
+        );
+        assert_eq!(
+            parse_command(
+                r#"{"id":8,"do":"reveal_trophies","title_id":"GAME00001","numbers":[4]}"#
+            ),
+            Ok((
+                8,
+                Command::RevealTrophies {
+                    title_id: "GAME00001".into(),
+                    numbers: vec![4]
                 }
             ))
         );

@@ -89,6 +89,9 @@ A **restriction** has a `kind` and, when they apply, `until`, `rule`, `reason`, 
 | `upload_trophies` | `title_id`, `trophies` | `{added}` |
 | `trophies` | `account` | `{titles}`, or the error `not_found` when they are hidden |
 | `rarity` | `title_id` | `{title_id, players, trophies}` |
+| `compare` | `account`, `title_id` | `TrophyCompare` of [Comparing](cloud-api.md#trophies): the player (`you`) next to that account (`them`) in one title, with points and level per side; ids only, the launcher adds names and art from the game's own trophy file. `not_found` when that account does not exist or its trophies are hidden; `bad_request` for the player's own account |
+| `secret_trophies` | `title_id`, `numbers` | `{changed}`: marks the trophies as secret (a game hides them; the launcher knows which); idempotent |
+| `reveal_trophies` | `title_id`, `numbers` | `{changed}`: shows secret trophies to everyone who may see the player's trophies; there is no way back |
 | `run_report` | `title_id`, `version`, `toolkit`, `verdict` (`no_start`, `menus`, `in_game`, `playable`) | `{}`; the service adds the player's system |
 | `run_reports` | `title_id`, `version` (or null) | `{title_id, version, reports, verdict, counts}` |
 | `cards` | `accounts` | `{cards}` |

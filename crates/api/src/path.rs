@@ -95,6 +95,11 @@ pub fn fill2(path: &str, id: impl std::fmt::Display, account: impl std::fmt::Dis
     fill(path, id).replacen("{account}", &account.to_string(), 1)
 }
 
+/// The path with `{id}` and `{title}` replaced.
+pub fn fill_title(path: &str, id: impl std::fmt::Display, title: impl std::fmt::Display) -> String {
+    fill(path, id).replacen("{title}", &title.to_string(), 1)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -106,6 +111,10 @@ mod tests {
             "/v1/friends/requests/42/accept"
         );
         assert_eq!(fill2(SESSION_MEMBER, "s1", 7), "/v1/sessions/s1/members/7");
+        assert_eq!(
+            fill_title(COMPARE, 7, "GAME00001"),
+            "/v1/accounts/7/compare/GAME00001"
+        );
         assert_eq!(
             fill(CONVERSATION_MESSAGES, "c1"),
             "/v1/conversations/c1/messages"
