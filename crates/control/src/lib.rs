@@ -582,7 +582,7 @@ impl Failure {
         Self {
             code: error.error.as_str().to_owned(),
             message: error.message.clone(),
-            expected: error.expected.clone().map(Box::new),
+            expected: error.expected.clone(),
             restriction: Restriction::of_error(error).map(Box::new),
             minimum: error.minimum.as_deref().map(str::to_owned),
         }
