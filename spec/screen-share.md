@@ -2,7 +2,7 @@
 
 How a player streams the game they are playing to the members of their party, who watch it in their launcher. Watch only: the picture and the sound go one way and nothing comes back. Version 0, a draft: it changes without notice until version 1.
 
-The decision is [ADR 0022](../docs/adr/0022-share-screen-is-watch-only-and-asks-the-cloud-for-nothing.md). It is the watch-only part of [share play](share-play.md) and uses its media path unchanged: the [video and audio datagrams](share-play.md#video-datagram), the [loss protection](share-play.md#packetising-and-loss-protection), the [codecs](share-play.md#codecs), the [rate and its ladder](share-play.md#congestion-control-and-the-rate), the [share link](share-play.md#the-share-link) and the share worker. This file lists only what differs: who connects to whom, the messages, the control protocol and the stops.
+The decision is [ADR 0023](../docs/adr/0023-share-screen-is-watch-only-and-asks-the-cloud-for-nothing.md). It is the watch-only part of [share play](share-play.md) and uses its media path unchanged: the [video and audio datagrams](share-play.md#video-datagram), the [loss protection](share-play.md#packetising-and-loss-protection), the [codecs](share-play.md#codecs), the [rate and its ladder](share-play.md#congestion-control-and-the-rate), the [share link](share-play.md#the-share-link) and the share worker. This file lists only what differs: who connects to whom, the messages, the control protocol and the stops.
 
 ## What it is
 
@@ -123,5 +123,5 @@ Against [ADR 0021](../docs/adr/0021-the-line-is-drawn-at-the-law.md): no platfor
 - Viewers outside the party, a public link, recording or clips.
 - Several rates (one per viewer): the stream follows the weakest watcher.
 - Game sound where the worker cannot tap it; the stream is then silent and the viewer's panel says "No sound".
-- The engine tap as a source (see ADR 0022), HDR, 4K, more than two channels of sound.
+- The engine tap as a source (see ADR 0023), HDR, 4K, more than two channels of sound.
 - A "is streaming" mark in the friends list.

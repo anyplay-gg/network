@@ -260,7 +260,7 @@ A profile has a short text, up to 3 favourite titles, an avatar and the playtime
 
 ## Feed
 
-The feed lists what a player and their friends did on the network, newest first. It is a record of events, not a place to write: there are no comments and no free text, only [four reactions](../docs/adr/0022-the-feed-has-four-reactions-and-no-comments.md). Nothing in an item is game content: a title and a trophy are numbers, and a client shows their names from the player's own copy of the game.
+The feed lists what a player and their friends did on the network, newest first. It is a record of events, not a place to write: there are no comments and no free text, only [four reactions](../docs/adr/0024-the-feed-has-four-reactions-and-no-comments.md). Nothing in an item is game content: a title and a trophy are numbers, and a client shows their names from the player's own copy of the game.
 
 | Request | Body | Answer |
 |---|---|---|

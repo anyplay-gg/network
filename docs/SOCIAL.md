@@ -28,7 +28,7 @@ Later, when AnyPS5 builds report trophy unlocks through the bridge, the net serv
 
 ### Feed
 
-Activity of friends, newest first: a trophy earned (with its grade and how rare it is), a friend added, a game played for the first time, and a party started (only its members see that). Items are short and point to the thing they are about. A player answers with one of four fixed reactions (Nice, GG, Wow, Same), one per item, and sees the counts; there are no comments, so nothing needs moderating beyond what a profile already needs ([ADR 0022](adr/0022-the-feed-has-four-reactions-and-no-comments.md)). The cloud keeps items 90 days. The visibility is the player's `feed` setting, friends by default. Only the launcher shows the feed; the website leaves it out, since a trophy there is a number without a name. The details are in [the API](../spec/cloud-api.md#feed).
+Activity of friends, newest first: a trophy earned (with its grade and how rare it is), a friend added, a game played for the first time, and a party started (only its members see that). Items are short and point to the thing they are about. A player answers with one of four fixed reactions (Nice, GG, Wow, Same), one per item, and sees the counts; there are no comments, so nothing needs moderating beyond what a profile already needs ([ADR 0024](adr/0024-the-feed-has-four-reactions-and-no-comments.md)). The cloud keeps items 90 days. The visibility is the player's `feed` setting, friends by default. Only the launcher shows the feed; the website leaves it out, since a trophy there is a number without a name. The details are in [the API](../spec/cloud-api.md#feed).
 
 ### Messages
 
@@ -48,7 +48,7 @@ Party members talk over the tunnels' own iroh endpoint: Opus frames, one voice c
 
 ### Share screen
 
-A player streams the game they are playing to their party, who watch it in their launcher. Watch only: nothing comes back, so no one plays and no pad is involved. It uses share play's media path (the share worker, the datagrams, the loss protection) on a connection of its own, `anyplay/screen/0`, dialed by the streamer to the party's members, and asks the cloud for nothing. The decision is [ADR 0022](adr/0022-share-screen-is-watch-only-and-asks-the-cloud-for-nothing.md) and the protocol the [spec](../spec/screen-share.md).
+A player streams the game they are playing to their party, who watch it in their launcher. Watch only: nothing comes back, so no one plays and no pad is involved. It uses share play's media path (the share worker, the datagrams, the loss protection) on a connection of its own, `anyplay/screen/0`, dialed by the streamer to the party's members, and asks the cloud for nothing. The decision is [ADR 0023](adr/0023-share-screen-is-watch-only-and-asks-the-cloud-for-nothing.md) and the protocol the [spec](../spec/screen-share.md).
 
 ### Share play
 
