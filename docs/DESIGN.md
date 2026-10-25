@@ -75,7 +75,7 @@ A separate process that the launcher starts and watches ([ADR 0004](adr/0004-net
 4. Both games activate session signaling. The net services exchange keys through the cloud and open a tunnel, direct or through a relay. Each game gets "connected" and the other player's virtual address.
 5. From here, game traffic flows through the tunnel.
 
-A link such as `anyps5://v1/join/…` never starts a game by itself; it opens the launcher on the **Join** button, and the player presses it.
+A link such as `anyps5://v1/join/…` never starts a game by itself; it opens the launcher on the **Join** button, and the player presses it. The link on a player's Discord profile, `https://<web>/join/<code>`, is the same kind of link: it carries a [join code](../spec/cloud-api.md#join-codes), shows who invites and to what on the web, and leads to the launcher, where the code becomes an ordinary invitation ([ADR 0022](adr/0022-a-join-link-asks-it-never-joins.md)).
 
 ## What a game sees
 

@@ -172,6 +172,14 @@ pub enum Command {
     PartyMove {
         session: String,
     },
+    // Join codes
+    /// A new join code for the player (the cloud revokes the earlier one).
+    JoinCode,
+    JoinCodeRevoke,
+    /// Turns a code, or a link that holds one, into an invitation.
+    JoinRedeem {
+        code: String,
+    },
     // Voice
     /// Switches party voice on or off. The microphone is only opened while it is on and the
     /// player is in a party.

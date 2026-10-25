@@ -62,6 +62,8 @@ TitlePlaytime { title_id, minutes }
 Party     { id, leader, members, max_members, conversation, created, revision }
 PartyMember { account, joined, endpoint, relay, voice }   endpoint: "" until announced; relay: URL or null; voice: bool
 PartyInvitation { id, from, party, members, expires }
+JoinCode  { code, url, expires }                   code: 10 characters; url: the address of the join page
+Redeemed  { kind, invitation }                     kind: "session" | "party"; invitation: Invitation or PartyInvitation
 Conversation { id, kind, name, members, last, read, marks, updated, request, party }   kind: "direct" | "group" | "party"
 ReadMark  { account, seq }
 Message   { conversation, seq, sender, text, created }
@@ -389,6 +391,23 @@ A **party** is up to 8 friends who stay together across games, with one chat. It
 - `PUT /v1/party/endpoint` is how the members of a party find each other for voice ([voice](voice.md)). `endpoint` and `relay` are the caller's tunnel key and relay, as for a session `Member`, and `voice` says that the caller's net service takes part in the party's voice and accepts voice connections from the other members. The net service sends it when it joins a party, when its relay changes and when `voice` changes, and again after every reconnect. The cloud stores the three on the caller's `PartyMember`, raises the party's `revision` only when one of them changed, and answers `not_found` when the caller is in no party and `bad_request` for an `endpoint` that is not 64 lowercase hex characters or a `relay` that is not an `https` URL. Two members of one party may not name the same `endpoint`: the second request is answered `limit`. A member who has announced nothing has `endpoint` `""`, `relay` null and `voice` false. Only members of the party ever receive `endpoint` and `relay`: the invitation (`PartyInvitation`) carries neither. A net service dials only members whose `voice` is true, and accepts voice connections from every member the party lists.
 - The party's chat is a conversation of kind `party` (`Party.conversation`). A member sees what is written after it joined.
 
+## Join codes
+
+A **join code** lets someone who is not a friend, a Discord friend for example, ask to join a player's game. It is a short random token that the cloud issues to an account and that stands for that account, not for a session or a party ([ADR 0022](../docs/adr/0022-a-join-link-asks-it-never-joins.md)). The launcher puts it in a link, `<web>/join/<code>`, that the player's Discord profile shows as a button. The link never starts anything by itself: the page offers to open the launcher, the launcher redeems the code, and what comes back is an ordinary invitation that the player accepts or declines.
+
+| Request | Body | Answer |
+|---|---|---|
+| `POST /v1/join-codes` | `{}` | `JoinCode`: a new code for the caller. An earlier code of the caller stops working. `not_found` when the caller has nothing to join (below). |
+| `DELETE /v1/join-codes/current` | | 204: revokes the caller's code. Harmless when there is none. |
+| `POST /v1/join-codes/{code}/redeem` | | `Redeemed` |
+
+- **What a code opens.** Whatever the issuer offers at the moment of redeeming: the session the issuer is in whose `visibility` is not `closed` (the one the issuer joined last, when several), else the party the issuer leads. With neither, `POST /v1/join-codes` answers `not_found`, and so do redeeming and reading an existing code, which lives on and works again when the issuer opens a session. A code ends for good when it expires, is revoked, is replaced by a newer one or the issuer's account is deleted.
+- **The code.** 10 characters from the 32 lowercase letters and digits without `0`, `1`, `l` and `o`, drawn from the system's random generator (50 bits). It carries no account ID or handle. The cloud stores only a hash of it, so a copy of the store opens nothing. A code is compared without regard to case. It lives `join_code_minutes` (a setting of the cloud, 120 by default) and `expires` is that moment; a launcher asks for a new one before then. `url` is the join page of the account web (`web` of [Information](#information)), or the cloud's own origin when it has no account web, followed by `/join/<code>`.
+- **Redeeming** makes an invitation for the caller from the issuer, as if the issuer had invited them, and answers it. For a session it is an `Invitation` (it lets the caller in even to an `invite` session; the join still runs the version guard), for a party a `PartyInvitation`. The caller also receives the usual `invitation` or `party_invitation` event. Friendship is not needed. Redeeming does not join anything. It answers `not_found` for an unknown, expired, revoked or unusable code and when a block lies between the caller and the issuer or a member (a block stays private), `bad_request` for the caller's own code, `full` when the session or party has no free place, and `limit` when the caller is in that session or party already, or, for a party, in another one.
+- Redeeming again returns the invitation the caller still holds from this issuer. A declined invitation is made again by redeeming again.
+- Limits: 10 new codes and 30 redemptions per account per hour (`rate_limited`).
+- The public side of a code, what the page shows before anyone is asked to sign in, is `GET /join/{code}` of the [Portal API](portal-api.md#join-pages).
+
 ## Shares
 
 Share play between two party members is drafted in the [share play spec](share-play.md#cloud-api): the `Share` object, `/v1/shares` and `/v1/share`, and the events `share_invitation`, `share` and `share_gone`. Not implemented.
@@ -476,6 +495,7 @@ Every message has a number `seq` that counts up by one in its conversation, star
 | friend requests of a new account | 10 in its first day (`new_account_friend_requests_per_day`) |
 | `PUT /v1/me/run-reports/{title_id}` | 30 per account per hour |
 | `PUT/DELETE /v1/feed/{id}/reaction` | 60 per account per minute |
+| `join-codes` | 10 new codes and 30 redemptions per account per hour |
 | `reports` | 20 per account per day and 5 per 10 minutes (settings of the cloud) |
 | appeals | 10 per account per hour |
 | everything else | 120 per account per minute |
