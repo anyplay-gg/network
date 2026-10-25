@@ -309,10 +309,13 @@ mod tests {
 
     /// Cisco's library, when this machine has it (`ANYPLAY_OPENH264` or beside the test
     /// binary). The round trip below skips without it, as the Windows one does without an
-    /// encoder.
+    /// encoder; with `ANYPLAY_OPENH264` set (CI sets it) a library that does not load fails.
     fn have_library() -> bool {
         match api() {
             Ok(_) => true,
+            Err(why) if std::env::var_os(LIBRARY_ENV).is_some() => {
+                panic!("{LIBRARY_ENV} is set, but: {why}")
+            }
             Err(why) => {
                 eprintln!("skipped: {why}");
                 false
