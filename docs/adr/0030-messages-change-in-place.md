@@ -20,3 +20,4 @@ Three rules come with it.
 - `Message` gains `reply`, `edited`, `deleted`, `reactions` and `rev`; `Conversation` gains `rev`, `unread`, `muted` and `pinned`. A cloud and a client that predate them still read each other: every new field is optional.
 - A change to a message costs the same lock as writing one. The 60 per minute limit for changes is separate from the 30 messages.
 - The export lists what an account wrote with the current text, and an unsent message without text.
+- The hold is one more table: rows per replaced text, deleted after seven days by the same sweep that deletes old messages, with the message when the 30-day sweep takes it, and with the account. It is not exported and not shown to any client.
