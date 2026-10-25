@@ -120,7 +120,8 @@ impl Social for Fake {
         } else {
             let _ = self.events.send(Event::Authorized(Authorization {
                 code: format!("fake-code-{number}"),
-                verifier: format!("fake-verifier-{number}"),
+                // Long enough for a PKCE verifier (43 to 128 characters), as the SDK's are.
+                verifier: format!("fake-verifier-{number}-{}", "x".repeat(32)),
                 redirect_uri: "http://127.0.0.1/callback".into(),
             }));
         }
