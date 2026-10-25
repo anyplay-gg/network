@@ -9,6 +9,10 @@ Coverage-guided fuzzing with [cargo-fuzz](https://github.com/rust-fuzz/cargo-fuz
 | `traffic_header` | a game datagram or the start of a game stream | the header is exactly the first eight bytes; the rest is left as it came |
 | `voice_frame` | a voice datagram from another member of a party | read and written back to the same bytes, or refused for exactly the reason its length, version, flags or payload give |
 | `control_line` | one line between the launcher and the net service | text that is not UTF-8 is refused; a command or output read is written back so that it reads the same |
+| `share_video_datagram` | a video datagram of share play from another member | read and written back to the same bytes, or refused for exactly the reason its length, version, type, flags or group layout give |
+| `share_audio_datagram` | an audio datagram of share play | read and written back to the same bytes, or refused for exactly its reason |
+| `share_reassembler` | arbitrary datagrams with time passing; or a packetised frame with up to its parity of packets dropped | never more than 4 frames and 16 MiB in reassembly; a recoverable frame comes back byte for byte |
+| `share_control_line` | one line of share play's control stream | over 4 KiB, a second line or non-UTF-8 is refused; a message read is written back so that it reads the same |
 
 The fixed-seed tests next to each parser cover the same ground on every `cargo test`; these targets search further.
 

@@ -34,8 +34,17 @@ version = "0.0.0"
 dependencies = [
  "anyplay-bridge-protocol",
  "anyplay-control",
+ "anyplay-share",
  "anyplay-voice",
  "libfuzzer-sys",
+]
+
+[[package]]
+name = "anyplay-share"
+version = "0.0.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

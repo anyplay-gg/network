@@ -17,6 +17,7 @@ members = ["."]
 libfuzzer-sys = "0.4.13"
 anyplay-bridge-protocol = { path = "../crates/bridge-protocol" }
 anyplay-control = { path = "../crates/control" }
+anyplay-share = { path = "../crates/share" }
 anyplay-voice = { path = "../crates/voice" }
 
 [[bin]]
@@ -50,6 +51,34 @@ bench = false
 [[bin]]
 name = "voice_frame"
 path = "fuzz_targets/voice_frame.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "share_video_datagram"
+path = "fuzz_targets/share_video_datagram.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "share_audio_datagram"
+path = "fuzz_targets/share_audio_datagram.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "share_reassembler"
+path = "fuzz_targets/share_reassembler.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "share_control_line"
+path = "fuzz_targets/share_control_line.rs"
 test = false
 doc = false
 bench = false
