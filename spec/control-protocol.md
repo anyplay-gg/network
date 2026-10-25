@@ -115,6 +115,11 @@ A **restriction** has a `kind` and, when they apply, `until`, `rule`, `reason`, 
 | `accept_request` | `conversation` | the `Conversation` |
 | `leave_conversation` | `conversation` | `{}`: leaves a group or declines a request |
 | `add_to_conversation` | `conversation`, `accounts` | `{added}` |
+| `screen_start` | `source`: `game` (default) or `test_pattern` | `{}`: the player's game is streamed to the party |
+| `screen_stop` | | `{}` |
+| `screen_watch` | `account` | `{}`: watch the stream that member offers |
+| `screen_leave` | | `{}` |
+| `screen_worker` | `path` | `{encoders, decoders, capture}`: where the launcher put the verified share worker |
 
 - `hello` comes first. Until it is answered every other command gets `bad_state`. The net service then resumes the device's saved sign-in, if there is one.
 - `browser_sign_in` is how the launcher signs a player in or creates an account ([ADR 0016](../docs/adr/0016-accounts-are-managed-on-the-web.md)). The net service opens a listener on `127.0.0.1` with a random port, makes a PKCE verifier and a `state`, and answers the address of the cloud's sign-in page; the launcher opens it in the system browser. The net service then sends a `state` event with `pending` `browser`, and when the player has finished in the browser, a `state` event with the account (and `pending` null). It fails with `not_found` when the cloud has no account web, and with `bad_state` when an account is signed in. A browser that is not finished in 10 minutes, or a sign-in the player stops, ends with a `notice` (`sign_in_timed_out`, `sign_in_stopped`) and `pending` null. `create` opens the page at "Create account". Nothing is typed in the launcher.
@@ -128,6 +133,7 @@ A **restriction** has a `kind` and, when they apply, `until`, `rule`, `reason`, 
 - The voice commands work on [party voice](voice.md). `voice` with `on` true switches it on: from then on, whenever the player is in a party and signed in with tunnels up, the net service opens the microphone and speakers, joins the party's voice and tells the party it takes part. Switched off, or without a party, the devices are closed: the microphone is never open otherwise. The setting lasts until `voice` is sent again or the service ends; a new service starts with voice off, so the launcher sends `voice` after `hello` if the player wants it. The answer does not wait for the devices: if they cannot be opened, the net service switches voice off again, sends a `notice` `voice_device` with the reason and a `voice` event with `enabled` false.
 - `push_to_talk` is the key being down (`talking` true) or up. In `voice_activity` mode it has no effect. `voice_mode`, `peer_volume` and `peer_mute` are remembered by account for as long as the service runs, also while voice is off or the member is away, and apply when voice starts. Volume is in percent of what was sent, 100 normally.
 - `voice_devices` lists the names the system has and which are chosen. `set_voice_device` chooses by one of those names (or null for the default) and, while voice runs, closes the devices and opens them again, so the connections to the members are made again too. A service built without sound devices lists none and fails to open any; release builds have them.
+- Share screen (watch only, to the party, no cloud involved) is specified in [its own file](screen-share.md#control-protocol-additions): the `screen_*` commands and the `screen` event. `screen_start` fails with `no_game`, `not_signed_in`, `not_in_party`, `no_encoder` or `busy`; `screen_watch` with `not_found`, `busy` or `no_decoder`. The event carries `hosting` (the player's own stream with one entry per member it reaches), `offers` (streams the player may watch) and `watching`, and no field of it is named `id`.
 - Share play adds commands and events, drafted in the [share play spec](share-play.md#control-protocol-additions). They are not implemented.
 - `relay_only` keeps every tunnel on a relay, so other players never learn the PC's addresses, or lets them go direct again. Running tunnels start again and the peers reconnect, so the launcher sends it while no game runs. `anyplay-net --relay-only` starts with it on.
 
@@ -154,6 +160,7 @@ A **restriction** has a `kind` and, when they apply, `until`, `rule`, `reason`, 
 | `read` | `conversation`, `account`, `seq` | a member read up to `seq` |
 | `conversation` | `id` | a conversation is new or its members changed |
 | `conversation_gone` | `id` | the player is no longer in the conversation |
+| `screen` | `can_share`, `can_watch`, `hosting`, `offers`, `watching` | share screen changed; while a stream runs its numbers at most twice a second |
 
 - `restrictions` lists only the mutes that have not ended or been lifted; a warning limits nothing and is not listed, a new account's limit comes with the `restricted` failure. The net service sends it only when the list changed. A restriction with `until` in the past is over: the launcher drops it at that time without waiting for an event.
 - To appeal: a mute is appealed with the `appeal` command. A ban signs the account out, so it is appealed on the account web: the launcher starts `browser_sign_in`, and the cloud's sign-in ends on the page with the statement and the form (after a ban the player proves who they are there, as in [ADR 0015](../docs/adr/0015-moderators-are-accounts.md)).

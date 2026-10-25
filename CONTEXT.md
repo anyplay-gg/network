@@ -178,7 +178,19 @@ _Avoid_: Voice tunnel, call, voice channel (that is the party's one channel as t
 
 **Share play**:
 A player streams their running game to one friend in their party, who watches, plays as them, or plays beside them. The friend needs neither the game nor its files.
-_Avoid_: Remote play (playing one's own console from afar), screen share, broadcast
+_Avoid_: Remote play (playing one's own console from afar), broadcast
+
+**Share screen**:
+A player streams the game they are playing to the members of their party, who each choose whether to watch. Watch only: nothing comes back, and no one plays. It needs no invitation and no record in the cloud. Not share play, where one friend is invited and may take a pad.
+_Avoid_: Screen share (the order of the words is the button's), broadcast, go live, share play (that is the one-guest feature with a pad)
+
+**Streamer**:
+The player whose game a share screen shows. The streamer starts and stops it and sees who watches. Not the host of a share.
+_Avoid_: Host (that is share play's), broadcaster
+
+**Viewer**:
+A party member who chose to watch a streamer's share screen, in the share worker's window. A viewer can leave at any moment and never sends input.
+_Avoid_: Guest (that is share play's), spectator
 
 **Share**:
 One run of share play between a host and a guest, from the invitation to the stop.

@@ -1,6 +1,6 @@
 # Share play
 
-How a player streams the game they are running to a friend in their party, who watches, takes over their pad, or plays beside them. Version 0, a draft: it changes without notice until version 1. Nothing here is built yet.
+How a player streams the game they are running to a friend in their party, who watches, takes over their pad, or plays beside them. Version 0, a draft: it changes without notice until version 1. Nothing here is built yet, except the part that [share screen](screen-share.md) uses: a watch-only stream to the whole party that needs no invitation and no cloud record ([ADR 0022](../docs/adr/0022-share-screen-is-watch-only-and-asks-the-cloud-for-nothing.md)).
 
 The decisions are in [ADR 0019](../docs/adr/0019-share-play-streams-through-a-worker.md), the order of work in the [plan](../docs/share-play-plan.md), and the prior art with its sources in the [research notes](../docs/share-play-research.md). The terms are in [CONTEXT.md](../CONTEXT.md). Share play goes through the tunnels like voice ([ADR 0010](../docs/adr/0010-voice-and-shared-play-go-through-the-tunnels.md), [ADR 0017](../docs/adr/0017-voice-has-a-connection-of-its-own.md), [voice spec](voice.md)).
 
@@ -395,6 +395,8 @@ Between the net service and the worker, on `127.0.0.1`, with the framing of the 
 | `0x0017` | pad | worker → service | one pad state (guest) |
 | `0x0018` | stats | worker → service | encode time, decode time, frames shown, dropped |
 | `0x0019` | stop | either | the end |
+| `0x001A` | key request | worker → service | the viewer needs a key frame from this frame on (`epoch`, `frame`); the service puts it on the control stream as `key` |
+| `0x001B` | ended | worker → service | the worker is ending, with a reason in words (the picture source ended, the encoder failed, the window was closed) |
 
 Datagrams of the share are sent with the audio first, then key frames, then other video. The net service never queues more than 2 frames of video.
 
