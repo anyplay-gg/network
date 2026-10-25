@@ -36,7 +36,8 @@ The Rust reference is [`crates/api`](../crates/api). The cloud in [anyplaynet/cl
 
 ```text
 Account   { id, handle }
-Me        { id, handle, email, created }
+Me        { id, handle, email, created, appear_offline }   appear_offline: bool, false when absent
+AppearOffline { appear_offline }                   the setting alone
 Tokens    { access, access_expires, refresh, device }
 Device    { name, platform, key }                  platform: "windows" | "linux" | "macos" | "other"; key: the device's public key or absent
 Presence  { online, activity, revision }           activity: Activity or null
@@ -158,6 +159,8 @@ The browser's own session on these pages is a cookie that never reaches the API.
 | Request | Answer |
 |---|---|
 | `GET /v1/me` | `Me` |
+| `GET /v1/me/appear-offline` | `AppearOffline` |
+| `PUT /v1/me/appear-offline` | `AppearOffline` in and out: see [Appearing offline](#appearing-offline) |
 | `DELETE /v1/me` | 200 `{deletion: {at}}`. Schedules the deletion of the account for `at` (Unix seconds), 30 days from now, signs out every device and every browser, and refuses the access tokens issued so far; the player can cancel on the [web portal](portal-api.md#deleting-the-account) until `at`. A request that comes again keeps the first `at`. At `at` the cloud deletes the account with its devices, friends, requests, blocks, trophy records, profile, avatar and playtime. Reports the account filed lose their link to it; reports about it, the actions against it and the ban on its e-mail address stay until their retention ends (see Moderation). |
 | `GET /v1/me/export` | Everything the cloud stores about the account, as JSON, trophy records, privacy settings, profile, avatar and playtime included. |
 | `GET /v1/accounts/{id}` | `Account` |
@@ -183,6 +186,18 @@ The browser's own session on these pages is a cookie that never reaches the API.
 ## Presence
 
 `PUT /v1/presence` with `{activity}` (an `Activity` without `session`, or null) sets what friends see. The cloud adds `session` itself: the session the account is in for that title, when friends may join it. An account is online while its net service holds the event connection.
+
+### Appearing offline
+
+An account can **appear offline**: its friends see `Presence { online: false, activity: null }`, as if it had no connection, while it stays signed in and keeps playing, joining and messaging ([ADR 0028](../docs/adr/0028-appearing-offline-hides-presence-from-everyone.md)). The setting belongs to the account, not to a device: the cloud stores it, every device of the account has it, and it lasts across sign-ins until the player changes it. A new account appears online.
+
+`PUT /v1/me/appear-offline` with `{appear_offline: true | false}` sets it and answers the same object. It is idempotent and needs no fresh sign-in. `GET /v1/me/appear-offline` and `Me.appear_offline` read it. This one call is all a client needs; it never has to send the rest of `Privacy`.
+
+- **Everyone or nobody.** In v1 the setting hides presence from every account, friends included. A list of friends who may still see the player can follow as a second setting next to this one.
+- **What is hidden.** Wherever the cloud shows an account's presence to another account: `GET /v1/friends` and the portal's `GET /friends`, the `presence` event, and the joinable session in an `Activity`. While the account appears offline, playing a title for the first time makes no feed item and does not mark the title as played, so the item comes the first time the account plays it while visible. Turning the setting on or off tells the friends with a `presence` event and a new revision, like any other change.
+- **What is not hidden.** The account itself: it sees its own state as online, with its activity, and a client shows an "Appearing offline" hint. Members of a session or a party see each other in the member lists, which go to members only. Messages, invitations, friend requests, joining and leaving sessions and parties, and answering invitations work as before, and a friend can invite the account as they can any account that is offline. Moderation and reports see the real state.
+- **Not a block.** The setting hides presence and nothing else; a friend who holds an invitation or a join code can still join.
+- **Other devices.** When the setting changes, the cloud sends the `appear_offline` event to every device of the account, so a second device updates its toggle.
 
 ## Sessions
 
@@ -500,6 +515,7 @@ Every message has a number `seq` that counts up by one in its conversation, star
 | `read` | `conversation, account, seq` | A member read up to `seq`. |
 | `conversation` | `id` | A conversation is new or its members changed. Fetch it. |
 | `conversation_gone` | `id` | This account is no longer in the conversation. |
+| `appear_offline` | `appear_offline` | The setting of this account changed (on another device or in the portal). Sent to the account's own devices only. |
 | `feed` | | A feed has news (a friend's new item, or a reaction to one of this account's). Fetch `GET /v1/feed`. It carries nothing; a client fetches at most every two seconds. |
 
 - After `welcome`, and after every reconnect, a client reads what it may have missed: `GET /v1/party` and `GET /v1/party/invitations`, `GET /v1/calls/missed`, and `GET /v1/conversations` with the messages after the numbers it holds. News is a pointer or a numbered state and may be lost; reading the state is always right.

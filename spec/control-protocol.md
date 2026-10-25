@@ -31,7 +31,7 @@ The net service answers every command once, with the same `id`, either `ok` or `
 It also sends **events** on its own, named by `event`:
 
 ```json
-{"event": "state", "cloud": "online", "account": {"id": 41, "handle": "Alec", "email": "a@example.org"}, "pending": null}
+{"event": "state", "cloud": "online", "account": {"id": 41, "handle": "Alec", "email": "a@example.org", "appear_offline": false}, "pending": null}
 ```
 
 Fields the receiver does not know are ignored, and so are events it does not know. A command it does not know is answered with the error `unknown_command`.
@@ -92,6 +92,7 @@ A **restriction** has a `kind` and, when they apply, `until`, `rule`, `reason`, 
 | `run_report` | `title_id`, `version`, `toolkit`, `verdict` (`no_start`, `menus`, `in_game`, `playable`) | `{}`; the service adds the player's system |
 | `run_reports` | `title_id`, `version` (or null) | `{title_id, version, reports, verdict, counts}` |
 | `cards` | `accounts` | `{cards}` |
+| `set_appear_offline` | `on` | `{appear_offline}`: the new setting, see [Appearing offline](cloud-api.md#appearing-offline); `offline` when the cloud cannot be reached (nothing is changed then) |
 | `privacy` | | the player's `Privacy` |
 | `set_privacy` | `privacy` | the new `Privacy` |
 | `profile` | `account` | `ProfilePage`: the `Profile` with the parts the player may see of that account, their trophy counts (null when hidden) and the connections they show (`links`) |
@@ -150,6 +151,7 @@ A **restriction** has a `kind` and, when they apply, `until`, `rule`, `reason`, 
 - Share screen (watch only, to the party, no cloud involved) is specified in [its own file](screen-share.md#control-protocol-additions): the `screen_*` commands and the `screen` event. `screen_start` fails with `no_game`, `not_signed_in`, `not_in_party`, `no_encoder` or `busy`; `screen_watch` with `not_found`, `busy` or `no_decoder`. The event carries `hosting` (the player's own stream with one entry per member it reaches), `offers` (streams the player may watch) and `watching`, and no field of it is named `id`.
 - The Discord commands and event are phase 0 of [ADR 0022](../docs/adr/0022-discord-social-sdk.md). `state` is `unavailable` (no SDK in this build, or the library is missing or refused to load: nothing else changes), `signed_out`, `connecting` (the SDK asks the player, the cloud trades the code, or the SDK connects) or `connected`. `user` is `{id, name}` while connected (`id` is a decimal string, `name` the display name) and `friends` the number of Discord friends; both are null otherwise, and the friends themselves never leave the net service. `discord_connect` uses the refresh token the service kept in the credential store for this account, and only asks the player (Discord's overlay, app or browser) when there is none or Discord refuses it; the cloud keeps nothing ([cloud API](cloud-api.md#discord-social-sdk)). A failure comes as a `notice` with the code `discord_failed`.
 - Share play adds commands and events, drafted in the [share play spec](share-play.md#control-protocol-additions). They are not implemented.
+- `appear_offline` is a setting of the account, so a launcher needs one command and one field: `set_appear_offline` with `on` writes it to the cloud, and `account.appear_offline` of the `state` event (sent after sign-in, after the command, and when another device or the portal changes it) says what it is. The player's own friends list and presence stay as they are; the launcher shows its "Appearing offline" hint from this field. The cloud stops friends from seeing the player as online; the net service does not hide anything itself, and keeps the event connection and every other command working.
 - `relay_only` keeps every tunnel on a relay, so other players never learn the PC's addresses, or lets them go direct again. Running tunnels start again and the peers reconnect, so the launcher sends it while no game runs. `anyplay-net --relay-only` starts with it on.
 
 ## Events

@@ -960,6 +960,19 @@ impl Service {
                 }
                 self.ok(id, Done {});
             }
+            Command::SetAppearOffline { on } => {
+                let Some(cloud) = self.signed_in_cloud(id) else {
+                    return;
+                };
+                self.request(
+                    id,
+                    async move { cloud.set_appear_offline(on).await },
+                    |service, answer| {
+                        service.set_appear_offline(answer.appear_offline);
+                        answer
+                    },
+                );
+            }
             Command::Playing { game } => {
                 self.activity = game.map(|game| Activity {
                     title_id: game.title_id,
@@ -2064,6 +2077,7 @@ impl Service {
                 self.event(control::Event::ConversationGone { id });
             }
             Event::Feed => self.feed_dirty = true,
+            Event::AppearOffline { appear_offline } => self.set_appear_offline(appear_offline),
             _ => {}
         }
     }
@@ -3558,11 +3572,22 @@ impl Service {
         self.bridge_state();
     }
 
+    /// Takes the account's appear-offline setting from the cloud and tells the launcher.
+    fn set_appear_offline(&mut self, on: bool) {
+        if let Some(me) = self.me.as_mut()
+            && me.appear_offline != on
+        {
+            me.appear_offline = on;
+            self.state_changed();
+        }
+    }
+
     fn state_changed(&mut self) {
         let account = self.me.as_ref().map(|me| SignedIn {
             id: me.id,
             handle: me.handle.clone(),
             email: me.email.clone(),
+            appear_offline: me.appear_offline,
         });
         let pending = match self.pending {
             Some(PendingSignIn::Code { .. }) => Some(Pending::Code),
