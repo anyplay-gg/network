@@ -42,6 +42,8 @@ use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx, CoTaskMe
 use windows::Win32::System::Variant::VARIANT;
 use windows::core::{GUID, Interface};
 
+use crate::annexb::{find_start, nal_types};
+
 /// The codec's name in `hello`, `config` and `start`.
 pub const CODEC_NAME: &str = "h264";
 
@@ -148,80 +150,9 @@ fn set_api(api: &Option<ICodecAPI>, key: &GUID, value: VARIANT) -> bool {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Annex B
-
-/// Position of the first start code (`00 00 01`) at or after `from`.
-fn find_start(data: &[u8], from: usize) -> Option<usize> {
-    data.get(from..)?
-        .windows(3)
-        .position(|w| w == [0, 0, 1])
-        .map(|p| p + from)
-}
-
-/// The types of the NAL units in an Annex B stream.
-pub fn nal_types(data: &[u8]) -> Vec<u8> {
-    let mut types = Vec::new();
-    let mut at = find_start(data, 0);
-    while let Some(start) = at {
-        if let Some(byte) = data.get(start + 3) {
-            types.push(byte & 0x1f);
-        }
-        at = find_start(data, start + 3);
-    }
-    types
-}
-
-// ---------------------------------------------------------------------------------------------
 // The encoder
 
-/// What the encoder is asked to produce.
-#[derive(Clone, Copy, Debug)]
-pub struct EncoderSetup {
-    pub width: u32,
-    pub height: u32,
-    pub fps: u32,
-    pub kbps: u32,
-}
-
-/// The most an encoder is asked for.
-#[derive(Clone, Copy, Debug)]
-pub struct Limits {
-    pub width: u32,
-    pub height: u32,
-    pub fps: u32,
-}
-
-impl Limits {
-    /// A hardware encoder: 1080p60.
-    pub const HARDWARE: Limits = Limits {
-        width: 1920,
-        height: 1080,
-        fps: 60,
-    };
-    /// The system's software encoder: 720p30, so that the game keeps its processor.
-    pub const SOFTWARE: Limits = Limits {
-        width: 1280,
-        height: 720,
-        fps: 30,
-    };
-
-    /// The setup of a stream start lowered to these limits, keeping the shape and even sizes.
-    pub fn clamp(self, start: &anyplay_share::link::Start) -> EncoderSetup {
-        let (mut w, mut h) = (start.width.max(2), start.height.max(2));
-        if w > self.width || h > self.height {
-            let scale =
-                (f64::from(self.width) / f64::from(w)).min(f64::from(self.height) / f64::from(h));
-            w = (f64::from(w) * scale) as u32;
-            h = (f64::from(h) * scale) as u32;
-        }
-        EncoderSetup {
-            width: (w & !1).max(2),
-            height: (h & !1).max(2),
-            fps: start.fps.clamp(1, self.fps),
-            kbps: start.kbps,
-        }
-    }
-}
+pub use crate::limits::{EncoderSetup, Limits};
 
 /// Which kind of encoder to open.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1034,15 +965,6 @@ pub fn capabilities() -> (Vec<CodecCaps>, Vec<CodecCaps>) {
 mod tests {
     use super::*;
     use anyplay_share::testcodec::TestPattern;
-
-    #[test]
-    fn nal_types_are_read_from_annex_b() {
-        let data = [
-            0, 0, 0, 1, 0x67, 1, 2, 0, 0, 1, 0x68, 3, 0, 0, 0, 1, 0x65, 9,
-        ];
-        assert_eq!(nal_types(&data), vec![7, 8, 5]);
-        assert!(nal_types(&[1, 2, 3]).is_empty());
-    }
 
     /// A moving picture with edges, so that an encoder has something to code.
     fn picture(n: u32, w: u32, h: u32) -> Frame {

@@ -44,6 +44,10 @@ ashpd = { version = "0.13", default-features = false, features = ["tokio", "scre
 tokio = { version = "1.54", features = ["rt"] }
 # The window's pictures from PipeWire (MIT; links the system's libpipewire, MIT).
 pipewire = "0.10"
+# Software H.264 from Cisco's OpenH264 binary, loaded at run time and checked by its hash
+# (BSD-2-Clause; docs/adr/0027). Nothing of OpenH264 is built into the worker.
+openh264 = { version = "0.9", default-features = false, features = ["libloading"] }
+openh264-sys2 = { version = "0.9", default-features = false, features = ["libloading"] }
 
 # The viewer's window (MIT or Apache-2.0), on Windows and on Linux (X11 and Wayland).
 [target.'cfg(any(windows, target_os = "linux"))'.dependencies]
