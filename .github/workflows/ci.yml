@@ -64,4 +64,4 @@ jobs:
 
   # Links, title IDs in code, licences and advisories: the rules every AnyPlay repository shares.
   rules:
-    uses: anyplay-gg/.github/.github/workflows/rules.yml@main
+    uses: anyplaynet/.github/.github/workflows/rules.yml@main

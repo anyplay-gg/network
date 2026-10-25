@@ -32,7 +32,7 @@ Phase 1 can ship on its own. Phase 2 is what Discord's review looks at first. Ph
 
 Phase 0 is built and tested against the fake; the real library has been loaded on Windows and Linux, and the real connect needs a Discord account that is an app tester. The build is opt-in, so a normal build and every player's net service are unchanged.
 
-1. Get the SDK archive from the private release (`gh release download v1.10.19337 -R anyplay-gg/discord-sdk`) and unpack it; the folder that holds `include/cdiscord.h` is `DISCORD_SDK_DIR`. libclang must be installed for bindgen (`LIBCLANG_PATH`; on Windows with LLVM, also `BINDGEN_EXTRA_CLANG_ARGS="-isystem <LLVM>/lib/clang/<n>/include"`).
+1. Get the SDK archive from the private release (`gh release download v1.10.19337 -R anyplaynet/discord-sdk`) and unpack it; the folder that holds `include/cdiscord.h` is `DISCORD_SDK_DIR`. libclang must be installed for bindgen (`LIBCLANG_PATH`; on Windows with LLVM, also `BINDGEN_EXTRA_CLANG_ARGS="-isystem <LLVM>/lib/clang/<n>/include"`).
 2. Build with `cargo build -p anyplay-net --features discord-sdk`. Nothing of the SDK is committed; `.gitignore` lists its paths.
 3. Run `anyplay-net --discord-sdk <DISCORD_SDK_DIR>/bin/release/discord_partner_sdk.dll` (Linux: `lib/release/libdiscord_partner_sdk.so`) under a launcher or by hand, sign in to AnyPlay, send `{"id":2,"do":"discord_connect"}` and answer Discord's prompt with a test account. The `discord` event reports `connecting`, then `connected` with the account and the number of friends. The cloud needs `discord_client_id` and `discord_client_secret` (its test server has them).
 4. Without `--discord-sdk`, the service looks for the library next to itself and otherwise reports `unavailable`.

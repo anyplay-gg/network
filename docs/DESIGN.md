@@ -54,7 +54,7 @@ A separate process that the launcher starts and watches ([ADR 0004](adr/0004-net
 - **Share play** ([spec](../spec/share-play.md), [ADR 0019](adr/0019-share-play-streams-through-a-worker.md), designed, not built). A third connection on the tunnels' endpoint, with the ALPN `anyplay/share/0`, carries a game's picture and sound to one party member and that member's pad states back. A separate share worker encodes and decodes; the net service checks who connects, validates and rate-limits pad states, and forwards datagrams.
 - **Version guard** before every join.
 
-### Cloud ([anyplay-gg/cloud](https://github.com/anyplay-gg/cloud))
+### Cloud ([anyplaynet/cloud](https://github.com/anyplaynet/cloud))
 
 - Accounts, devices and bans.
 - Friends, blocks and presence.
