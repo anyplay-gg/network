@@ -77,7 +77,7 @@ A **restriction** has a `kind` and, when they apply, `until`, `rule`, `reason`, 
 | `report` | `account`, `reason`, `details` | `{}` |
 | `playing` | `game`: `{title_id, title, version}` or null | `{}` |
 | `check_join` | `session`, `title_id`, `version`, `build` | `{}`, or the error `version_mismatch` |
-| `game_start` | `title_id`, `title`, `version`, `build`, `join` (a session ID or null) | `{env}` |
+| `game_start` | `title_id`, `title`, `version`, `build`, `join` (a session ID or null), `host` (Play Together: `{max_members, visibility, party}`, or absent) | `{env, session}` |
 | `game_end` | | `{}` |
 | `invite` | `accounts` | `{sent}` |
 | `answer_invitation` | `invitation` (its `id`), `accept` | `{session, title_id}` when accepted, else `{}` |
@@ -144,6 +144,7 @@ A **restriction** has a `kind` and, when they apply, `until`, `rule`, `reason`, 
 - `account_page` answers a link that opens the account web signed in as the player (60 seconds, one use): e-mail, passkeys, devices, a copy of the data, deleting the account. It needs a signed-in account whose device has a key (`unauthorized` otherwise: sign in again) and a cloud with an account web (`not_found`).
 - `email`, `code` and `sign_up` still work and are deprecated: use `browser_sign_in`. `email` starts a sign-in; `code` finishes it or, for a new address, asks for `sign_up`.
 - `game_start` answers the variables the launcher adds to the game's environment, at present `ANYPS5_NET_ENDPOINT` and `ANYPS5_NET_TOKEN` from the [bridge protocol](bridge-protocol.md). With `join`, the net service holds the join intent for that session. `game_end` follows when the game's process has ended.
+- `game_start` with `host` is **Play Together** ([spec](play-together.md)): before it answers, the net service opens a `lan` session for the game with `max_members` (2 to 64) and `visibility` (`friends` or `invite`), and answers its ID in `session`. With `party` true it also asks the player's party in: the party moves into the session when the player leads it, else each other member gets an invitation (the cloud delivers it to friends only). `join` wins when both are given. If the session cannot be opened (the network is not ready, the player is in the most sessions allowed, the cloud answered an error) the game starts all the same, `session` is absent, and a `notice` with the code `host_failed` and the reason follows at once. The game is then a game like any other, and the launcher says why nobody can join.
 - `invite` invites friends to the session the player is in.
 - `profile` only reads. A player edits their profile, avatar and visibility on the cloud's web site, which uses the HTTP API directly ([cloud API](cloud-api.md#profiles-avatars-and-playtime)); the launcher shows what `profile` and `cards` answer. `upload_playtime` can be sent again with the same entries; the cloud keeps the highest minutes per title and day.
 - The party and message commands are the [cloud API](cloud-api.md#parties) one to one, with the errors of its requests. `party_answer` and `party_leave` update the held party before the answer.
@@ -168,6 +169,7 @@ A **restriction** has a `kind` and, when they apply, `until`, `rule`, `reason`, 
 | `invitation_gone` | `id` | an invitation expired, was answered or its session closed |
 | `session` | `session` or null | the session the player is in changed, began or ended |
 | `invite_dialog` | `id`, `title`, `max` | the game opened its invitation dialog; answer with `dialog` |
+| `session_ended` | `session`, `title_id`, `title`, `host` (an Account) | a Play Together session closed, or took the player out, while the player's game runs. Not sent when the player's own game ended, or for a session the player leads. The game is not touched |
 | `notice` | `code`, `message` | something failed that no command waits for |
 | `restrictions` | `restrictions` | what limits the signed-in account now: a list of restrictions, empty when nothing does. Sent after the account goes online, when a moderator mutes or warns it, when an appeal is filed or decided, and after a `restricted` failure the list did not contain |
 | `banned` | `restriction` | the account was banned (the event connection saw it, or a request answered `banned`); the account is signed out. A `notice` with the code `banned` is sent too, for launchers that predate this event |

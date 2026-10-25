@@ -93,7 +93,7 @@ _Avoid_: Invisible, hidden, stealth mode, do not disturb
 ### Playing together
 
 **Session**:
-A group of players in one game who can join, leave and see each other. Games call it a player session.
+A group of players in one game who can join, leave and see each other. Games call it a player session. It is a game session when the game opens it and a LAN session when the launcher does for Play Together.
 _Avoid_: Lobby, room, party
 
 **Invitation**:
@@ -110,6 +110,22 @@ _Avoid_: Launch argument, deep link
 
 **Version guard**:
 The check that two players run the same game version and a compatible AnyPS5 build before one joins the other.
+
+**Play Together**:
+Starting a game that finds others on a local network so that friends can join it: the host's launcher opens a LAN session, a friend presses Join, and the host's world shows up for the friend as a LAN world. Nobody sets up a VPN, opens a port or types an address ([ADR 0030](docs/adr/0030-play-together-is-a-session-that-ends-with-its-host.md)).
+_Avoid_: Multiplayer (alone), LAN party, hosting a server
+
+**LAN session**:
+A session of kind `lan`, which the launcher opens for a LAN game instead of the game itself. It ends when its world host leaves. Its members are on one virtual LAN.
+_Avoid_: Room, lobby, LAN party
+
+**World host**:
+The leader of a LAN session: the player whose game holds the world the others join. Not the party leader, and not the share play host.
+_Avoid_: Server, host (alone)
+
+**LAN game**:
+A title that finds other players by a broadcast on the local network and not through a session call. The launcher keeps a table of them.
+_Avoid_: Local multiplayer (a game can have that without a network)
 
 **Virtual address**:
 The address a game sees for a player in a session. It belongs to the player's place in that session, is different for every member of it, and leads into the tunnel; it exists only on the players' PCs. Another session may give it to someone else.

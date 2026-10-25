@@ -42,12 +42,12 @@ Tokens    { access, access_expires, refresh, device }
 Device    { name, platform, key }                  platform: "windows" | "linux" | "macos" | "other"; key: the device's public key or absent
 Presence  { online, activity, revision }           activity: Activity or null
 Activity  { title_id, title, version, session }    session: SessionRef or null
-SessionRef{ id, joinable, members, max_members }
+SessionRef{ id, joinable, members, max_members, kind }
 Friend    { account, since, presence }
 Request   { account, since }
-Session   { id, title_id, title, version, build, leader, max_members, visibility, properties, members, created, revision }
+Session   { id, kind, title_id, title, version, build, leader, max_members, visibility, properties, members, created, revision }
 Member    { account, endpoint, relay, address, joined }
-Invitation{ id, from, session, title_id, title, version, expires }
+Invitation{ id, from, session, kind, title_id, title, version, expires }
 Relay     { url, token, expires }
 Trophy    { number, grade, earned }                grade: "bronze" | "silver" | "gold" | "platinum"
 TitleTrophies { title_id, trophies: [Trophy] }
@@ -78,6 +78,7 @@ Message   { conversation, seq, sender, text, created }
 
 - A **handle** has 3 to 16 characters from `A-Z a-z 0-9 _ -` and starts with a letter. Handles are unique without regard to case; the spelling of the owner is kept. Handles that look alike are one handle: the **skeleton** of a handle (`handle_skeleton` in `anyplay-api`) is the handle in lower case without `_` and `-`, with `rn` read as `m`, `vv` as `w`, `1` and `i` as `l`, and `0` as `o`, and an account can take a handle only when no other account has its skeleton (so `Flokzy`, `FIokzy`, `F1okzy` and `Flok_zy` are one). A skeleton that is taken answers `handle_taken`, like a taken handle. Some handles are reserved (names of the network, of staff roles, and of platforms), and reserved names are matched by skeleton too.
 - `visibility` is `friends` (friends of a member may join), `invite` (only invited accounts) or `closed`.
+- `kind` is `game` (the game opened the session through its own session calls; also what a cloud without the field means) or `lan` (Play Together, below). `SessionRef` and `Invitation` carry the kind of their session, so a client can word them without fetching it.
 - `properties` is opaque data for the game, as standard base64, at most 8 KiB once decoded.
 - `endpoint` is the net service's tunnel key (an iroh endpoint ID) as lowercase hex, and `relay` the URL of the relay it is reachable through, or null. Other members dial it with both; the cloud publishes neither anywhere else.
 - `address` is the member's virtual address in this session (see Events).
@@ -203,7 +204,7 @@ An account can **appear offline**: its friends see `Presence { online: false, ac
 
 | Request | Body | Answer |
 |---|---|---|
-| `POST /v1/sessions` | `{title_id, title, version, build, max_members, visibility, properties, endpoint, relay}` | `Session` |
+| `POST /v1/sessions` | `{title_id, title, version, build, kind?, max_members, visibility, properties, endpoint, relay}` | `Session` |
 | `GET /v1/sessions/{id}` | | `Session` |
 | `POST /v1/sessions/{id}/join` | `{version, build, endpoint, relay, invitation}` | `Session` |
 | `POST /v1/sessions/{id}/leave` | | 204 |
@@ -215,6 +216,17 @@ An account can **appear offline**: its friends see `Presence { online: false, ac
 - When the leader leaves, the longest-standing member leads. The last member to leave closes the session.
 - Sessions live in the cloud's store, so they outlast a restart of the cloud. A member whose net service stays disconnected for 30 seconds leaves.
 
+### Play Together sessions
+
+A session with `kind` `lan` is the session of a game that finds others on a local network ([ADR 0030](../docs/adr/0030-play-together-is-a-session-that-ends-with-its-host.md), [Play Together](play-together.md)). The creator is the leader and the **world host**. The differences from a `game` session:
+
+- **It ends with its host.** When the leader leaves, is removed, or stays disconnected past the grace period, the cloud closes the session: every other member gets `session_gone`, and the session's open invitations end with `invitation_gone`. The lead is never handed on. A member who is not the leader leaves like in any session.
+- **The leader cannot change.** `PATCH` with `leader` answers `bad_request`. Everything else the leader may change stays.
+- **The kind is fixed at creation.** `PATCH` has no `kind`.
+- **Presence.** The `SessionRef` a friend sees has `kind` `lan`, which the launcher words as "playing together". Joining, invitations, join codes, party moves, the version guard and virtual addresses are those of any session.
+
+A client reads a kind it does not know as `game`, so a later kind does not break an earlier launcher.
+
 ## Invitations
 
 | Request | Body | Answer |
@@ -222,7 +234,7 @@ An account can **appear offline**: its friends see `Presence { online: false, ac
 | `POST /v1/sessions/{id}/invitations` | `{to: [id]}` | `{sent: [id]}`: only members invite, only friends receive |
 | `DELETE /v1/invitations/{id}` | | 204: declines |
 
-An invitation lives 15 minutes, or until its session closes.
+An invitation lives 15 minutes, or until its session closes (which a `lan` session does when its host leaves).
 
 ## Relays
 
