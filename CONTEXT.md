@@ -259,6 +259,10 @@ _Avoid_: Stream tunnel, call
 The helper program on a player's PC that, for a host, turns the game's pictures and sound into the stream and, for a guest, shows it and reads the guest's pad. It is downloaded by the launcher the first time it is needed.
 _Avoid_: Encoder, plugin, viewer (that is only the guest's side)
 
+**Clip**:
+The last seconds of a player's running game, kept in memory by the share worker while Clips is on and saved as an MP4 file when the player asks. It stays on their PC. Not a share screen (that goes to the party) and not a recording (which would run from a start to a stop).
+_Avoid_: Recording, capture, replay
+
 **Conversation**:
 A chat between accounts: two of them (direct), up to 32 (group), or the members of a party (the party's chat). Everything in it is text.
 _Avoid_: Thread, channel, room
