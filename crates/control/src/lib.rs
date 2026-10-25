@@ -1018,8 +1018,7 @@ mod tests {
     fn the_discord_commands_and_event_have_their_wire_form() {
         assert_eq!(
             command_line(3, &Command::DiscordConnect),
-            "{\"id\":3,\"do\":\"discord_connect\"}
-"
+            "{\"id\":3,\"do\":\"discord_connect\"}\n"
         );
         assert_eq!(
             parse_command("{\"id\":4,\"do\":\"discord_status\"}"),
