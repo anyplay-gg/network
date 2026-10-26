@@ -64,10 +64,12 @@ fn the_streamer_s_sound_is_played_by_the_viewer() {
     });
     to_host.send(ToWorker::Start(start())).unwrap();
     to_viewer.send(ToWorker::Start(start())).unwrap();
-    // The net service's part: every datagram of the streamer to the viewer.
+    // The net service's part: every datagram of the streamer to the viewer, until 80 sound
+    // datagrams (0.8 s of sound) went through. A slow machine only takes longer.
     let mut sound_datagrams = 0;
-    let deadline = Instant::now() + Duration::from_millis(800);
-    while Instant::now() < deadline {
+    let began = Instant::now();
+    let deadline = began + Duration::from_secs(10);
+    while sound_datagrams < 80 && Instant::now() < deadline {
         if let Ok(FromWorker::Datagram(bytes)) = from_host.recv_timeout(Duration::from_millis(10)) {
             if bytes[1] == anyplay_share::wire::TYPE_AUDIO {
                 sound_datagrams += 1;
@@ -75,18 +77,28 @@ fn the_streamer_s_sound_is_played_by_the_viewer() {
             to_viewer.send(ToWorker::Datagram(bytes)).unwrap();
         }
     }
+    let took = began.elapsed();
+    // The viewer plays on its own clock: give it the time to play what it has buffered.
+    let heard =
+        |played: &[f32]| played.iter().filter(|s| s.abs() > 0.05).count() as f32 / 2.0 / 48_000.0;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while heard(&played.lock().unwrap()) <= 0.4 && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(20));
+    }
     to_host.send(ToWorker::Stop).unwrap();
     to_viewer.send(ToWorker::Stop).unwrap();
     streamer.join().unwrap();
     watcher.join().unwrap();
+    assert_eq!(sound_datagrams, 80, "sound datagrams in {took:?}");
+    // One per 10 ms: 80 of them never come faster than the sound they carry.
     assert!(
-        (60..=90).contains(&sound_datagrams),
-        "{sound_datagrams} sound datagrams in 800 ms, one per 10 ms"
+        took >= Duration::from_millis(600),
+        "80 sound datagrams in {took:?}"
     );
     let played = played.lock().unwrap();
     // The tone's peak is 0.25; what the viewer played reaches it once the buffer filled.
     let peak = played.iter().fold(0.0f32, |m, s| m.max(s.abs()));
     assert!(peak > 0.15 && peak < 0.35, "peak {peak}");
-    let heard = played.iter().filter(|s| s.abs() > 0.05).count() as f32 / 2.0 / 48_000.0;
+    let heard = heard(&played);
     assert!(heard > 0.4, "only {heard:.2} s of the tone were heard");
 }

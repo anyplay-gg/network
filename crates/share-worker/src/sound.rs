@@ -429,11 +429,15 @@ mod tests {
         // Half a second passes between the source opening and the stream starting.
         std::thread::sleep(Duration::from_millis(500));
         let (tx, rx) = std::sync::mpsc::channel();
+        let began = Instant::now();
         let capturing = capture(Box::new(source), Arc::new(AtomicU8::new(0)), tx).unwrap();
         std::thread::sleep(Duration::from_millis(100));
         drop(capturing);
+        let ran = began.elapsed();
         let sent = rx.try_iter().count();
-        assert!(sent <= 15, "{sent} datagrams for 100 ms of sound");
+        // One per 10 ms of what ran; the half second from before would be 50 more.
+        let allowed = ran.as_millis() as usize / 10 + 5;
+        assert!(sent <= allowed, "{sent} datagrams for {ran:?} of sound");
     }
 
     #[test]
