@@ -69,3 +69,9 @@ Questions and ideas: the [AnyPlay Discord](https://discord.gg/9zYqf8fEsh). More 
 MIT or Apache-2.0, at your option, so that AnyPS5 (GPL-2.0) and the cloud (AGPL-3.0) can both use these crates.
 
 AnyPlay is a community project, not affiliated with the AnyPS5 maintainers or any platform holder. Only games you own.
+
+### macOS net service
+
+`cargo build --release --locked -p anyplay-net --features devices` builds a native service with CoreAudio microphone and speaker support. CI builds and tests it on macOS as well as Windows and Linux. The launcher embeds the matching binary at build time with `ANYPLAY_NET_EMBED` and starts it over standard input/output with an explicit per-user data folder.
+
+Run standalone with `--data <folder>` or use its default under `~/Library/Application Support/AnyPlay/net`. Sign-ins use the macOS Keychain when available; `--file-credentials` is intended for isolated tests. Microphone access belongs to the launcher app's privacy prompt. Share-screen capture and Discord's optional SDK are separate platform integrations; this does not add them or a game engine bridge.

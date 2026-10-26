@@ -22,7 +22,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-latest]
+        os: [windows-latest, ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -58,7 +58,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-latest]
+        os: [windows-latest, ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -74,8 +74,10 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev libpipewire-0.3-dev clang
       - name: Clippy with sound devices
         run: cargo clippy -p anyplay-voice -p anyplay-net --all-targets --features anyplay-voice/devices,anyplay-net/devices -- -D warnings
+      - name: Test the service with sound devices
+        run: cargo test --locked -p anyplay-net --features devices
       - name: Build the release binary
-        run: cargo build --release -p anyplay-net --features devices
+        run: cargo build --release --locked -p anyplay-net --features devices
 
   # Links, title IDs in code, licences and advisories: the rules every AnyPlay repository shares.
   rules:

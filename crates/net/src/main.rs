@@ -105,10 +105,13 @@ fn main() -> std::process::ExitCode {
     }
 }
 
-/// `%LOCALAPPDATA%\AnyPlay\net` on Windows, `$XDG_DATA_HOME/anyplay/net` elsewhere.
+/// The native per-user data folder. The launcher supplies its own `--data` explicitly.
 fn default_data() -> Option<PathBuf> {
     if cfg!(windows) {
         std::env::var_os("LOCALAPPDATA").map(|base| PathBuf::from(base).join("AnyPlay").join("net"))
+    } else if cfg!(target_os = "macos") {
+        std::env::var_os("HOME")
+            .map(|home| PathBuf::from(home).join("Library/Application Support/AnyPlay/net"))
     } else {
         std::env::var_os("XDG_DATA_HOME")
             .map(PathBuf::from)
@@ -157,5 +160,17 @@ fn discord_backend(given: Option<PathBuf>) -> anyplay_discord::Backend {
     match library {
         Some(library) => anyplay_discord::Backend::Sdk { library },
         None => anyplay_discord::Backend::Off,
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod macos_path_tests {
+    #[test]
+    fn standalone_service_uses_application_support() {
+        assert!(
+            super::default_data()
+                .unwrap()
+                .ends_with("Library/Application Support/AnyPlay/net")
+        );
     }
 }
