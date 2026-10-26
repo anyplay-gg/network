@@ -84,7 +84,7 @@ A link such as `anyps5://v1/join/…` never starts a game by itself; it opens th
 | Am I signed in? | Yes while the net service holds a valid session; changes arrive as callbacks. |
 | Who am I? | The handle as online ID (at most 16 characters, the size games reserve) and a 64-bit account ID from the cloud. |
 | May I use online features? | Yes while the player is signed in to the network and not banned. The answer speaks for the AnyPlay network only, never for a platform subscription ([ADR 0021](adr/0021-the-line-is-drawn-at-the-law.md)). The bridge still leaves the check as AnyPS5 answers it today, and the answer needs a lawyer's review before the public launch. |
-| Which NAT type? | Measured by the net service. Because a relay is always reachable, the game sees at least type 2. |
+| Which NAT type? | Measured by the net service from iroh's net report: 1 when nothing stands between the PC and the internet, otherwise 2 while a relay answers, since every peer reaches it through the relay. |
 | Authorization code or ID token for client X | Only for the network's own clients; an error for any publisher's client. |
 | Create, join or leave a session; set its properties | A cloud session. |
 | Submit a matchmaking ticket | The cloud queue; the result arrives as a push event. |

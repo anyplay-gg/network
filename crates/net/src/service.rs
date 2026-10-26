@@ -80,6 +80,8 @@ enum Input {
     Events(u64, EventInput),
     Bridge(BridgeInput),
     Link(LinkChange),
+    /// What a net report of the tunnels of that generation found.
+    Reach(u64, tunnel::Reach),
     /// A report of the voice hub of that generation.
     Voice(u64, voice::Report),
     /// A report of the screen hub of that generation.
@@ -221,6 +223,10 @@ pub struct Service {
     traffic: Traffic,
     secret: SecretKey,
     tunnels: Option<Tunnels>,
+    /// Counts the tunnels started, so a report of earlier ones is dropped.
+    tunnels_generation: u64,
+    /// What the last net report of the running tunnels found.
+    reach: Option<tunnel::Reach>,
     tunnels_starting: bool,
     relays_expire: u64,
     relays_asked: Option<Instant>,
@@ -341,6 +347,8 @@ impl Service {
             traffic,
             secret,
             tunnels: None,
+            tunnels_generation: 0,
+            reach: None,
             tunnels_starting: false,
             relays_expire: 0,
             relays_asked: None,
@@ -402,6 +410,16 @@ impl Service {
                     }
                 }
                 Input::Link(change) => self.link_change(change),
+                Input::Reach(generation, reach) => {
+                    if generation == self.tunnels_generation
+                        && self.tunnels.is_some()
+                        && self.reach.as_ref() != Some(&reach)
+                    {
+                        tracing::info!("net report: {reach:?}");
+                        self.reach = Some(reach);
+                        self.bridge_state();
+                    }
+                }
                 Input::Voice(generation, report) => {
                     if generation == self.voice.generation && self.voice.hub.is_some() {
                         self.voice.report = Some(report);
@@ -3110,6 +3128,7 @@ impl Service {
             relay_roots: self.config.relay_roots.clone(),
             bind: self.config.bind,
             relay_only,
+            relay_quic_port: None,
         };
         let traffic = self.traffic.clone();
         self.spawn(
@@ -3125,6 +3144,13 @@ impl Service {
                         if service.me.is_some() && service.config.relay_only == relay_only =>
                     {
                         tracing::info!("tunnel endpoint {}", tunnels.id());
+                        service.tunnels_generation += 1;
+                        service.reach = None;
+                        let generation = service.tunnels_generation;
+                        let inbox = service.inbox.clone();
+                        tunnels.watch_reach(move |reach| {
+                            let _ = inbox.send(Input::Reach(generation, reach));
+                        });
                         service.tunnels = Some(tunnels);
                         service.update_peers();
                         service.update_endpoints();
@@ -3846,7 +3872,9 @@ impl Service {
                 signed_in: true,
                 account_id: me.id.0,
                 handle: me.handle.clone(),
-                nat_type: if self.tunnels.is_some() { 2 } else { 0 },
+                nat_type: self.tunnels.as_ref().map_or(0, |tunnels| {
+                    tunnel::nat_type(self.reach.as_ref(), tunnels.relay_connected())
+                }),
                 address: self.own_address(),
             },
             _ => bridge::State::signed_out(),
