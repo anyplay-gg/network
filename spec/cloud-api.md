@@ -584,11 +584,11 @@ A friend can send a screenshot or a clip into their direct conversation ([ADR 00
 
 - **Send.** `POST /v1/conversations/{id}/media` with the raw file as the body and its `Content-Type` (`image/png`, `image/jpeg` or `video/mp4`) answers the `Message`. The file is not wrapped in JSON, so the cloud streams it to disk. The cloud checks the first bytes against the type, decodes an image under size limits, and reads an MP4's length; a file that does not match answers `bad_request`.
 - **Who.** Only in a direct conversation between two accounts that are friends and have both accepted it, with no block between them. A message request, a group, a party chat and a stranger answer `forbidden`. A muted account answers `restricted`.
-- **Limits.** A screenshot is at most 10 MB; a clip at most 100 MB and 60 seconds (`too_large` for size, `bad_request` for length). An account sends at most 10 media files in 10 minutes (`rate_limited`) and holds at most 1 GiB of files that are still kept (`limit`). The numbers are settings of the cloud.
+- **Limits.** A screenshot is at most 10 MB; a clip at most 100 MB and 60 seconds (`too_large` for size, `bad_request` for length). An account sends at most 20 media files an hour (`rate_limited`) and holds at most 1 GiB of files that are still kept (`limit`). The numbers are settings of the cloud.
 - **Fetch.** `GET /v1/media/{id}` answers the file to the two members of the conversation and to nobody else (`not_found` for everyone else, so an ID tells nothing). The `id` is 128 random bits and is not a guess-and-check address, but the check on the account is the rule, not the secrecy of the ID.
 - **Expiry.** The file is deleted 30 days after it was sent, at the latest when the message is swept. After that, or after an unsend, the message has no `media` and `GET` answers `not_found`.
-- **Unsend.** The sender takes the message back with the ordinary unsend (`DELETE .../messages/{seq}`); access ends at once and the file is deleted.
-- **Report.** A media message is reported like any message (`conversation`, `seq`). The file is then kept for as long as the report is open or kept, even if the sender unsends it, and a moderator reads it with `GET /v1/moderation/media/{id}`. Nobody else can.
+- **Unsend.** The sender takes the message back with the ordinary unsend (`DELETE .../messages/{seq}`); access ends at once; the file is kept unreachable for 7 days so that a report can still be judged, then deleted.
+- **Report.** A media message is reported like any message (`conversation`, `seq`). The file is then kept for as long as the report is kept, even if the sender unsends it, and a moderator reads it with `GET /v1/moderation/media/{id}`. Nobody else can.
 - Export and account deletion: the export lists the media an account sent (ID, kind, time; not the bytes); deleting the account deletes its files, except those held by a report.
 
 ### Not yet
@@ -672,7 +672,7 @@ DiscordTokens { access, refresh, expires_in, scope }   expires_in: seconds; scop
 | `relays/tickets` | 20 per account per hour |
 | `PUT /v1/me/avatar` | 5 per account per hour, besides the limit below |
 | messages | 30 per account per minute |
-| media messages | 10 per account per 10 minutes, 1 GiB kept per account, 4 uploads at once per node |
+| media messages | 20 per account per hour, 1 GiB kept per account, 4 uploads at once per node |
 | `POST /v1/lfg` | 5 per account per 10 minutes; 3 open per account |
 | `POST /v1/lfg/{id}/ask` | 20 per account per hour |
 | edits, unsends and reactions | 60 per account per minute |

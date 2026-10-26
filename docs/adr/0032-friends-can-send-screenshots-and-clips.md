@@ -9,7 +9,7 @@ A player can send a screenshot or a clip from their Captures to a friend, and it
 - **Size and type.** Screenshots (PNG, JPEG) up to 10 MB; clips (MP4) up to 100 MB and 60 seconds. The cloud checks the first bytes against the declared type, decodes images under limits and reads a clip's length. It does not transcode or scan content: the list of allowed types is short on purpose, and the files are shown only by the launcher, which decodes images itself and hands a clip to the system's player.
 - **Expiry.** 30 days, the same as messages. The file is deleted by the sweep; it is not kept forever for a conversation that is long over.
 - **Review.** Every media message can be reported by the recipient. A report keeps the file for as long as the report is kept, even if the sender unsends it before or after, so an unsend cannot erase the evidence (the same reason as the report hold for text in [ADR 0030](0030-messages-change-in-place.md)). Moderators read it through a route only they can use.
-- **Take back.** The sender can unsend: access ends at once and the file is deleted unless a report holds it.
+- **Take back.** The sender can unsend: access ends at once, and the file is deleted after a 7-day hold (longer if a report holds it), the same reason as the text hold in ADR 0030.
 
 ## Considered options
 
