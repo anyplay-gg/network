@@ -56,16 +56,20 @@ impl Speakers {
 
 impl SoundOut for Speakers {
     fn queued(&self) -> usize {
-        self.ring.lock().map(|r| r.len() / 2).unwrap_or(0)
+        lock(&self.ring).len() / 2
     }
 
     fn play(&mut self, samples: &[f32]) {
-        if let Ok(mut ring) = self.ring.lock()
-            && ring.len() + samples.len() <= MAX_QUEUED
-        {
+        let mut ring = lock(&self.ring);
+        if ring.len() + samples.len() <= MAX_QUEUED {
             ring.extend(samples);
         }
     }
+}
+
+/// The ring holds plain samples: whatever a panicking holder left in it is still fine to play.
+fn lock(ring: &Ring) -> std::sync::MutexGuard<'_, VecDeque<f32>> {
+    ring.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 impl Drop for Speakers {
@@ -112,9 +116,7 @@ where
         .build_output_stream(
             config,
             move |data: &mut [T], _| {
-                let Ok(mut ring) = ring.lock() else {
-                    return;
-                };
+                let mut ring = lock(&ring);
                 for out in data.chunks_mut(channels) {
                     let [l, r] = resampler.frame(&mut ring);
                     match out {

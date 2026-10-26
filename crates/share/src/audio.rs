@@ -3,7 +3,7 @@
 //! every 10 ms the speakers ask for, what the decoder should do. It holds Opus packets, not
 //! sound, so it is tested without a codec.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::wire::{AudioDatagram, Refusal};
 
@@ -36,12 +36,14 @@ pub struct AudioPacketiser {
 }
 
 impl AudioPacketiser {
+    /// The first packet says the stream starts, so a viewer that heard an earlier sender
+    /// starts its buffer again.
     pub fn new(epoch: u8) -> AudioPacketiser {
         AudioPacketiser {
             epoch,
             sequence: 0,
             timestamp: 0,
-            interrupted: false,
+            interrupted: true,
         }
     }
 
@@ -49,6 +51,19 @@ impl AudioPacketiser {
     /// viewer starts its buffer again.
     pub fn interrupt(&mut self) {
         self.interrupted = true;
+    }
+
+    pub fn epoch(&self) -> u8 {
+        self.epoch
+    }
+
+    /// The stream changed (`spec/share-play.md`: the epoch is as for video). The next packet
+    /// carries the new epoch and says the stream was interrupted.
+    pub fn set_epoch(&mut self, epoch: u8) {
+        if epoch != self.epoch {
+            self.epoch = epoch;
+            self.interrupted = true;
+        }
     }
 
     /// The datagram of the next 10 ms packet.
@@ -78,7 +93,8 @@ pub enum Playout {
     /// The packet due was lost; rebuild it from the redundancy in the next one, which plays on
     /// the next tick.
     Recover(Vec<u8>),
-    /// The packet due is missing and nothing can rebuild it: let the codec fill in.
+    /// No packet to play: let the codec fill in. Either the packet due is missing and nothing
+    /// can rebuild it, or the buffer waits to grow deeper after a late packet.
     Conceal,
 }
 
@@ -92,6 +108,8 @@ pub struct AudioStats {
     pub lost: u64,
     /// Dropped to keep the delay down.
     pub skipped: u64,
+    /// Ticks filled in while the buffer grew deeper.
+    pub held: u64,
     /// The current wait, in packets of 10 ms.
     pub depth: usize,
 }
@@ -107,6 +125,13 @@ pub struct AudioJitter {
     /// The packet due next once playing.
     next: Option<i64>,
     depth: usize,
+    /// The first packet after the latest gap: anything older is from before it.
+    start: Option<i64>,
+    /// A packet came late: play nothing new until the buffer is `depth` packets deep.
+    hold: bool,
+    /// Packets whose time passed without them, newest last: one of them arriving is late; any
+    /// other packet from before `next` is a copy.
+    missed: BTreeSet<i64>,
     concealed: u32,
     calm: u32,
     stats: AudioStats,
@@ -126,6 +151,9 @@ impl AudioJitter {
             epoch: None,
             next: None,
             depth: MIN_DEPTH,
+            start: None,
+            hold: false,
+            missed: BTreeSet::new(),
             concealed: 0,
             calm: 0,
             stats: AudioStats::default(),
@@ -142,17 +170,39 @@ impl AudioJitter {
     /// Takes in one datagram. A new epoch or an interrupted stream starts the buffer again.
     pub fn insert(&mut self, bytes: &[u8]) -> Result<(), Refusal> {
         let datagram = AudioDatagram::parse(bytes)?;
-        if datagram.interrupted || self.epoch != Some(datagram.epoch) {
+        let same_epoch = self.epoch == Some(datagram.epoch);
+        let reordered = datagram.interrupted && same_epoch && self.is_old(datagram.sequence);
+        if (datagram.interrupted && !reordered) || !same_epoch {
             self.restart();
             self.epoch = Some(datagram.epoch);
         }
         let sequence = self.unwrap_sequence(datagram.sequence);
+        if datagram.interrupted && !reordered {
+            self.start = Some(sequence);
+        }
+        if self.start.is_some_and(|start| sequence < start) {
+            // From before the gap that started this stretch.
+            return Ok(());
+        }
+        if reordered {
+            // The start of this stretch, after packets that follow it: what came before it is
+            // from before the gap.
+            if self.start.is_some_and(|start| sequence <= start) {
+                return Ok(());
+            }
+            self.start = Some(sequence);
+            self.packets.retain(|&s, _| s >= sequence);
+            self.missed.retain(|&s| s >= sequence);
+        }
         self.stats.received += 1;
         if self.next.is_some_and(|next| sequence < next) {
-            // Its time has passed: wait a packet longer from now on.
-            self.stats.late += 1;
-            self.depth = (self.depth + 1).min(MAX_DEPTH);
-            self.calm = 0;
+            if self.missed.remove(&sequence) {
+                // Its time has passed: wait a packet longer from now on.
+                self.stats.late += 1;
+                self.depth = (self.depth + 1).min(MAX_DEPTH);
+                self.hold = true;
+                self.calm = 0;
+            }
             return Ok(());
         }
         self.packets
@@ -174,12 +224,15 @@ impl AudioJitter {
             self.next = Some(first);
             return self.pop();
         };
-        // Too far behind the newest packet: drop the oldest to keep the delay.
-        while self.packets.len() > self.depth + SLACK {
-            if let Some((sequence, _)) = self.packets.pop_first() {
-                self.stats.skipped += 1;
-                self.next = Some(sequence + 1);
+        // Too far behind the newest packet: drop the oldest, back to the depth.
+        if self.packets.len() > self.depth + SLACK {
+            while self.packets.len() > self.depth {
+                if let Some((sequence, _)) = self.packets.pop_first() {
+                    self.stats.skipped += 1;
+                    self.next = Some(sequence + 1);
+                }
             }
+            self.hold = false;
         }
         let next = self.next.unwrap_or(next);
         self.calm += 1;
@@ -187,25 +240,20 @@ impl AudioJitter {
             self.calm = 0;
             self.depth = (self.depth - 1).max(MIN_DEPTH);
         }
+        if self.hold && self.packets.len() < self.depth {
+            // Growing deeper: fill in without moving on.
+            return self.conceal_or_give_up(|jitter| jitter.stats.held += 1);
+        }
+        self.hold = false;
         if let Some(payload) = self.packets.remove(&next) {
             self.next = Some(next + 1);
             self.concealed = 0;
             return Playout::Packet(payload);
         }
+        self.miss(next);
         if self.packets.is_empty() {
-            self.concealed += 1;
-            if self.concealed > MAX_CONCEAL {
-                // The stream stopped: wait for it to fill the buffer again.
-                self.next = None;
-                self.concealed = 0;
-                return Playout::Silence;
-            }
-            self.next = Some(next + 1);
-            self.stats.lost += 1;
-            return Playout::Conceal;
+            return self.conceal_or_give_up(|_| {});
         }
-        self.next = Some(next + 1);
-        self.stats.lost += 1;
         self.concealed = 0;
         match self.packets.get(&(next + 1)) {
             Some(following) => Playout::Recover(following.clone()),
@@ -213,11 +261,44 @@ impl AudioJitter {
         }
     }
 
+    /// The packet due is not here: it is counted lost, and remembered in case it comes late.
+    fn miss(&mut self, sequence: i64) {
+        self.next = Some(sequence + 1);
+        self.stats.lost += 1;
+        self.missed.insert(sequence);
+        while self.missed.len() > 2 * MAX_DEPTH {
+            self.missed.pop_first();
+        }
+    }
+
+    /// Conceals, unless nothing came for too long: then the stream stopped, and the buffer
+    /// waits for it to fill again.
+    fn conceal_or_give_up(&mut self, count: impl FnOnce(&mut Self)) -> Playout {
+        self.concealed += 1;
+        if self.concealed > MAX_CONCEAL {
+            self.next = None;
+            self.hold = false;
+            self.concealed = 0;
+            return Playout::Silence;
+        }
+        count(self);
+        Playout::Conceal
+    }
+
     fn restart(&mut self) {
         self.packets.clear();
         self.base = None;
+        self.start = None;
         self.next = None;
+        self.hold = false;
+        self.missed.clear();
         self.concealed = 0;
+    }
+
+    /// Whether `sequence` comes before the newest packet seen of this stretch.
+    fn is_old(&self, sequence: u16) -> bool {
+        self.base
+            .is_some_and(|(last, _)| (sequence.wrapping_sub(last) as i16) <= 0)
     }
 
     /// Counts a 16-bit sequence number on from the first one, across the wrap.
@@ -321,6 +402,85 @@ mod tests {
         assert_eq!(jitter.stats().lost, 1);
     }
 
+    /// Plays `ticks` ticks of 10 ms; packet `n` of `count` arrives at tick `arrive(n)`, before
+    /// that tick's play. Answers the buffer and, per packet played, its number and the ticks it
+    /// waited between arriving and playing.
+    fn waits(
+        count: u16,
+        ticks: usize,
+        arrive: impl Fn(u16) -> usize,
+    ) -> (AudioJitter, Vec<(u16, usize)>) {
+        let datagrams = stream(0, count);
+        let mut jitter = AudioJitter::new();
+        let mut played = Vec::new();
+        for tick in 0..ticks {
+            for n in (0..count).filter(|&n| arrive(n) == tick) {
+                jitter.insert(&datagrams[usize::from(n)]).unwrap();
+            }
+            if let Some(n) = packet_number(&jitter.pop()) {
+                played.push((n, tick - arrive(n)));
+            }
+        }
+        (jitter, played)
+    }
+
+    #[test]
+    fn a_stall_makes_the_wait_longer_so_the_next_one_loses_nothing() {
+        // Two stalls of 60 ms: packets 20 to 25 come with 26, and 60 to 65 with 66.
+        let stalled = |n: u16| match n {
+            20..=25 => 26,
+            60..=65 => 66,
+            n => usize::from(n),
+        };
+        let (jitter, played) = waits(100, 120, stalled);
+        let numbers: Vec<u16> = played.iter().map(|&(n, _)| n).collect();
+        // The first stall loses the packets whose time passed; the second loses none.
+        assert!(!numbers.contains(&20), "20 came 60 ms late");
+        assert!((60..66).all(|n| numbers.contains(&n)), "{numbers:?}");
+        let after_first = played.iter().find(|&&(n, _)| n == 40).unwrap().1;
+        assert!(
+            after_first >= 6,
+            "waited {after_first} ticks after a 60 ms stall"
+        );
+        assert_eq!(jitter.stats().late, 3);
+    }
+
+    #[test]
+    fn a_slow_sender_does_not_drain_the_buffer_into_losing_every_jitter() {
+        // The sender's clock is 1% slow: its packets come 1% further apart than they play.
+        // Until the last packet arrives, at tick 2018; the ones still queued then are not lost.
+        let (jitter, _) = waits(2000, 2019, |n| usize::from(n) * 101 / 100);
+        // Every time the buffer runs dry it fills to its depth again, so running dry once
+        // costs one packet and the next time is depth x 100 packets later; staying dry would
+        // cost one in every 100.
+        let lost = jitter.stats().lost;
+        assert!(
+            lost <= 5,
+            "{lost} packets lost in 20 s: {:?}",
+            jitter.stats()
+        );
+    }
+
+    #[test]
+    fn the_wait_never_grows_past_120_ms_whatever_the_stalls() {
+        // Every 50 packets a stall: the first of 100 ms, the others of 150 ms, the packets of
+        // which come together at its end.
+        let stalled = |n: u16| {
+            let n = usize::from(n);
+            let stall = if n < 50 { 10 } else { 15 };
+            let (block, at) = (n - n % 50, n % 50);
+            if (30..30 + stall).contains(&at) {
+                block + 30 + stall
+            } else {
+                n
+            }
+        };
+        let (jitter, played) = waits(1000, 1050, stalled);
+        assert_eq!(jitter.stats().depth, MAX_DEPTH);
+        let longest = played.iter().map(|&(_, w)| w).max().unwrap();
+        assert!(longest <= MAX_DEPTH, "a packet waited {longest} ticks");
+    }
+
     #[test]
     fn a_late_packet_is_dropped_and_the_wait_grows() {
         let mut jitter = AudioJitter::new();
@@ -336,25 +496,14 @@ mod tests {
         jitter.insert(&datagrams[4]).unwrap();
         assert_eq!(jitter.stats().late, 1);
         assert_eq!(jitter.stats().depth, MIN_DEPTH + 1);
-    }
-
-    #[test]
-    fn the_wait_never_grows_past_120_ms() {
-        let mut jitter = AudioJitter::new();
-        let datagrams = stream(0, 40);
-        for datagram in &datagrams[..4] {
+        // 5 to 8 are here but play only once the buffer holds 5.
+        for datagram in &datagrams[5..9] {
             jitter.insert(datagram).unwrap();
         }
-        for _ in 0..4 {
-            jitter.pop();
-        }
-        // Every packet from here arrives just after its time.
-        for datagram in &datagrams[4..14] {
-            assert_eq!(jitter.pop(), Playout::Conceal);
-            jitter.insert(datagram).unwrap();
-        }
-        assert_eq!(jitter.stats().late, 10);
-        assert_eq!(jitter.stats().depth, MAX_DEPTH);
+        assert_eq!(jitter.pop(), Playout::Conceal);
+        jitter.insert(&datagrams[9]).unwrap();
+        assert_eq!(packet_number(&jitter.pop()), Some(5));
+        assert_eq!(jitter.stats().held, 1);
     }
 
     #[test]
@@ -365,7 +514,7 @@ mod tests {
         }
         let first = packet_number(&jitter.pop()).unwrap();
         assert!(
-            usize::from(first) >= 40 - MIN_DEPTH - SLACK - 1,
+            usize::from(first) >= 40 - MIN_DEPTH,
             "played {first} of 40: the delay was kept"
         );
         assert!(jitter.stats().skipped > 0);
@@ -437,5 +586,42 @@ mod tests {
             .filter_map(|_| packet_number(&jitter.pop()))
             .collect();
         assert_eq!(played, vec![0, 1, 2, 3]);
+        // A copy of a packet that already played is not a late one.
+        jitter.insert(&datagrams[0]).unwrap();
+        assert_eq!(jitter.stats().late, 0);
+        assert_eq!(jitter.stats().depth, MIN_DEPTH);
+    }
+
+    #[test]
+    fn an_interruption_starts_over_and_an_old_one_changes_nothing() {
+        let mut jitter = AudioJitter::new();
+        let mut packetiser = AudioPacketiser::new(0);
+        let before: Vec<_> = (0..6)
+            .map(|n| packetiser.packet(&payload(n)).unwrap())
+            .collect();
+        packetiser.interrupt();
+        let after: Vec<_> = (100..106)
+            .map(|n| packetiser.packet(&payload(n)).unwrap())
+            .collect();
+        for datagram in &before {
+            jitter.insert(datagram).unwrap();
+        }
+        assert_eq!(packet_number(&jitter.pop()), Some(0));
+        for datagram in after.iter().take(4) {
+            jitter.insert(datagram).unwrap();
+        }
+        // The packets from before the gap are gone.
+        assert_eq!(packet_number(&jitter.pop()), Some(100));
+        // The first packet of a stream is marked interrupted; a copy arriving late does not
+        // wipe what came after it.
+        jitter.insert(&before[0]).unwrap();
+        jitter.insert(&after[0]).unwrap();
+        assert_eq!(packet_number(&jitter.pop()), Some(101));
+    }
+
+    #[test]
+    fn a_new_sender_says_it_starts_a_stream() {
+        let first = AudioPacketiser::new(0).packet(b"x").unwrap();
+        assert!(AudioDatagram::parse(&first).unwrap().interrupted);
     }
 }

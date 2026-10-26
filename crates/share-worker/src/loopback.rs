@@ -243,16 +243,22 @@ fn capture(
         let reader: IAudioCaptureClient = unsafe { client.GetService() }.map_err(text)?;
         unsafe { client.Start() }.map_err(text)?;
         let _ = started.send(Ok(()));
-        while !stop.load(Ordering::SeqCst) {
-            // SAFETY: a valid event handle; a timeout only means no sound came.
-            unsafe { WaitForSingleObject(event, 100) };
-            read_packets(&reader, shared)?;
-        }
-        // SAFETY: stops the stream started above.
-        unsafe { client.Stop() }.map_err(text)
+        let read = (|| {
+            while !stop.load(Ordering::SeqCst) {
+                // SAFETY: a valid event handle; a timeout only means no sound came.
+                unsafe { WaitForSingleObject(event, 100) };
+                read_packets(&reader, shared)?;
+            }
+            Ok(())
+        })();
+        // SAFETY: stops the stream started above, whether reading failed or not.
+        let stopped = unsafe { client.Stop() }.map_err(text);
+        read.and(stopped)
     })()
     .map_err(|why| format!("the game's sound: {why}"));
-    // SAFETY: the event created above, no longer used.
+    // The client goes before the event it signals.
+    drop(client);
+    // SAFETY: the event created above, no longer used by anyone.
     let _ = unsafe { CloseHandle(event) };
     result
 }

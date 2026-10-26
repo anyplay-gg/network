@@ -1,5 +1,7 @@
 //! The streamer's side: pictures from a source, through an encoder, cut into datagrams.
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::mpsc::RecvTimeoutError;
 use std::time::{Duration, Instant};
 
@@ -64,6 +66,8 @@ const MAX_FPS: u32 = 60;
 /// What the loop keeps between pictures.
 struct State {
     start: Start,
+    /// The stream's epoch, shared with the sound thread.
+    epoch: Arc<AtomicU8>,
     packetiser: Packetiser,
     parity: u8,
     key_wanted: bool,
@@ -80,6 +84,7 @@ impl State {
             ToWorker::Start(new) => {
                 self.packetiser.set_max_payload(new.max_payload);
                 self.packetiser.set_epoch(new.epoch);
+                self.epoch.store(new.epoch, Ordering::SeqCst);
                 self.parity = new.parity_percent;
                 self.start = new;
                 self.key_wanted = true;
@@ -138,13 +143,15 @@ pub fn run_with_sound(
             Ok(_) => {}
         }
     };
+    let epoch = Arc::new(AtomicU8::new(start.epoch));
     // Stops with this function.
     let _sound = sound.and_then(|sound| {
-        crate::sound::capture(sound, start.epoch, to_service.clone())
+        crate::sound::capture(sound, epoch.clone(), to_service.clone())
             .inspect_err(|why| eprintln!("share worker: no sound: {why}"))
             .ok()
     });
     let mut state = State {
+        epoch,
         packetiser: Packetiser::new(start.max_payload, start.epoch),
         parity: start.parity_percent,
         start,

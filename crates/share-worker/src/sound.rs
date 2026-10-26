@@ -4,7 +4,7 @@
 //! Windows, `CpalOut`; a clock in tests).
 
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -85,6 +85,11 @@ impl SoundSender {
             pending: Vec::new(),
             out: vec![0; anyplay_share::wire::MAX_AUDIO_PAYLOAD],
         })
+    }
+
+    /// The stream changed: the next packet carries the new epoch.
+    pub fn set_epoch(&mut self, epoch: u8) {
+        self.packetiser.set_epoch(epoch);
     }
 
     /// The source stopped giving sound for a while.
@@ -262,22 +267,29 @@ impl Drop for Capturing {
 }
 
 /// Captures from `source` on a thread of its own and sends the datagrams to the net service
-/// until the returned guard is dropped, the source ends or the link closes. A source that
-/// fails ends the sound, not the stream: the picture goes on.
+/// until the returned guard is dropped, the source ends or the link closes. The packets carry
+/// the stream's current `epoch`. A source that fails ends the sound, not the stream: the
+/// picture goes on.
 pub fn capture(
     mut source: Box<dyn SoundSource>,
-    epoch: u8,
+    epoch: Arc<AtomicU8>,
     to_service: Sender<FromWorker>,
 ) -> Result<Capturing, String> {
-    let mut sender = SoundSender::new(epoch)?;
+    let mut sender = SoundSender::new(epoch.load(Ordering::SeqCst))?;
     let stop = Arc::new(AtomicBool::new(false));
     let stopped = stop.clone();
     let thread = std::thread::Builder::new()
         .name("share-sound".into())
         .spawn(move || {
             let mut samples = Vec::new();
+            // What the source held from before the stream started is not sent.
+            if let Err(why) = source.read(&mut samples) {
+                eprintln!("share worker: the game's sound stopped: {why}");
+                return;
+            }
             let mut last_sound = Instant::now();
             while !stopped.load(Ordering::SeqCst) {
+                sender.set_epoch(epoch.load(Ordering::SeqCst));
                 samples.clear();
                 match source.read(&mut samples) {
                     Ok(true) => {}
@@ -412,9 +424,23 @@ mod tests {
     }
 
     #[test]
+    fn sound_from_before_the_stream_is_not_sent() {
+        let source = ToneSource::default();
+        // Half a second passes between the source opening and the stream starting.
+        std::thread::sleep(Duration::from_millis(500));
+        let (tx, rx) = std::sync::mpsc::channel();
+        let capturing = capture(Box::new(source), Arc::new(AtomicU8::new(0)), tx).unwrap();
+        std::thread::sleep(Duration::from_millis(100));
+        drop(capturing);
+        let sent = rx.try_iter().count();
+        assert!(sent <= 15, "{sent} datagrams for 100 ms of sound");
+    }
+
+    #[test]
     fn the_capture_thread_sends_datagrams_until_dropped() {
         let (tx, rx) = std::sync::mpsc::channel();
-        let capturing = capture(Box::new(ToneSource::default()), 7, tx).unwrap();
+        let epoch = Arc::new(AtomicU8::new(7));
+        let capturing = capture(Box::new(ToneSource::default()), epoch.clone(), tx).unwrap();
         let mut count = 0;
         let deadline = Instant::now() + Duration::from_secs(2);
         while count < 10 && Instant::now() < deadline {
@@ -425,6 +451,21 @@ mod tests {
             }
         }
         assert_eq!(count, 10);
+        // A new epoch for the stream is the sound's too.
+        epoch.store(8, Ordering::SeqCst);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut moved = false;
+        while !moved && Instant::now() < deadline {
+            if let Ok(FromWorker::Datagram(bytes)) = rx.recv_timeout(Duration::from_millis(100)) {
+                let datagram = anyplay_share::wire::AudioDatagram::parse(&bytes).unwrap();
+                moved = datagram.epoch == 8;
+                assert!(
+                    !moved || datagram.interrupted,
+                    "the first of the new epoch says so"
+                );
+            }
+        }
+        assert!(moved, "the sound kept epoch 7");
         drop(capturing);
         while rx.try_recv().is_ok() {}
         std::thread::sleep(Duration::from_millis(50));
