@@ -208,6 +208,8 @@ pub enum Command {
     // Parties and messages
     /// The player's party, or null.
     Party,
+    /// Makes a party of one with the player as its leader, or returns the one they are in.
+    PartyCreate,
     /// Invites friends to the party; makes one when the player is in none.
     PartyInvite {
         accounts: Vec<AccountId>,
@@ -1515,6 +1517,10 @@ mod tests {
                     call: true
                 }
             ))
+        );
+        assert_eq!(
+            parse_command(r#"{"id":4,"do":"party_create"}"#),
+            Ok((4, Command::PartyCreate))
         );
         assert_eq!(
             parse_command(r#"{"id":9,"do":"calls_seen"}"#),

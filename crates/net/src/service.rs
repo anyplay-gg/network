@@ -1421,6 +1421,7 @@ impl Service {
             }
             // Parties and messages
             social @ (Command::Party
+            | Command::PartyCreate
             | Command::PartyInvite { .. }
             | Command::MissedCalls
             | Command::CallsSeen { .. }
@@ -1968,6 +1969,22 @@ impl Service {
                     party: party.map(launcher_party),
                 }
             }),
+            Command::PartyCreate => self.request(
+                id,
+                async move {
+                    // In a party already: that one is what the player gets back.
+                    match cloud.party().await? {
+                        Some(party) => Ok(party),
+                        None => cloud.create_party().await,
+                    }
+                },
+                |service, party| {
+                    service.party_changed(party.clone());
+                    control::PartyState {
+                        party: Some(launcher_party(party)),
+                    }
+                },
+            ),
             Command::PartyInvite { accounts, call } => self.request(
                 id,
                 async move { cloud.invite_to_party(accounts, call).await },
