@@ -23,6 +23,10 @@ serde_json.workspace = true
 mp4 = "0.14"
 # The game's sound: Opus, as voice uses it (libopus, BSD-3-Clause; docs/adr/0014).
 opus = "0.4"
+# rtmps:// for the broadcast: TLS from rustls with the ring provider (Apache-2.0 or MIT or ISC;
+# no OpenSSL), and the operating system's own certificate checks (MIT or Apache-2.0).
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+rustls-platform-verifier = "0.7"
 
 # Windows: the system's own H.264 encoders and decoders (Media Foundation), Windows Graphics
 # Capture of one window, and a window for the viewer. All of it ships with the system or is
@@ -70,5 +74,4 @@ anyplay-net = { path = "../net" }
 iroh = "1.4.1"
 iroh-relay = { version = "1.4.1", features = ["server"] }
 rcgen = "0.14"
-rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 tokio = { version = "1.54", features = ["rt-multi-thread", "macros", "net", "sync", "time"] }

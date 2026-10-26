@@ -1,7 +1,9 @@
 //! The broadcaster against a small RTMP server of its own, on loopback.
 
+use std::cell::RefCell;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
+use std::rc::Rc;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -9,9 +11,11 @@ use std::time::{Duration, Instant};
 use anyplay_share::codec::{CodecError, EncodedFrame, Frame, VideoEncoder};
 
 use super::amf::{self, Value};
+use super::audio::{AudioEncoder, SoundFactory};
 use super::rtmp::{AUDIO, COMMAND, ChunkReader, ChunkWriter, USER_CONTROL, VIDEO, WINDOW_ACK_SIZE};
-use super::{Command, Event, Setup, run};
+use super::{Command, Event, Setup, run, run_with_sound};
 use crate::host::PatternSource;
+use crate::sound::{SoundSource, ToneSource};
 
 /// What the server saw.
 #[derive(Default)]
@@ -30,29 +34,91 @@ fn server(reject: bool) -> (u16, Arc<Mutex<Seen>>) {
     let seen = Arc::new(Mutex::new(Seen::default()));
     let shared = seen.clone();
     std::thread::spawn(move || {
-        let Ok((mut stream, _)) = listener.accept() else {
+        let Ok((stream, _)) = listener.accept() else {
             return;
         };
-        serve(&mut stream, reject, &shared);
+        serve(stream.try_clone().unwrap(), stream, reject, &shared);
     });
     (port, seen)
 }
 
-fn serve(stream: &mut TcpStream, reject: bool, seen: &Arc<Mutex<Seen>>) {
+/// One TLS stream that a reader and a writer on the same thread share.
+#[derive(Clone)]
+struct Both(Rc<RefCell<rustls::StreamOwned<rustls::ServerConnection, TcpStream>>>);
+
+impl Read for Both {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        self.0.borrow_mut().read(buf)
+    }
+}
+
+impl Write for Both {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.borrow_mut().write(buf)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.0.borrow_mut().flush()
+    }
+}
+
+/// A self-signed certificate for `localhost`, the server's settings for it and the client's
+/// settings that trust only it.
+fn tls_pair() -> (Arc<rustls::ServerConfig>, Arc<rustls::ClientConfig>) {
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    let cert = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
+    let der = cert.cert.der().clone();
+    let key = rustls::pki_types::PrivateKeyDer::from(rustls::pki_types::PrivatePkcs8KeyDer::from(
+        cert.signing_key.serialize_der(),
+    ));
+    let server = rustls::ServerConfig::builder_with_provider(provider.clone())
+        .with_safe_default_protocol_versions()
+        .unwrap()
+        .with_no_client_auth()
+        .with_single_cert(vec![der.clone()], key)
+        .unwrap();
+    let mut roots = rustls::RootCertStore::empty();
+    roots.add(der).unwrap();
+    let client = rustls::ClientConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()
+        .unwrap()
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+    (Arc::new(server), Arc::new(client))
+}
+
+/// Like [`server`], over TLS.
+fn tls_server(config: Arc<rustls::ServerConfig>) -> (u16, Arc<Mutex<Seen>>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let seen = Arc::new(Mutex::new(Seen::default()));
+    let shared = seen.clone();
+    std::thread::spawn(move || {
+        let Ok((tcp, _)) = listener.accept() else {
+            return;
+        };
+        let conn = rustls::ServerConnection::new(config).unwrap();
+        let both = Both(Rc::new(RefCell::new(rustls::StreamOwned::new(conn, tcp))));
+        serve(both.clone(), both, false, &shared);
+    });
+    (port, seen)
+}
+
+fn serve(mut input: impl Read, mut output: impl Write, reject: bool, seen: &Arc<Mutex<Seen>>) {
     let mut c0c1 = [0u8; 1537];
-    if stream.read_exact(&mut c0c1).is_err() {
+    if input.read_exact(&mut c0c1).is_err() {
         return;
     }
     let mut reply = vec![3u8];
     reply.extend_from_slice(&[0u8; 1536]);
     reply.extend_from_slice(&[0u8; 1536]);
-    stream.write_all(&reply).unwrap();
+    output.write_all(&reply).unwrap();
+    output.flush().unwrap();
     let mut c2 = [0u8; 1536];
-    if stream.read_exact(&mut c2).is_err() {
+    if input.read_exact(&mut c2).is_err() {
         return;
     }
-    let mut reader = ChunkReader::new(stream.try_clone().unwrap());
-    let mut writer = ChunkWriter::new(stream.try_clone().unwrap());
+    let mut reader = ChunkReader::new(input);
+    let mut writer = ChunkWriter::new(output);
     while let Ok(message) = reader.read_message() {
         match message.kind {
             COMMAND => {
@@ -171,16 +237,27 @@ type Started = (
 );
 
 fn start(url: String, key: &str) -> Started {
+    start_with(url, key, None, None)
+}
+
+fn start_with(
+    url: String,
+    key: &str,
+    sound: Option<SoundFactory>,
+    tls: Option<Arc<rustls::ClientConfig>>,
+) -> Started {
     let (command_tx, command_rx) = mpsc::channel();
     let (event_tx, event_rx) = mpsc::channel();
     let key = key.to_owned();
     let thread = std::thread::spawn(move || {
-        run(
+        run_with_sound(
             setup(),
             &url,
             &key,
             Box::new(PatternSource::default()),
             Box::new(FakeEncoder { count: 0 }),
+            sound,
+            tls,
             command_rx,
             event_tx,
         )
@@ -318,6 +395,209 @@ fn the_events_are_json_lines() {
         .to_line(),
         r#"{"event":"stats","seconds":4,"kbps":5900,"dropped":0}"#
     );
+}
+
+/// Fakes AAC: one two-byte frame per 1024 samples, `0xAB` and the block's peak level in percent.
+struct FakeAac {
+    pending: Vec<f32>,
+}
+
+impl AudioEncoder for FakeAac {
+    fn encode(&mut self, samples: &[f32]) -> Result<Vec<Vec<u8>>, String> {
+        self.pending.extend_from_slice(samples);
+        let mut frames = Vec::new();
+        while self.pending.len() >= 2048 {
+            let block: Vec<f32> = self.pending.drain(..2048).collect();
+            let peak = block.iter().fold(0.0f32, |m, s| m.max(s.abs()));
+            frames.push(vec![0xAB, (peak * 100.0) as u8]);
+        }
+        Ok(frames)
+    }
+}
+
+fn tone_factory() -> SoundFactory {
+    Box::new(|| {
+        Ok((
+            Box::new(ToneSource::default()) as Box<dyn SoundSource>,
+            Box::new(FakeAac {
+                pending: Vec::new(),
+            }) as Box<dyn AudioEncoder>,
+        ))
+    })
+}
+
+/// Waits for `Live`, lets the stream run for `seconds`, ends it and returns the reason.
+fn run_for(
+    commands: &mpsc::Sender<Command>,
+    events: &mpsc::Receiver<Event>,
+    seconds: f64,
+) -> String {
+    assert_eq!(wait_for(events, |_| true), Event::Connecting);
+    assert!(matches!(wait_for(events, |_| true), Event::Live { .. }));
+    std::thread::sleep(Duration::from_secs_f64(seconds));
+    commands.send(Command::Quit).unwrap();
+    let Event::Ended { reason } = wait_for(events, |e| matches!(e, Event::Ended { .. })) else {
+        unreachable!()
+    };
+    reason
+}
+
+fn ended(events: &mpsc::Receiver<Event>) -> String {
+    let Event::Ended { reason } = wait_for(events, |e| matches!(e, Event::Ended { .. })) else {
+        unreachable!()
+    };
+    reason
+}
+
+#[test]
+fn the_games_sound_goes_out_as_aac_in_step_with_the_clock() {
+    let (port, seen) = server(false);
+    let (commands, events, thread) = start_with(
+        format!("rtmp://127.0.0.1:{port}/live"),
+        "k",
+        Some(tone_factory()),
+        None,
+    );
+    assert_eq!(run_for(&commands, &events, 2.6), "quit");
+    thread.join().unwrap();
+    std::thread::sleep(Duration::from_millis(200));
+    let seen = seen.lock().unwrap();
+    assert_eq!(
+        seen.audio[0].1,
+        [0xAF, 0, 0x11, 0x90],
+        "the configuration first"
+    );
+    let frames = &seen.audio[1..];
+    assert!(frames.len() > 80, "{} audio frames", frames.len());
+    // Real sound, not the silence of version 0: every frame is the fake encoder's, with the
+    // level of the tone (a quarter of full scale) once it settled.
+    assert!(
+        frames.iter().all(|f| f.1[..3] == [0xAF, 1, 0xAB]),
+        "silence in between"
+    );
+    let loud = frames.iter().filter(|f| f.1[3] >= 20).count();
+    assert!(
+        loud * 10 >= frames.len() * 9,
+        "{loud} of {} loud",
+        frames.len()
+    );
+    // Times never go back, start near zero and follow the clock to the end.
+    assert!(frames.windows(2).all(|w| w[0].0 <= w[1].0));
+    assert!(frames[0].0 < 200, "{}", frames[0].0);
+    let last = frames.last().unwrap().0;
+    assert!((1800..=2900).contains(&last), "last frame at {last} ms");
+    // Pictures and sound share one clock: the last of each is within a quarter of a second.
+    let video_last = seen.video.last().unwrap().0;
+    assert!(video_last.abs_diff(last) < 250, "{video_last} vs {last}");
+}
+
+#[test]
+fn a_sound_that_cannot_start_leaves_the_stream_with_silence() {
+    let (port, seen) = server(false);
+    let failing: SoundFactory = Box::new(|| Err("no game sound here".to_owned()));
+    let (commands, events, thread) = start_with(
+        format!("rtmp://127.0.0.1:{port}/live"),
+        "k",
+        Some(failing),
+        None,
+    );
+    assert_eq!(run_for(&commands, &events, 1.2), "quit");
+    thread.join().unwrap();
+    std::thread::sleep(Duration::from_millis(200));
+    let seen = seen.lock().unwrap();
+    assert_eq!(seen.audio[0].1, [0xAF, 0, 0x11, 0x90]);
+    assert!(seen.audio.len() > 30, "{} audio frames", seen.audio.len());
+    assert_eq!(
+        seen.audio[1].1,
+        [0xAF, 1, 0x21, 0x10, 0x04, 0x60, 0x8C, 0x1C]
+    );
+}
+
+#[test]
+fn a_secure_address_streams_over_tls() {
+    let (server_config, client_config) = tls_pair();
+    let (port, seen) = tls_server(server_config);
+    let (commands, events, thread) = start_with(
+        format!("rtmps://localhost:{port}/live"),
+        "tls-key",
+        Some(tone_factory()),
+        Some(client_config),
+    );
+    assert_eq!(run_for(&commands, &events, 1.5), "quit");
+    thread.join().unwrap();
+    std::thread::sleep(Duration::from_millis(300));
+    let seen = seen.lock().unwrap();
+    assert_eq!(
+        &seen.commands[..4],
+        ["connect", "releaseStream", "FCPublish", "createStream"]
+    );
+    assert_eq!(seen.keys, ["tls-key"]);
+    assert!(seen.video.len() > 20, "{} pictures", seen.video.len());
+    assert!(seen.audio.len() > 40, "{} audio frames", seen.audio.len());
+}
+
+#[test]
+fn a_certificate_the_pc_does_not_trust_is_said_in_plain_words() {
+    // The server's certificate is not the one the client trusts.
+    let (server_config, _) = tls_pair();
+    let (_, other_client) = tls_pair();
+    let (port, _) = tls_server(server_config);
+    let (_commands, events, thread) = start_with(
+        format!("rtmps://localhost:{port}/live"),
+        "secret-key-1",
+        None,
+        Some(other_client),
+    );
+    let reason = ended(&events);
+    assert!(
+        reason.starts_with("connect_failed: tls_untrusted: "),
+        "{reason}"
+    );
+    assert!(reason.contains("certificate"), "{reason}");
+    assert!(!reason.contains("secret-key-1"));
+    thread.join().unwrap();
+}
+
+#[test]
+fn a_certificate_for_another_name_is_said_in_plain_words() {
+    // The certificate is for `localhost`; the address names the loopback IP.
+    let (server_config, client_config) = tls_pair();
+    let (port, _) = tls_server(server_config);
+    let (_commands, events, thread) = start_with(
+        format!("rtmps://127.0.0.1:{port}/live"),
+        "k",
+        None,
+        Some(client_config),
+    );
+    let reason = ended(&events);
+    assert!(
+        reason.starts_with("connect_failed: tls_untrusted: "),
+        "{reason}"
+    );
+    assert!(reason.contains("different server name"), "{reason}");
+    thread.join().unwrap();
+}
+
+#[test]
+fn a_server_that_hangs_up_during_the_handshake_is_a_secure_connection_failure() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        let _ = listener.accept();
+    });
+    let (_, client_config) = tls_pair();
+    let (_commands, events, thread) = start_with(
+        format!("rtmps://localhost:{port}/live"),
+        "k",
+        None,
+        Some(client_config),
+    );
+    let reason = ended(&events);
+    assert!(
+        reason.starts_with("connect_failed: tls_failed: "),
+        "{reason}"
+    );
+    thread.join().unwrap();
 }
 
 /// Replays real H.264 (Annex B, one access unit after the other, each starting with a delimiter)

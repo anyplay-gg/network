@@ -1,7 +1,7 @@
 //! The bodies of RTMP video and audio messages: FLV tags without their headers.
 //!
 //! Video is H.264 in AVCC form (length-prefixed units) with the decoder configuration sent
-//! first; audio is AAC-LC, 48 kHz stereo, and for now only silence.
+//! first; audio is AAC-LC, 48 kHz stereo: the game's sound, or silence.
 
 use crate::clips::mux::nal_units;
 
@@ -63,6 +63,8 @@ pub const AAC_SILENCE: [u8; 6] = [0x21, 0x10, 0x04, 0x60, 0x8C, 0x1C];
 /// Samples in one AAC frame, and the rate.
 pub const AAC_FRAME_SAMPLES: u64 = 1024;
 pub const AAC_RATE: u64 = 48_000;
+/// The bit rate of the sound track, in kilobits per second.
+pub const AAC_KBPS: u32 = 128;
 
 /// The audio configuration tag.
 pub fn audio_config_tag() -> Vec<u8> {

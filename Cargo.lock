@@ -281,6 +281,7 @@ dependencies = [
  "pipewire",
  "rcgen",
  "rustls",
+ "rustls-platform-verifier",
  "serde",
  "serde_json",
  "tokio",

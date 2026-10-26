@@ -292,6 +292,7 @@ fn run_broadcast(
             return ExitCode::FAILURE;
         }
     };
+    let sound = broadcast_sound(pids.first().copied());
     let source = match frame_source("game", title, window, pids) {
         Ok(source) => source,
         Err(why) => {
@@ -312,7 +313,37 @@ fn run_broadcast(
             }
         }
     });
-    broadcast::run(setup, &url, &key, source, encoder, command_rx, event_tx);
+    broadcast::run_with_sound(
+        setup, &url, &key, source, encoder, sound, None, command_rx, event_tx,
+    );
     let _ = printer.join();
     ExitCode::SUCCESS
+}
+
+/// The game's sound for a broadcast: the game's process tree on Windows (never the microphone or
+/// other programs), AAC from the system's encoder. Made on the sound thread; where it cannot be
+/// made, or on a system without it, the broadcast carries silence.
+fn broadcast_sound(
+    pid: Option<u32>,
+) -> Option<anyplay_share_worker::broadcast::audio::SoundFactory> {
+    #[cfg(windows)]
+    {
+        use anyplay_share_worker::broadcast::aac::MfAac;
+        use anyplay_share_worker::broadcast::audio::AudioEncoder;
+        use anyplay_share_worker::loopback::LoopbackSource;
+        let pid = pid?;
+        Some(Box::new(move || {
+            let source = LoopbackSource::open(pid)?;
+            let encoder = MfAac::open()?;
+            Ok((
+                Box::new(source) as Box<dyn SoundSource>,
+                Box::new(encoder) as Box<dyn AudioEncoder>,
+            ))
+        }))
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = pid;
+        None
+    }
 }
