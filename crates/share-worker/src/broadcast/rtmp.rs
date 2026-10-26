@@ -332,7 +332,8 @@ impl<R: Read> ChunkReader<R> {
                 self.streams.insert(csid, partial);
                 if message.kind == SET_CHUNK_SIZE && message.payload.len() >= 4 {
                     let size = u32::from_be_bytes(message.payload[..4].try_into().unwrap());
-                    self.chunk_size = (size & 0x7FFF_FFFF).clamp(1, MAX_INCOMING_CHUNK as u32) as usize;
+                    self.chunk_size =
+                        (size & 0x7FFF_FFFF).clamp(1, MAX_INCOMING_CHUNK as u32) as usize;
                 }
                 return Ok(message);
             }
