@@ -36,13 +36,15 @@ A friend can join from an invitation (party members get one), from the friend's 
 | Signed in and online | the launcher is signed out or the cloud cannot be reached | to sign in, or that they are offline |
 | Online play on | the player switched the online features off | to switch them on |
 | Owned | no game in the library has the title ID | which game they need |
-| Version | the library's version of the game differs from the offer's | "You need *Minecraft 01.044.000*; you have *01.008.000*" |
+| Version | the library's version of the game does not fit the offer's under the title's version rule (below) | "You need *Minecraft 01.044.000*; you have *01.008.000*" |
 | Toolkit | the session's AnyPS5 build differs from the one the game would start with | the build they need and have |
 | Place | the session is full | that it is full |
 | Not busy | another game is running | to close it first |
 | Still there | the cloud no longer knows the session | that it ended |
 
 The first four are local. The toolkit, place and presence are the net service's `check_join`, which asks the cloud for the session and answers `version_mismatch` (with `expected`), `full` or `not_found`. An unlocked copy is not required to press Join: if the game is owned but not yet unlocked, the launcher unlocks it and then starts it in the session.
+
+When the version check fails, the card also offers **Try Anyway**, a quiet second action beside the primary one. It says in the card's words that the game may not connect or may fall out of sync, and it joins regardless: the launcher sends the same `check_join` and `game_start` with `override_version` true, which skips the version part of the net service's and the cloud's guard and nothing else (a different AnyPS5 build still blocks), and writes the override to its log.
 
 **2. The start.** The launcher sends `game_start` with `join` set to the session. The net service joins, keeps the join intent for the game, and the bridge answers the game's LAN calls as for the host. The joiner's game finds the host's world through discovery on the virtual LAN. The game, not the launcher, opens the world.
 
@@ -67,11 +69,13 @@ The launcher holds a small curated table, `data/lan-titles.v1.json`, of the titl
   "schema": 1,
   "updated": "2026-10-25",
   "titles": {
-    "PPSA17221": { "name": "Minecraft", "mode": "lan", "max_players": 8 }
+    "PPSA17221": { "name": "Minecraft", "mode": "lan", "max_players": 8, "version": "exact" }
   }
 }
 ```
 
 - `mode` is the online mode: `lan` (the game finds others by local network broadcast). Other modes will be added when a title needs one; a launcher ignores an entry whose mode it does not know.
 - `max_players` is the most players the game allows in one world, host included; it is the `max_members` of the session.
+- `version` is how far the host's and the joiner's versions of the game may differ: `exact` (the same version; also what an entry without the field means), `major` (the same first dot-separated part: `01.044.000` fits `01.050.000`, not `02.000.000`) or `any`. A game that refuses another protocol version stays `exact`; `major` and `any` are for games seen to play across patches. A value this launcher does not know refuses the file, like any other nonsense. The field is optional, so the schema stays 1 and launchers from before it read the file and treat every entry as `exact`.
+- **Where the rule is applied.** The table is the launcher's, so the launcher reads the rule and sends it with the join (`version_rule` on `check_join`, `game_start` and the cloud's join). The net service and the cloud apply it by comparing two version texts and know no title. Nothing is stored in the session, so changing a rule in the table needs no migration.
 - A title is in the table only after someone has seen it work (an observation log, or a run on two PCs), with the evidence in the pull request.

@@ -15,8 +15,8 @@ use std::time::{Duration, Instant};
 use anyplay_api::{
     AccountId, Activity, CodeAnswer, CreateSession, Device, ErrorCode, Event, FriendLists,
     Invitation, JoinSession, MAX_DAY_MINUTES, MAX_PLAYTIME_UPLOAD, Me, Platform, PlaytimeEntry,
-    PresenceRequest, Report, Session, SessionKind, Visibility, check_handle, day_number,
-    is_title_id,
+    PresenceRequest, Report, Session, SessionKind, VersionRule, Visibility, check_handle,
+    day_number, is_title_id,
 };
 use anyplay_bridge_protocol::{
     self as bridge, ActivateResult, DialogResult, Frame, Message, PeerInfoReply, PeerState,
@@ -1062,6 +1062,8 @@ impl Service {
                 title_id,
                 version,
                 build,
+                version_rule,
+                override_version,
             } => {
                 let Some(cloud) = self.signed_in_cloud(id) else {
                     return;
@@ -1078,7 +1080,10 @@ impl Service {
                                         "The session belongs to another game.",
                                     ),
                                 );
-                            } else if found.version != version || found.build != build {
+                            } else if !(override_version
+                                || version_rule.allows(&found.version, &version))
+                                || found.build != build
+                            {
                                 let mut failure = Failure::new(
                                     ErrorCode::VersionMismatch.as_str(),
                                     format!(
@@ -1109,7 +1114,18 @@ impl Service {
                 build,
                 join,
                 host,
-            } => self.game_start(id, title_id, title, version, build, join, host),
+                version_rule,
+                override_version,
+            } => self.game_start(
+                id,
+                title_id,
+                title,
+                version,
+                build,
+                join,
+                host,
+                (version_rule, override_version),
+            ),
             Command::GameEnd => {
                 self.game_end();
                 self.ok(id, Done {});
@@ -2970,6 +2986,9 @@ impl Service {
                 endpoint: endpoint.clone(),
                 relay: relay.clone(),
                 invitation: None,
+                // The session's own version: it fits as it is.
+                version_rule: VersionRule::Exact,
+                override_version: false,
             };
             self.spawn(
                 async move { cloud.join(&id, &body).await },
@@ -3256,6 +3275,7 @@ impl Service {
         build: String,
         join: Option<String>,
         host: Option<control::Host>,
+        (version_rule, override_version): (VersionRule, bool),
     ) {
         if self.game.is_some() {
             self.game_end();
@@ -3316,7 +3336,12 @@ impl Service {
                 .values()
                 .find(|i| i.session == session)
                 .map(|i| i.id.clone()),
+            version_rule,
+            override_version,
         };
+        if override_version {
+            tracing::info!("joining {session} although the version rule may not fit (Try Anyway)");
+        }
         self.spawn(
             async move { cloud.join(&session, &body).await },
             move |service, result| match result {
@@ -3971,6 +3996,9 @@ impl Service {
                     endpoint,
                     relay,
                     invitation: None,
+                    // A game's own join calls are the game's: exact, as before.
+                    version_rule: VersionRule::Exact,
+                    override_version: false,
                 };
                 self.spawn(
                     async move { cloud.join(&id, &body).await.map(Some) },

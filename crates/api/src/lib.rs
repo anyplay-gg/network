@@ -474,6 +474,49 @@ pub struct JoinSession {
     pub relay: Option<String>,
     #[serde(default)]
     pub invitation: Option<String>,
+    /// How far the joiner's game version may differ from the session's. The joiner's launcher
+    /// reads it from its own table of games; the cloud knows no games and applies it as given.
+    #[serde(default, skip_serializing_if = "is_exact")]
+    pub version_rule: VersionRule,
+    /// The player chose to join although the rule says the versions do not fit ("Try Anyway").
+    /// Only the version check is skipped; the AnyPS5 build must still match.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub override_version: bool,
+}
+
+/// How far two versions of a game may differ for the players to play together. The version is the
+/// game's own text, such as `01.044.000`, whose first dot-separated part is its major version.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VersionRule {
+    /// The versions must be the same text. What every join was before the rule existed.
+    #[default]
+    Exact,
+    /// The first part must be the same: `01.044.000` fits `01.050.000`, not `02.000.000`.
+    Major,
+    /// Any two versions fit.
+    Any,
+}
+
+impl VersionRule {
+    /// Do the host's and the joiner's versions fit under this rule?
+    pub fn allows(self, host: &str, joiner: &str) -> bool {
+        match self {
+            VersionRule::Exact => host == joiner,
+            VersionRule::Any => true,
+            VersionRule::Major => {
+                host == joiner || {
+                    let major = |v: &str| v.split('.').next().unwrap_or_default().to_owned();
+                    let (a, b) = (major(host), major(joiner));
+                    !a.is_empty() && a == b
+                }
+            }
+        }
+    }
+}
+
+fn is_exact(rule: &VersionRule) -> bool {
+    *rule == VersionRule::Exact
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -2164,6 +2207,40 @@ mod join_code_tests {
         let json = serde_json::to_value(&session).unwrap();
         assert_eq!(json["kind"], "session");
         assert_eq!(serde_json::from_value::<Redeemed>(json).unwrap(), session);
+    }
+
+    #[test]
+    fn a_version_rule_says_which_versions_fit() {
+        use VersionRule::{Any, Exact, Major};
+        assert!(Exact.allows("01.044.000", "01.044.000"));
+        assert!(!Exact.allows("01.044.000", "01.050.000"));
+        assert!(Major.allows("01.044.000", "01.050.000"));
+        assert!(!Major.allows("01.044.000", "02.000.000"));
+        assert!(Major.allows("1.2", "1"));
+        assert!(Major.allows("weird", "weird"));
+        assert!(!Major.allows(".1", ".2"));
+        assert!(Any.allows("01.044.000", "02.000.000"));
+        assert_eq!(VersionRule::default(), Exact);
+    }
+
+    #[test]
+    fn a_join_without_a_rule_is_exact_and_the_default_stays_off_the_wire() {
+        let old = r#"{"version":"1","build":"b","endpoint":"e"}"#;
+        let join: JoinSession = serde_json::from_str(old).unwrap();
+        assert_eq!(join.version_rule, VersionRule::Exact);
+        assert!(!join.override_version);
+        assert_eq!(
+            serde_json::to_string(&join).unwrap(),
+            r#"{"version":"1","build":"b","endpoint":"e","relay":null,"invitation":null}"#
+        );
+        let asked = JoinSession {
+            version_rule: VersionRule::Major,
+            override_version: true,
+            ..join
+        };
+        let json = serde_json::to_value(&asked).unwrap();
+        assert_eq!(json["version_rule"], "major");
+        assert_eq!(json["override_version"], true);
     }
 
     #[test]

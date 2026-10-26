@@ -6,7 +6,9 @@
 
 use std::collections::BTreeMap;
 
-use anyplay_api::{Account, AccountId, ErrorCode, Expected, FriendLists, Invitation, Visibility};
+use anyplay_api::{
+    Account, AccountId, ErrorCode, Expected, FriendLists, Invitation, VersionRule, Visibility,
+};
 use serde::{Deserialize, Serialize};
 
 pub use anyplay_api;
@@ -85,6 +87,12 @@ pub enum Command {
         title_id: String,
         version: String,
         build: String,
+        /// How far `version` may differ from the session's (the launcher's table of games).
+        #[serde(default, skip_serializing_if = "is_exact")]
+        version_rule: VersionRule,
+        /// "Try Anyway": the player chose to join despite the rule. The build is still checked.
+        #[serde(default, skip_serializing_if = "is_false")]
+        override_version: bool,
     },
     GameStart {
         title_id: String,
@@ -96,6 +104,11 @@ pub enum Command {
         /// party into it. Without `join` only; with both, `join` wins.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         host: Option<Host>,
+        /// With `join`: the rule and the override, passed on to the cloud's join as they are.
+        #[serde(default, skip_serializing_if = "is_exact")]
+        version_rule: VersionRule,
+        #[serde(default, skip_serializing_if = "is_false")]
+        override_version: bool,
     },
     GameEnd,
     Invite {
@@ -425,6 +438,14 @@ struct CommandOut<'a> {
 #[derive(Deserialize)]
 struct CommandHead {
     id: u64,
+}
+
+fn is_exact(rule: &VersionRule) -> bool {
+    *rule == VersionRule::Exact
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 /// The line that sends `command` as number `id`, newline included.
@@ -2059,6 +2080,8 @@ mod tests {
             version: "01.000".into(),
             build: "0.1.3".into(),
             join: None,
+            version_rule: VersionRule::Exact,
+            override_version: false,
             host: Some(Host {
                 max_members: 8,
                 visibility: Visibility::Friends,
@@ -2084,12 +2107,56 @@ mod tests {
                     build: "0.1.3".into(),
                     join: None,
                     host: None,
+                    version_rule: VersionRule::Exact,
+                    override_version: false,
                 }
             ))
         );
         // The answer of an older net service has no session.
         let answer: GameStarted = serde_json::from_str(r#"{"env":{}}"#).unwrap();
         assert_eq!(answer.session, None);
+    }
+
+    #[test]
+    fn a_join_may_carry_a_version_rule_and_an_override() {
+        let check = Command::CheckJoin {
+            session: "S1".into(),
+            title_id: "GAME00001".into(),
+            version: "01.050.000".into(),
+            build: "0.1.3".into(),
+            version_rule: VersionRule::Major,
+            override_version: true,
+        };
+        let line = command_line(7, &check);
+        assert!(line.contains("\"version_rule\":\"major\""), "{line}");
+        assert!(line.contains("\"override_version\":true"), "{line}");
+        assert_eq!(parse_command(&line), Ok((7, check)));
+        // A launcher from before the rule sends neither, and its line reads as exact.
+        let old = r#"{"id":8,"do":"check_join","session":"S1","title_id":"GAME00001","version":"1","build":"b"}"#;
+        assert_eq!(
+            parse_command(old),
+            Ok((
+                8,
+                Command::CheckJoin {
+                    session: "S1".into(),
+                    title_id: "GAME00001".into(),
+                    version: "1".into(),
+                    build: "b".into(),
+                    version_rule: VersionRule::Exact,
+                    override_version: false,
+                }
+            ))
+        );
+        // The default stays off the line.
+        let plain = Command::CheckJoin {
+            session: "S1".into(),
+            title_id: "GAME00001".into(),
+            version: "1".into(),
+            build: "b".into(),
+            version_rule: VersionRule::Exact,
+            override_version: false,
+        };
+        assert!(!command_line(9, &plain).contains("version_rule"));
     }
 
     // A command field named `id` once replaced the command's number on the line, so the net service
