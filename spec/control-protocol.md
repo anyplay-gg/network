@@ -126,6 +126,7 @@ When the cloud retires this launcher's version ([cloud API](cloud-api.md#convent
 | `mic_mute` | `muted` | `{}`: mutes the player's own microphone in party voice, whatever the mode |
 | `deafen` | `deafened` | `{}`: nobody is heard, and the microphone is silenced too |
 | `push_to_talk` | `talking` | `{}` |
+| `voice_noise` | `enabled` | `{}`: noise suppression (RNNoise) on the microphone; on in a new service |
 | `voice_mode` | `mode`: `push_to_talk` or `voice_activity` | `{}` |
 | `peer_volume` | `account`, `percent` (0 to 200) | `{}`; `bad_request` above 200 |
 | `peer_mute` | `account`, `muted` | `{}` |
