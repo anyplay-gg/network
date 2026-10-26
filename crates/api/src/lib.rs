@@ -163,7 +163,7 @@ pub struct Me {
     pub handle: String,
     pub email: String,
     pub created: u64,
-    /// The account appears offline to every other account (ADR 0028). False when a cloud does
+    /// The account appears offline to every other account (ADR 0033). False when a cloud does
     /// not send it.
     #[serde(default)]
     pub appear_offline: bool,
