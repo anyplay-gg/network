@@ -68,7 +68,7 @@ The network without games is live at anyplaynet.com, and the launcher uses it.
 | Accounts, friends, presence, messages, notifications | Done and live. |
 | Parties with voice and push to talk | Done and live. |
 | Share screen to a party | Done. Game sound is Windows only. |
-| Broadcast to Twitch, YouTube or RTMP | Done on Windows. |
+| Broadcast to Twitch, YouTube or RTMP | Done on Windows, with the game's sound; `rtmp://` and `rtmps://`. |
 | Join links, Find Players, captures and clips sent to friends | Done. |
 | Bridge: sign-in, identity, NAT type, web API forwarding, push events, online-permission check, peer-to-peer datagrams and streams | Merged in the fork. The end-to-end CI that runs the bridge against the net service is in review. |
 | Web API groups answered for games | `userProfile` and `communicationRestrictionStatus`. Every other group is refused and logged. |

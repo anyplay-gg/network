@@ -1,15 +1,19 @@
 //! A small RTMP publisher: the plain handshake, the chunk stream and the commands that open a
 //! live stream (`connect`, `createStream`, `publish`), then audio, video and metadata messages.
 //!
-//! It speaks to a server over TCP (`rtmp://`). It does not read what the server sends beyond the
-//! answers it waits for and the pings it must return. TLS (`rtmps://`) is not built.
+//! It speaks to a server over TCP (`rtmp://`) or over TLS (`rtmps://`, see [`super::tls`]). It
+//! does not read what the server sends beyond the answers it waits for and the pings it must
+//! return.
 
 use std::io::{self, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use rustls::ClientConfig;
+
 use super::amf::{self, Value};
+use super::tls::{self, TlsCloser};
 
 /// The size of the chunks this side sends.
 const OUT_CHUNK: usize = 4096;
@@ -35,9 +39,15 @@ const CS_AUDIO: u32 = 4;
 const CS_DATA: u32 = 5;
 const CS_VIDEO: u32 = 6;
 
-/// Where to publish: the parts of `rtmp://host[:port]/app[/path]`.
+/// The port of `rtmp://` and of `rtmps://` when the address names none.
+pub const PLAIN_PORT: u16 = 1935;
+pub const SECURE_PORT: u16 = 443;
+
+/// Where to publish: the parts of `rtmp[s]://host[:port]/app[/path]`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Target {
+    /// `rtmps://`: the connection is TLS.
+    pub secure: bool,
     pub host: String,
     pub port: u16,
     /// What the server calls the application: everything after the host.
@@ -47,12 +57,12 @@ pub struct Target {
 impl Target {
     pub fn parse(url: &str) -> Result<Target, String> {
         let url = url.trim();
-        let rest = if let Some(rest) = url.strip_prefix("rtmp://") {
-            rest
-        } else if url.starts_with("rtmps://") {
-            return Err("rtmps:// is not supported yet, use an rtmp:// address".into());
+        let (secure, rest) = if let Some(rest) = url.strip_prefix("rtmp://") {
+            (false, rest)
+        } else if let Some(rest) = url.strip_prefix("rtmps://") {
+            (true, rest)
         } else {
-            return Err("the address must start with rtmp://".into());
+            return Err("the address must start with rtmp:// or rtmps://".into());
         };
         let (authority, app) = rest.split_once('/').unwrap_or((rest, ""));
         let app = app.trim_matches('/');
@@ -65,21 +75,28 @@ impl Target {
                 port.parse::<u16>()
                     .map_err(|_| "the port in the address is not a number".to_owned())?,
             ),
-            _ => (authority.trim_matches(['[', ']']), 1935),
+            _ => (
+                authority.trim_matches(['[', ']']),
+                if secure { SECURE_PORT } else { PLAIN_PORT },
+            ),
         };
         if host.is_empty() {
             return Err("the address has no server".into());
         }
         Ok(Target {
+            secure,
             host: host.to_owned(),
             port,
             app: app.to_owned(),
         })
     }
 
-    /// `rtmp://host[:port]/app`, as the server wants it in `connect`.
+    /// `rtmp://host[:port]/app`, as the server wants it in `connect`. A secure address always
+    /// carries its port, as the services write theirs.
     pub fn tc_url(&self) -> String {
-        if self.port == 1935 {
+        if self.secure {
+            format!("rtmps://{}:{}/{}", self.host, self.port, self.app)
+        } else if self.port == PLAIN_PORT {
             format!("rtmp://{}/{}", self.host, self.app)
         } else {
             format!("rtmp://{}:{}/{}", self.host, self.port, self.app)
@@ -308,7 +325,7 @@ impl<R: Read> ChunkReader<R> {
 // --- the handshake ----------------------------------------------------------------------------
 
 /// The client's side of the plain handshake.
-fn client_handshake<S: Read + Write>(stream: &mut S) -> io::Result<()> {
+fn client_handshake<R: Read, W: Write>(input: &mut R, output: &mut W) -> io::Result<()> {
     let mut c1 = [0u8; 1536];
     // Time zero, four zero bytes, then bytes that only need to differ between runs.
     let seed = std::time::SystemTime::now()
@@ -322,11 +339,11 @@ fn client_handshake<S: Read + Write>(stream: &mut S) -> io::Result<()> {
         x ^= x << 17;
         *byte = (x >> 24) as u8;
     }
-    stream.write_all(&[3])?;
-    stream.write_all(&c1)?;
-    stream.flush()?;
+    output.write_all(&[3])?;
+    output.write_all(&c1)?;
+    output.flush()?;
     let mut s0 = [0u8; 1];
-    stream.read_exact(&mut s0)?;
+    input.read_exact(&mut s0)?;
     if s0[0] != 3 {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -334,25 +351,33 @@ fn client_handshake<S: Read + Write>(stream: &mut S) -> io::Result<()> {
         ));
     }
     let mut s1 = [0u8; 1536];
-    stream.read_exact(&mut s1)?;
+    input.read_exact(&mut s1)?;
     let mut s2 = [0u8; 1536];
-    stream.read_exact(&mut s2)?;
-    stream.write_all(&s1)?;
-    stream.flush()
+    input.read_exact(&mut s2)?;
+    output.write_all(&s1)?;
+    output.flush()
 }
 
 // --- the publisher ----------------------------------------------------------------------------
 
-type Shared = Arc<Mutex<ChunkWriter<TcpStream>>>;
+type Out = Box<dyn Write + Send>;
+type In = Box<dyn Read + Send>;
+type Shared = Arc<Mutex<ChunkWriter<Out>>>;
 
 /// A live stream being published.
 pub struct Publisher {
     writer: Shared,
     stream: u32,
     lost: Arc<Mutex<Option<String>>>,
+    /// The socket, for its timeouts and for ending the connection.
+    socket: TcpStream,
+    secure: Option<TlsCloser>,
 }
 
 fn text_of(error: &io::Error) -> String {
+    if let Some((_, words)) = tls::explain(error) {
+        return words;
+    }
     match error.kind() {
         io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock => {
             "the server stopped answering".into()
@@ -369,20 +394,66 @@ impl Publisher {
     /// Connects, opens the stream named `key` and starts publishing. The key is only ever sent to
     /// the server, never written anywhere else.
     pub fn open(target: &Target, key: &str) -> Result<Publisher, String> {
-        let address = (target.host.as_str(), target.port)
+        Self::open_with(target, key, None)
+    }
+
+    /// Like [`Publisher::open`], with the TLS settings of an `rtmps://` connection (the system's
+    /// certificate checks when `None`).
+    pub fn open_with(
+        target: &Target,
+        key: &str,
+        tls_config: Option<Arc<ClientConfig>>,
+    ) -> Result<Publisher, String> {
+        let addresses: Vec<_> = (target.host.as_str(), target.port)
             .to_socket_addrs()
             .map_err(|_| format!("the server {} was not found", target.host))?
-            .next()
-            .ok_or_else(|| format!("the server {} was not found", target.host))?;
-        let mut tcp = TcpStream::connect_timeout(&address, OPEN_TIMEOUT)
-            .map_err(|e| format!("could not reach {}: {}", target.host, text_of(&e)))?;
+            .collect();
+        if addresses.is_empty() {
+            return Err(format!("the server {} was not found", target.host));
+        }
+        // A name can have an IPv6 and an IPv4 address and only one of them answers: try each.
+        let mut last = None;
+        let mut connected = None;
+        for address in &addresses {
+            match TcpStream::connect_timeout(address, OPEN_TIMEOUT) {
+                Ok(tcp) => {
+                    connected = Some(tcp);
+                    break;
+                }
+                Err(error) => last = Some(error),
+            }
+        }
+        let Some(tcp) = connected else {
+            let why = last.as_ref().map_or_else(String::new, text_of);
+            return Err(format!("could not reach {}: {}", target.host, why));
+        };
         tcp.set_nodelay(true).ok();
         tcp.set_read_timeout(Some(OPEN_TIMEOUT)).ok();
         tcp.set_write_timeout(Some(WRITE_TIMEOUT)).ok();
-        client_handshake(&mut tcp).map_err(|e| format!("the handshake failed: {}", text_of(&e)))?;
-        let read_half = tcp.try_clone().map_err(|e| e.to_string())?;
-        let mut writer = ChunkWriter::new(tcp);
-        let mut reader = ChunkReader::new(read_half);
+        let socket = tcp.try_clone().map_err(|e| e.to_string())?;
+        let (mut input, mut output, secure): (In, Out, Option<TlsCloser>) = if target.secure {
+            let config = match tls_config {
+                Some(config) => config,
+                None => tls::system_config()?,
+            };
+            let (reader, writer, closer) =
+                tls::connect(config, &target.host, tcp).map_err(|e| match tls::explain(&e) {
+                    Some((tag, words)) => format!("{tag}: {words}"),
+                    None => format!(
+                        "tls_failed: the secure connection to {} failed: {}",
+                        target.host,
+                        text_of(&e)
+                    ),
+                })?;
+            (Box::new(reader), Box::new(writer), Some(closer))
+        } else {
+            let read_half = tcp.try_clone().map_err(|e| e.to_string())?;
+            (Box::new(read_half), Box::new(tcp), None)
+        };
+        client_handshake(&mut input, &mut output)
+            .map_err(|e| format!("the handshake failed: {}", text_of(&e)))?;
+        let mut writer = ChunkWriter::new(output);
+        let mut reader = ChunkReader::new(input);
         let io_error = |e: io::Error| text_of(&e);
 
         writer
@@ -458,9 +529,7 @@ impl Publisher {
         let lost = Arc::new(Mutex::new(None));
         let writer: Shared = Arc::new(Mutex::new(writer));
         // From here on the connection is long-lived: reads wait as long as the server is quiet.
-        if let Ok(w) = writer.lock() {
-            let _ = w.out.set_read_timeout(None);
-        }
+        let _ = socket.set_read_timeout(None);
         let (shared, flag) = (writer.clone(), lost.clone());
         std::thread::Builder::new()
             .name("broadcast-rtmp-in".into())
@@ -470,6 +539,8 @@ impl Publisher {
             writer,
             stream,
             lost,
+            socket,
+            secure,
         })
     }
 
@@ -516,15 +587,19 @@ impl Publisher {
             &[Value::Null, Value::Number(f64::from(self.stream))],
         );
         let _ = self.send(CS_COMMAND, 0, COMMAND, &body);
-        if let Ok(writer) = self.writer.lock() {
-            let _ = writer.out.shutdown(std::net::Shutdown::Both);
+        if let Some(closer) = &self.secure {
+            closer.close();
         }
+        let _ = self.socket.shutdown(std::net::Shutdown::Both);
     }
 }
 
 fn rejected(code: &str) -> String {
     match code {
         "NetStream.Publish.BadName" => "the server does not accept this stream key".into(),
+        "NetConnection.Connect.Rejected" | "NetConnection.Connect.InvalidApp" => {
+            "the server rejected the connection: check the address and the stream key".into()
+        }
         "NetStream.Publish.Denied"
         | "NetStream.Publish.Rejected"
         | "NetStream.Publish.Unauthorized" => {
@@ -552,6 +627,14 @@ fn await_result<R: Read>(
         match name {
             Some("_result") if txn == Some(transaction) => return Ok(values),
             Some("_error") if txn == Some(transaction) => {
+                let code = values
+                    .get(3)
+                    .and_then(|info| info.get("code"))
+                    .and_then(Value::as_text)
+                    .unwrap_or("");
+                if code.starts_with("NetConnection.Connect.") {
+                    return Err(rejected(code));
+                }
                 return Err(format!("the server refused {step}"));
             }
             _ => {}
@@ -560,7 +643,7 @@ fn await_result<R: Read>(
 }
 
 /// Answers pings and acknowledgements and notes when the server ends the stream.
-fn listen(mut reader: ChunkReader<TcpStream>, writer: Shared, lost: Arc<Mutex<Option<String>>>) {
+fn listen(mut reader: ChunkReader<In>, writer: Shared, lost: Arc<Mutex<Option<String>>>) {
     let mut window: u64 = 0;
     let mut acknowledged: u64 = 0;
     let end = loop {
@@ -634,15 +717,22 @@ mod tests {
         assert_eq!(t.tc_url(), "rtmp://127.0.0.1:1936/live");
         let t = Target::parse("rtmp://a.rtmp.youtube.com/live2").unwrap();
         assert_eq!(t.app, "live2");
+        assert!(!t.secure);
+        // rtmps:// is TLS, on port 443 unless the address says otherwise.
+        let t = Target::parse("rtmps://a.rtmps.youtube.com/live2").unwrap();
+        assert_eq!((t.secure, t.port), (true, 443));
+        assert_eq!(t.tc_url(), "rtmps://a.rtmps.youtube.com:443/live2");
+        let t = Target::parse("rtmps://example.com:1936/app/").unwrap();
+        assert_eq!((t.secure, t.port), (true, 1936));
     }
 
     #[test]
     fn bad_addresses_say_what_is_wrong() {
         assert!(Target::parse("http://x/y").unwrap_err().contains("rtmp://"));
         assert!(
-            Target::parse("rtmps://x/y")
+            Target::parse("rtmps://")
                 .unwrap_err()
-                .contains("not supported")
+                .contains("application")
         );
         assert!(
             Target::parse("rtmp://host")

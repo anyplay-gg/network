@@ -55,7 +55,7 @@ const STUCK: Duration = Duration::from_secs(2);
 const ANSWER: Duration = Duration::from_millis(40);
 
 /// Media Foundation and COM, once for the process; COM again for every thread.
-fn start() -> Result<(), String> {
+pub(crate) fn start() -> Result<(), String> {
     static ONCE: Once = Once::new();
     static mut RESULT: Option<String> = None;
     // SAFETY: plain calls; the thread's COM state is set up by CoInitializeEx and left alone
@@ -79,7 +79,7 @@ fn pack(high: u32, low: u32) -> u64 {
     u64::from(high) << 32 | u64::from(low)
 }
 
-fn text(error: windows::core::Error) -> String {
+pub(crate) fn text(error: windows::core::Error) -> String {
     error.to_string().trim().to_owned()
 }
 
@@ -609,7 +609,7 @@ fn sequence_header(transform: &IMFTransform) -> Vec<u8> {
     }
 }
 
-fn sample_with_buffer(size: u32) -> Result<IMFSample, String> {
+pub(crate) fn sample_with_buffer(size: u32) -> Result<IMFSample, String> {
     // SAFETY: plain calls on objects this function creates.
     unsafe {
         let sample = MFCreateSample().map_err(text)?;
@@ -619,7 +619,7 @@ fn sample_with_buffer(size: u32) -> Result<IMFSample, String> {
     }
 }
 
-fn read_sample(sample: &IMFSample) -> Result<Vec<u8>, String> {
+pub(crate) fn read_sample(sample: &IMFSample) -> Result<Vec<u8>, String> {
     // SAFETY: the buffer is locked for the copy and unlocked after it.
     unsafe {
         let buffer = sample.ConvertToContiguousBuffer().map_err(text)?;
