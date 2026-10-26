@@ -176,6 +176,13 @@ pub struct AppearOffline {
     pub appear_offline: bool,
 }
 
+/// Whether the player shows a page at `/u/<handle>` to people who are not their friends: the body of
+/// `PUT /v1/me/public-profile` and its answer. Off for every new account.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PublicProfile {
+    pub public_profile: bool,
+}
+
 /// The tokens of one signed-in device.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Tokens {
@@ -2727,6 +2734,18 @@ mod tests {
             "avatar":null,"playtime":null}"#;
         let old: ProfilePage = serde_json::from_str(bare).unwrap();
         assert!(old.links.is_empty() && old.trophies.is_none());
+    }
+
+    #[test]
+    fn a_public_profile_is_off_unless_the_player_turns_it_on() {
+        assert!(!PublicProfile::default().public_profile);
+        assert_eq!(
+            serde_json::to_string(&PublicProfile {
+                public_profile: true
+            })
+            .unwrap(),
+            r#"{"public_profile":true}"#
+        );
     }
 
     #[test]

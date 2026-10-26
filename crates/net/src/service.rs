@@ -914,6 +914,22 @@ impl Service {
                     |_, cards| cards,
                 );
             }
+            Command::PublicProfile => {
+                let Some(cloud) = self.signed_in_cloud(id) else {
+                    return;
+                };
+                self.request(id, async move { cloud.public_profile().await }, |_, p| p);
+            }
+            Command::SetPublicProfile { on } => {
+                let Some(cloud) = self.signed_in_cloud(id) else {
+                    return;
+                };
+                self.request(
+                    id,
+                    async move { cloud.set_public_profile(on).await },
+                    |_, p| p,
+                );
+            }
             Command::Privacy => {
                 let Some(cloud) = self.signed_in_cloud(id) else {
                     return;
