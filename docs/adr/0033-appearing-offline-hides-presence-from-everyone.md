@@ -1,5 +1,7 @@
 # Appearing offline hides presence from everyone
 
+_Renumbered from 0028 on 2026-10-26._
+
 A player can set their account to appear offline. Friends then see them as offline, with no game and no joinable session, while the player stays signed in, keeps playing and joining, and keeps receiving messages and invitations. The setting is one boolean on the account, written with `PUT /v1/me/appear-offline` ([cloud API](../../spec/cloud-api.md#appearing-offline)).
 
 ## Decision
