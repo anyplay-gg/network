@@ -9,7 +9,7 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
-base64 = "0.22"
+base64 = "0.23"
 ed25519-dalek = "3"
 rand = "0.10"
 sha2 = "0.10"
