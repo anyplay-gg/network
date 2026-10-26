@@ -188,6 +188,7 @@ mod tests {
     struct FakeEncoder {
         count: u8,
         keys: std::sync::Arc<std::sync::atomic::AtomicU32>,
+        keyframes: mpsc::Sender<u32>,
     }
 
     impl VideoEncoder for FakeEncoder {
@@ -197,7 +198,8 @@ mod tests {
         fn encode(&mut self, frame: &Frame, force_key: bool) -> Result<EncodedFrame, CodecError> {
             self.count = self.count.wrapping_add(1);
             if force_key {
-                self.keys.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let keys = self.keys.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                let _ = self.keyframes.send(keys);
             }
             Ok(EncodedFrame {
                 key: force_key,
@@ -207,10 +209,19 @@ mod tests {
         }
     }
 
-    struct Pattern(TestPattern);
+    // Hold the source after two key frames. Save still goes through the production recorder
+    // and muxer, while runner scheduling cannot add or evict frames before the assertion.
+    struct Pattern {
+        frames: TestPattern,
+        keys: std::sync::Arc<std::sync::atomic::AtomicU32>,
+    }
     impl FrameSource for Pattern {
         fn next_frame(&mut self) -> Next {
-            Next::Picture(self.0.next_frame())
+            if self.keys.load(std::sync::atomic::Ordering::Relaxed) >= 2 {
+                Next::NotYet
+            } else {
+                Next::Picture(self.frames.next_frame())
+            }
         }
     }
 
@@ -231,25 +242,30 @@ mod tests {
         mpsc::Sender<Command>,
         mpsc::Receiver<Event>,
         std::thread::JoinHandle<()>,
-        std::sync::Arc<std::sync::atomic::AtomicU32>,
+        mpsc::Receiver<u32>,
     ) {
         let (command_tx, command_rx) = mpsc::channel();
         let (event_tx, event_rx) = mpsc::channel();
         let keys = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let (key_tx, key_rx) = mpsc::channel();
         let encoder = FakeEncoder {
             count: 0,
             keys: keys.clone(),
+            keyframes: key_tx,
         };
         let thread = std::thread::spawn(move || {
             run(
                 setup,
-                Box::new(Pattern(TestPattern::default())),
+                Box::new(Pattern {
+                    frames: TestPattern::default(),
+                    keys,
+                }),
                 Box::new(encoder),
                 command_rx,
                 event_tx,
             )
         });
-        (command_tx, event_rx, thread, keys)
+        (command_tx, event_rx, thread, key_rx)
     }
 
     fn wait_for(events: &mpsc::Receiver<Event>, pick: impl Fn(&Event) -> bool) -> Event {
@@ -270,8 +286,10 @@ mod tests {
             wait_for(&events, |_| true),
             Event::Ready { width: 320, .. }
         ));
-        // Let a few key frames' worth of pictures in: 60 pictures a second, a key frame every 120.
-        std::thread::sleep(Duration::from_millis(2600));
+        // Observe both encoded key frames instead of assuming a runner produced 120 pictures
+        // during a fixed sleep. The source then holds still until Save and Quit are processed.
+        assert_eq!(keys.recv_timeout(Duration::from_secs(10)).unwrap(), 1);
+        assert_eq!(keys.recv_timeout(Duration::from_secs(10)).unwrap(), 2);
         let folder = tempdir("save");
         let path = folder.join("clip.mp4");
         commands
@@ -285,12 +303,12 @@ mod tests {
         };
         assert!(seconds >= 0.9, "{seconds}");
         assert!(bytes > 0);
-        assert!(keys.load(std::sync::atomic::Ordering::Relaxed) >= 2);
         let data = std::fs::read(&path).expect("the clip exists");
         let size = data.len() as u64;
-        let reader =
+        let mut reader =
             mp4::Mp4Reader::read_header(std::io::Cursor::new(data), size).expect("a valid file");
         assert!(reader.tracks().get(&1).unwrap().sample_count() >= 60);
+        assert!(reader.read_sample(1, 1).unwrap().unwrap().is_sync);
         assert!(!folder.join("clip.mp4.part").exists());
         commands.send(Command::Quit).unwrap();
         assert!(matches!(
