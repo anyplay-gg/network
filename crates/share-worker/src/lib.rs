@@ -10,6 +10,7 @@
 //! (where pictures go: a window, or a counter in tests).
 
 pub mod annexb;
+pub mod broadcast;
 pub mod capture;
 pub mod clips;
 pub mod host;
@@ -160,6 +161,27 @@ pub fn clips_encoder(setup: &mut clips::recorder::Setup) -> Result<Box<dyn Video
         let _ = setup;
         Err("clips need a hardware encoder, which this system does not have yet".into())
     }
+}
+
+/// The encoder for a broadcast: a hardware H.264 encoder where there is one, else the system's
+/// software one (Windows) or OpenH264 (Linux), lowered as a stream is. Lowers `setup` to what the
+/// encoder gives.
+pub fn broadcast_encoder(setup: &mut broadcast::Setup) -> Result<Box<dyn VideoEncoder>, String> {
+    let mut start = Start {
+        epoch: 0,
+        codec: "h264".into(),
+        width: setup.width,
+        height: setup.height,
+        fps: setup.fps,
+        kbps: setup.kbps,
+        parity_percent: 0,
+        max_payload: 0,
+    };
+    let encoder = encoder_for(&mut start)?;
+    setup.width = start.width;
+    setup.height = start.height;
+    setup.fps = start.fps;
+    Ok(encoder)
 }
 
 /// The decoder for the codec a streamer chose; none when this PC does not have it.
