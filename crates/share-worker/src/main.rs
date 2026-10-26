@@ -26,6 +26,7 @@ use std::process::ExitCode;
 use anyplay_share::control::Role;
 use anyplay_share::link::FromWorker;
 use anyplay_share_worker::host::{self, FrameSource, PatternSource};
+use anyplay_share_worker::sound::{SoundOut, SoundSource, ToneSource};
 use anyplay_share_worker::viewer::{self, DecoderFactory, FrameSink};
 use anyplay_share_worker::{Port, capabilities, decoder_for, encoder_for, socket};
 
@@ -92,13 +93,18 @@ fn main() -> ExitCode {
         }
     };
     match role {
-        Role::Host => match frame_source(&source, &title, window, pids) {
-            Ok(frames) => host::run_with(frames, Box::new(encoder_for), port),
-            Err(reason) => return fail(port, reason),
-        },
+        Role::Host => {
+            let sound = sound_source(&source, &pids);
+            match frame_source(&source, &title, window, pids) {
+                Ok(frames) => host::run_with_sound(frames, Box::new(encoder_for), sound, port),
+                Err(reason) => return fail(port, reason),
+            }
+        }
         Role::Guest => {
             let decoders: DecoderFactory = Box::new(decoder_for);
-            viewer::run(decoders, sink(&title, headless), port);
+            let speakers = if headless { None } else { speakers() };
+            let sink = sink(&title, headless, speakers.is_some());
+            viewer::run_with_sound(decoders, sink, speakers, port);
         }
     }
     ExitCode::SUCCESS
@@ -131,21 +137,54 @@ fn frame_source(
     }
 }
 
-/// The viewer's window: "title" and, until the game's sound is carried, a note that there is
-/// none.
+/// Where the streamer's sound comes from: the game's processes on Windows, a tone for the test
+/// pattern. None where this build cannot capture it: the stream then has no sound.
+fn sound_source(source: &str, pids: &[u32]) -> Option<Box<dyn SoundSource>> {
+    match source {
+        "test_pattern" => Some(Box::new(ToneSource::default())),
+        #[cfg(windows)]
+        "game" => {
+            let pid = *pids.first()?;
+            match anyplay_share_worker::loopback::LoopbackSource::open(pid) {
+                Ok(source) => Some(Box::new(source)),
+                Err(why) => {
+                    eprintln!("share worker: no sound: {why}");
+                    None
+                }
+            }
+        }
+        _ => {
+            let _ = pids;
+            None
+        }
+    }
+}
+
+/// The viewer's speakers, where this build plays sound (Windows).
+fn speakers() -> Option<Box<dyn SoundOut>> {
+    #[cfg(windows)]
+    match anyplay_share_worker::speakers::Speakers::open() {
+        Ok(speakers) => return Some(Box::new(speakers)),
+        Err(why) => eprintln!("share worker: no sound: {why}"),
+    }
+    None
+}
+
+/// The viewer's window: "title" and, without speakers, a note that there is no sound.
 #[cfg(any(windows, target_os = "linux"))]
-fn sink(title: &str, headless: bool) -> Box<dyn FrameSink> {
+fn sink(title: &str, headless: bool, sound: bool) -> Box<dyn FrameSink> {
     if headless {
         return Box::new(anyplay_share_worker::viewer::NullSink);
     }
     let name = if title.is_empty() { "AnyPlay" } else { title };
+    let note = if sound { "" } else { " (no sound)" };
     Box::new(anyplay_share_worker::window::WindowSink::new(&format!(
-        "{name} - AnyPlay Share screen (no sound)"
+        "{name} - AnyPlay Share screen{note}"
     )))
 }
 
 #[cfg(not(any(windows, target_os = "linux")))]
-fn sink(_title: &str, _headless: bool) -> Box<dyn FrameSink> {
+fn sink(_title: &str, _headless: bool, _sound: bool) -> Box<dyn FrameSink> {
     Box::new(anyplay_share_worker::viewer::NullSink)
 }
 

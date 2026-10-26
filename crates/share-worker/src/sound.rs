@@ -3,6 +3,7 @@
 //! processes on Windows, `loopback`; a tone in tests) and [`SoundOut`] (the speakers on
 //! Windows, `CpalOut`; a clock in tests).
 
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
@@ -206,6 +207,45 @@ pub fn feed(receiver: &mut SoundReceiver, out: &mut dyn SoundOut) {
     }
 }
 
+/// Linear interpolation from 48 kHz to the device's rate, one stereo frame at a time.
+pub struct Resampler {
+    step: f64,
+    phase: f64,
+    last: [f32; 2],
+    next: [f32; 2],
+}
+
+impl Resampler {
+    pub fn new(device_rate: u32) -> Resampler {
+        Resampler {
+            step: f64::from(RATE) / f64::from(device_rate),
+            // The first call takes the first frame.
+            phase: 1.0,
+            last: [0.0; 2],
+            next: [0.0; 2],
+        }
+    }
+
+    /// The next device frame; takes 48 kHz frames from `ring` as it goes, silence when it is
+    /// empty.
+    pub fn frame(&mut self, ring: &mut VecDeque<f32>) -> [f32; 2] {
+        while self.phase >= 1.0 {
+            self.last = self.next;
+            self.next = match (ring.pop_front(), ring.pop_front()) {
+                (Some(l), Some(r)) => [l, r],
+                _ => [0.0; 2],
+            };
+            self.phase -= 1.0;
+        }
+        let t = self.phase as f32;
+        self.phase += self.step;
+        [
+            self.last[0] + (self.next[0] - self.last[0]) * t,
+            self.last[1] + (self.next[1] - self.last[1]) * t,
+        ]
+    }
+}
+
 /// Stops the capture thread when dropped.
 pub struct Capturing {
     stop: Arc<AtomicBool>,
@@ -339,6 +379,27 @@ mod tests {
         }
         assert!(peak(&output[10]) > 0.1, "the lost 10 ms are silent");
         assert_eq!(receiver.stats().lost, 1);
+    }
+
+    #[test]
+    fn the_resampler_keeps_48_khz_and_doubles_for_96() {
+        let input: Vec<f32> = (0..8).flat_map(|i| [i as f32, -(i as f32)]).collect();
+        let mut ring: VecDeque<f32> = input.iter().copied().collect();
+        let mut same = Resampler::new(48_000);
+        let out: Vec<[f32; 2]> = (0..8).map(|_| same.frame(&mut ring)).collect();
+        // One frame later, the same frames.
+        assert_eq!(
+            out[1..],
+            (0..7).map(|i| [i as f32, -(i as f32)]).collect::<Vec<_>>()[..]
+        );
+        let mut ring: VecDeque<f32> = input.iter().copied().collect();
+        let mut double = Resampler::new(96_000);
+        let out: Vec<f32> = (0..10).map(|_| double.frame(&mut ring)[0]).collect();
+        assert_eq!(out[2..], [0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5]);
+        // Nothing left: silence, not a stuck sample.
+        let mut empty = VecDeque::new();
+        let mut resampler = Resampler::new(48_000);
+        assert_eq!(resampler.frame(&mut empty), [0.0, 0.0]);
     }
 
     #[test]

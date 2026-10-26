@@ -135,6 +135,6 @@ Against [ADR 0021](../docs/adr/0021-the-line-is-drawn-at-the-law.md): no platfor
 - Input of any kind from a viewer (that is share play's `hand_over` and `together`, behind `share.enabled`).
 - Viewers outside the party, a public link, recording or clips.
 - Several rates (one per viewer): the stream follows the weakest watcher.
-- Game sound. The viewer's window says "no sound" in its title. The plan: WASAPI loopback of the game's process tree (process loopback capture, Windows 10 build 20348 and later), Opus at 48 kHz stereo in the audio datagram, played by the viewer's worker.
+- Game sound on Linux, at either end. On Windows the streamer's worker captures the game's process tree (WASAPI process loopback, Windows 10 build 20348 and later), sends it as Opus in the [audio datagram](share-play.md#audio-datagram) and the viewer's worker plays it; a viewer whose worker plays no sound says "no sound" in its window title. Keeping sound and picture within 40 ms of each other.
 - The engine tap as a source (see ADR 0023), HDR, 4K, more than two channels of sound.
 - A "is streaming" mark in the friends list.
