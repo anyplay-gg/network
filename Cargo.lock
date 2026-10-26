@@ -286,6 +286,7 @@ dependencies = [
  "tokio",
  "windows",
  "windows-capture",
+ "windows-core",
 ]
 
 [[package]]
