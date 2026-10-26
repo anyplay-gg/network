@@ -1,0 +1,54 @@
+name: Specification question
+description: A specification or decision is unclear, missing, wrong, or you want to propose a change to it.
+labels: ["spec"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The specifications in `spec/` and the decisions in `docs/adr/` are the contract between the net service, the launcher, the cloud and the bridge in the AnyPS5 fork.
+        A change to one of them needs an ADR, and a change to the bridge protocol also needs a version note (see CONTRIBUTING.md). Opening an issue first is the way to agree on that.
+  - type: input
+    id: where
+    attributes:
+      label: Which document
+      description: The file, and the section if you can name it.
+      placeholder: "spec/bridge-protocol.md, Frames"
+    validations:
+      required: true
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What kind of question
+      options:
+        - Unclear or ambiguous
+        - Missing (something the document should say)
+        - Wrong or contradicts another document
+        - Proposal for a change
+    validations:
+      required: true
+  - type: textarea
+    id: question
+    attributes:
+      label: The question or problem
+      description: Quote the sentence that is unclear, or describe what you cannot find out from the document.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you propose
+      description: For a change, also say who has to change with it (net service, launcher, cloud, bridge) and whether old versions keep working.
+  - type: textarea
+    id: observed
+    attributes:
+      label: What you observed
+      description: Only if it matters. Describe what a game sent or accepted in your own words and quote a log only as far as it shows a field. Use `GAME00001` for a title ID. See docs/OBSERVING.md.
+  - type: checkboxes
+    id: rules
+    attributes:
+      label: Checks
+      options:
+        - label: This applies to every game, not to one title.
+          required: true
+        - label: I attached no game files, keys, tokens or logs with game memory, and I used nothing from a platform holder's servers, code or documents.
+          required: true

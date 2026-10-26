@@ -58,7 +58,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
-Every pull request runs these on Windows and Linux. The parsers are fuzzed every night ([fuzz/](fuzz/README.md)). Start with the [design](docs/DESIGN.md); the words are in [CONTEXT.md](CONTEXT.md). Until the network is live, only the AnyPlay team opens issues and pull requests; the shared rules are in [CONTRIBUTING.md](https://github.com/anyplaynet/.github/blob/main/CONTRIBUTING.md).
+Every pull request runs these on Windows and Linux. The parsers are fuzzed every night ([fuzz/](fuzz/README.md)). Start with the [design](docs/DESIGN.md); the words are in [CONTEXT.md](CONTEXT.md). Issues and pull requests are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md). The rules shared by every AnyPlay repository are in the [organisation's CONTRIBUTING.md](https://github.com/anyplaynet/.github/blob/main/CONTRIBUTING.md).
 
 ## Community
 
