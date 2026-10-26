@@ -57,6 +57,10 @@ struct Routes {
     /// The other members of the player's current session, by virtual address: where a broadcast
     /// goes. Nobody else ever gets one.
     audience: HashSet<Ipv4Addr>,
+    /// Who may reach the game: the members of the session it plays in. `None` lets every peer of a
+    /// tunnel through; the service always sets it, so a member of another session or party the
+    /// player shares a tunnel with does not reach the game's ports.
+    inbound: Option<HashSet<Ipv4Addr>>,
 }
 
 /// Counts what the data path drops, for the log and for tests.
@@ -214,6 +218,19 @@ impl Traffic {
         self.write().audience = members;
     }
 
+    /// Limits what the tunnels deliver to the game to the peers at `members`.
+    pub fn set_inbound(&self, members: HashSet<Ipv4Addr>) {
+        self.write().inbound = Some(members);
+    }
+
+    /// Whether the peer at `from` may reach the game.
+    fn may_reach_game(&self, from: Ipv4Addr) -> bool {
+        self.read()
+            .inbound
+            .as_ref()
+            .is_none_or(|set| set.contains(&from))
+    }
+
     /// Bridge to tunnel: every datagram from a bound loopback socket goes to its peer.
     async fn carry_datagrams(self) {
         let mut buf = vec![0u8; LARGEST_DATAGRAM + TrafficHeader::LEN];
@@ -291,6 +308,10 @@ impl Traffic {
 
     /// Tunnel to bridge: a datagram from the peer at `from`.
     pub async fn deliver_datagram(&self, from: Ipv4Addr, datagram: &[u8]) {
+        if !self.may_reach_game(from) {
+            count(&self.drops.unknown_peer);
+            return;
+        }
         let Some((vport, source_vport, game)) = split_tunnel_header(datagram) else {
             return;
         };
@@ -356,6 +377,11 @@ impl Traffic {
 
     /// Tunnel to bridge: a stream the peer at `from` opened.
     pub async fn deliver_stream(&self, from: Ipv4Addr, mut send: SendStream, mut recv: RecvStream) {
+        if !self.may_reach_game(from) {
+            count(&self.drops.unknown_peer);
+            let _ = send.reset(0u8.into());
+            return;
+        }
         let mut head = [0u8; TUNNEL_HEADER];
         if recv.read_exact(&mut head).await.is_err() {
             return;
@@ -535,6 +561,43 @@ mod tests {
         bytes.extend_from_slice(b"x");
         assert_eq!(split_tunnel_header(&bytes), Some((3658, 9, &b"x"[..])));
         assert_eq!(split_tunnel_header(&bytes[..3]), None);
+    }
+
+    #[tokio::test]
+    async fn only_the_games_session_reaches_its_ports() {
+        let traffic = Traffic::start().await.unwrap();
+        let game = tokio::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let port = game.local_addr().unwrap().port();
+        assert_eq!(
+            traffic.bind(3658, Transport::Datagram, port),
+            BindResult::Bound
+        );
+        let inside = Ipv4Addr::new(10, 77, 0, 2);
+        let outside = Ipv4Addr::new(10, 77, 0, 3);
+        let mut datagram = tunnel_header(3658, 3658).to_vec();
+        datagram.extend_from_slice(b"hi");
+        let mut buf = [0u8; 64];
+
+        traffic.set_inbound(HashSet::from([inside]));
+        traffic.deliver_datagram(outside, &datagram).await;
+        let nothing = tokio::time::timeout(Duration::from_millis(300), game.recv(&mut buf)).await;
+        assert!(
+            nothing.is_err(),
+            "a peer outside the session reached the game"
+        );
+        assert_eq!(
+            traffic
+                .drops
+                .unknown_peer
+                .load(std::sync::atomic::Ordering::Relaxed),
+            1
+        );
+
+        traffic.deliver_datagram(inside, &datagram).await;
+        let got = tokio::time::timeout(Duration::from_secs(2), game.recv(&mut buf)).await;
+        assert!(got.is_ok(), "a member of the session must reach the game");
     }
 
     #[test]

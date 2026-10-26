@@ -217,6 +217,8 @@ fn profiles(me: u64, ctx: &Context<'_>, query: &str) -> WebReply {
         .flat_map(|v| v.split(','))
         .map(str::trim)
         .filter(|v| !v.is_empty())
+        // Ids past the answer's limit are never shown; do not scan the friend list for them.
+        .take(MAX_PROFILES * 4)
     {
         let id = if id == "me" {
             Some(me)
@@ -605,5 +607,28 @@ mod tests {
             values("x=1&accountIds=%34%32&accountIds=7", "accountIds"),
             ["42", "7"]
         );
+    }
+}
+
+#[cfg(test)]
+mod hostile_query_tests {
+    use super::*;
+
+    #[test]
+    fn a_huge_id_list_is_cut_at_a_bound() {
+        let ids: Vec<String> = (1..200_000u64).map(|n| n.to_string()).collect();
+        let query = format!("accountIds={}", ids.join(","));
+        let started = std::time::Instant::now();
+        let friends = FriendLists::default();
+        let ctx = Context {
+            account: Some(1),
+            handle: "me",
+            friends: &friends,
+            restrictions: &[],
+            now: 1000,
+            overrides: None,
+        };
+        let _ = profiles(1, &ctx, &query);
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
     }
 }
