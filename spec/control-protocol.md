@@ -110,6 +110,7 @@ When the cloud retires this launcher's version ([cloud API](cloud-api.md#convent
 | `feed` | `before`, `limit` | `{items, next}`: a page of the [feed](cloud-api.md#feed), newest first; both fields may be left out |
 | `react` | `item`, `reaction` | `{reactions, mine}`; `reaction` is `nice`, `gg`, `wow` or `same`, or null to take the reaction back. `not_found` when the player cannot see the item. (The item is named `item`: `id` is the number of the command.) |
 | `party` | | `{party}`: the player's `Party`, or null |
+| `party_create` | | `{party}`: a party of one with the player as its leader, or the party they are in already; no invitation is needed |
 | `party_invite` | `accounts`, `call` (default false) | `{sent}`: friends are invited; a party is made when the player is in none. With `call` they are rung: the invitation lives 30 seconds |
 | `party_link` | `url` | `{}`: the leader sets the party's Discord link; the empty string removes it. `bad_request` for a link that is not a Discord one |
 | `missed_calls` | | `{missed}` |
