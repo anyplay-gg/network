@@ -10,7 +10,8 @@ use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 pub struct TestRelay {
     pub url: RelayUrl,
     pub root: CertificateDer<'static>,
-    /// Where it answers address probes (QUIC address discovery).
+    /// Where it answers address probes (QUIC address discovery). Only some tests use it.
+    #[allow(dead_code)]
     pub quic_port: u16,
     _server: Server,
 }
@@ -50,5 +51,13 @@ pub async fn start() -> TestRelay {
         root,
         quic_port,
         _server: server,
+    }
+}
+
+impl TestRelay {
+    /// Shuts the relay down, as a relay that goes away. Only some tests use it.
+    #[allow(dead_code)]
+    pub async fn stop(self) {
+        self._server.shutdown().await.expect("relay shut down");
     }
 }

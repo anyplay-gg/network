@@ -410,8 +410,8 @@ async fn a_pc_whose_public_address_is_its_own_is_nat_type_1() {
     let reach = reach(&side, |r| r.udp).await.expect("a net report");
     // The relay saw 127.0.0.1, an address of this PC: nothing in between.
     assert!(reach.udp && reach.public, "{reach:?}");
-    let relay_answers = side.tunnels.home_relay().is_some();
-    assert_eq!(tunnel::nat_type(Some(&reach), relay_answers), 1);
+    assert!(side.tunnels.relay_connected());
+    assert_eq!(tunnel::nat_type(Some(&reach), true), 1);
     side.tunnels.close().await;
 }
 
@@ -421,7 +421,7 @@ async fn a_relay_only_endpoint_is_never_type_1() {
     let side = side_probing(&relay, true, Some(relay.quic_port)).await;
     let reach = reach(&side, |_| true).await.unwrap_or_default();
     assert_eq!(reach, tunnel::Reach::default());
-    assert!(side.tunnels.home_relay().is_some());
+    assert!(side.tunnels.relay_connected());
     assert_eq!(tunnel::nat_type(Some(&reach), true), 2);
     side.tunnels.close().await;
 }
@@ -433,6 +433,17 @@ async fn without_an_answer_to_the_probes_the_relay_still_makes_it_type_2() {
     let side = side(&relay, false).await;
     let reach = reach(&side, |_| true).await.expect("a net report");
     assert!(!reach.udp, "{reach:?}");
+    assert!(side.tunnels.relay_connected());
     assert_eq!(tunnel::nat_type(Some(&reach), true), 2);
+    // The relay goes away: nothing answers any more.
+    relay.stop().await;
+    let gone = tokio::time::timeout(Duration::from_secs(10), async {
+        while side.tunnels.relay_connected() {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await;
+    assert!(gone.is_ok(), "the relay still counts as connected");
+    assert_eq!(tunnel::nat_type(Some(&reach), false), 0, "nothing answers");
     side.tunnels.close().await;
 }

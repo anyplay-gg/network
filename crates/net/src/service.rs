@@ -3873,7 +3873,7 @@ impl Service {
                 account_id: me.id.0,
                 handle: me.handle.clone(),
                 nat_type: self.tunnels.as_ref().map_or(0, |tunnels| {
-                    tunnel::nat_type(self.reach.as_ref(), tunnels.home_relay().is_some())
+                    tunnel::nat_type(self.reach.as_ref(), tunnels.relay_connected())
                 }),
                 address: self.own_address(),
             },

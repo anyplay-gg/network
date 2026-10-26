@@ -111,10 +111,12 @@ pub struct RelayAccess {
     pub token: String,
 }
 
-/// What the net report found about reaching this PC without a relay.
+/// What the net report found about reaching this PC over IPv4 without a relay. IPv4 alone
+/// counts: a PC with IPv6 of its own behind an IPv4 NAT is still out of direct reach for
+/// players on IPv4 only.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Reach {
-    /// A relay answered a UDP address probe.
+    /// A relay answered a UDP address probe over IPv4.
     pub udp: bool,
     /// Whether two relays saw different public addresses (a NAT that maps each destination
     /// apart); unknown with a single relay.
@@ -134,28 +136,27 @@ impl Reach {
         if relay_only {
             return Reach::default();
         }
-        let seen = [
-            report.global_v4.map(|a| IpAddr::V4(*a.ip())),
-            report.global_v6.map(|a| IpAddr::V6(*a.ip())),
-        ];
         Reach {
-            udp: report.has_udp(),
-            varies: report.mapping_varies_by_dest(),
-            public: seen.into_iter().flatten().any(|ip| own.contains(&ip)),
+            udp: report.udp_v4,
+            varies: report.mapping_varies_by_dest_ipv4,
+            public: report
+                .global_v4
+                .is_some_and(|seen| own.contains(&IpAddr::V4(*seen.ip()))),
         }
     }
 }
 
 /// The NAT type games are told, as the platform counts it: 1 when others reach this PC
 /// directly, 2 when they reach it through a NAT or a relay, 3 when only some can; 0 while
-/// nothing is known. `relay` is whether a relay answers, which every peer can reach.
+/// nothing is known, and when neither a relay nor UDP answers (offline). `relay` is whether
+/// this PC is connected to a relay, which every peer can reach.
 pub fn nat_type(reach: Option<&Reach>, relay: bool) -> u8 {
     match reach {
         Some(reach) if reach.udp && reach.public => 1,
         _ if relay => 2,
         Some(reach) if reach.udp && reach.varies == Some(false) => 2,
-        Some(_) => 3,
-        None => 0,
+        Some(reach) if reach.udp => 3,
+        _ => 0,
     }
 }
 
@@ -304,6 +305,15 @@ impl Tunnels {
                 send(Reach::of(&report, &own_addresses().await, relay_only));
             }
         });
+    }
+
+    /// Whether the endpoint is connected to a relay right now.
+    pub fn relay_connected(&self) -> bool {
+        self.endpoint
+            .home_relay_status()
+            .get()
+            .iter()
+            .any(|status| status.is_connected())
     }
 
     /// Waits until the endpoint is reachable through a relay, at most `limit`.
@@ -709,9 +719,10 @@ mod tests {
         assert_eq!(nat_type(Some(&reach(true, Some(false), false)), false), 2);
         assert_eq!(nat_type(Some(&reach(true, Some(true), false)), false), 3);
         assert_eq!(nat_type(Some(&reach(true, None, false)), false), 3);
-        assert_eq!(nat_type(Some(&reach(false, None, false)), false), 3);
+        // Neither a relay nor UDP: offline, not a measured type.
+        assert_eq!(nat_type(Some(&reach(false, None, false)), false), 0);
         // UDP that never came back says nothing about the address.
-        assert_eq!(nat_type(Some(&reach(false, None, true)), false), 3);
+        assert_eq!(nat_type(Some(&reach(false, None, true)), false), 0);
     }
 
     #[test]
@@ -735,13 +746,22 @@ mod tests {
             Reach::default(),
             "relay only"
         );
-        report.global_v4 = None;
-        report.udp_v4 = false;
-        report.mapping_varies_by_dest_ipv4 = None;
+        // IPv6 of its own behind an IPv4 NAT: IPv4 decides.
         report.udp_v6 = true;
         report.global_v6 = Some("[2001:db8::5]:4000".parse().unwrap());
-        let own: Vec<IpAddr> = vec!["2001:db8::5".parse().unwrap()];
-        assert_eq!(Reach::of(&report, &own, false), reach(true, None, true));
+        let own: Vec<IpAddr> = vec![
+            "192.168.1.20".parse().unwrap(),
+            "2001:db8::5".parse().unwrap(),
+        ];
+        assert_eq!(
+            Reach::of(&report, &own, false),
+            reach(true, Some(false), false)
+        );
+        // IPv6 only: no IPv4 reach at all.
+        report.udp_v4 = false;
+        report.global_v4 = None;
+        report.mapping_varies_by_dest_ipv4 = None;
+        assert_eq!(Reach::of(&report, &own, false), Reach::default());
     }
 
     #[test]

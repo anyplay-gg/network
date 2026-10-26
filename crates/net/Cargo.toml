@@ -35,7 +35,7 @@ futures-util = { version = "0.3", default-features = false, features = ["sink", 
 http = "1"
 # The net report tells how this PC is reached, for the NAT type games see.
 # Its net report is outside semver: a bump of iroh needs a look at `tunnel::Reach::of`.
-iroh = { version = "1.4.1", features = ["unstable-net-report"] }
+iroh = { version = "~1.4.1", features = ["unstable-net-report"] }
 keyring = "4"
 netwatch = "0.19.3"
 # The relays' port for address probes.
