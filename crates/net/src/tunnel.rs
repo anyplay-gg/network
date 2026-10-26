@@ -5,14 +5,17 @@
 //! pair never holds two connections.
 
 use std::collections::HashMap;
-use std::net::Ipv4Addr;
+use std::net::{IpAddr, Ipv4Addr};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use futures_util::StreamExt as _;
 use iroh::endpoint::{Connection, presets};
 use iroh::{
     Endpoint, EndpointAddr, EndpointId, RelayConfig, RelayMap, RelayMode, RelayUrl, SecretKey,
+    Watcher as _,
 };
+use iroh_relay::RelayQuicConfig;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::task::JoinHandle;
 
@@ -108,6 +111,64 @@ pub struct RelayAccess {
     pub token: String,
 }
 
+/// What the net report found about reaching this PC without a relay.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Reach {
+    /// A relay answered a UDP address probe.
+    pub udp: bool,
+    /// Whether two relays saw different public addresses (a NAT that maps each destination
+    /// apart); unknown with a single relay.
+    pub varies: Option<bool>,
+    /// The public address the relays saw is one of this PC's own: no NAT in between.
+    pub public: bool,
+}
+
+impl Reach {
+    /// Reads a net report; `own` are this PC's addresses. A relay-only endpoint is never
+    /// reached directly, whatever the probes found.
+    pub fn of(
+        report: &iroh::unstable_net_report::NetReport,
+        own: &[IpAddr],
+        relay_only: bool,
+    ) -> Self {
+        if relay_only {
+            return Reach::default();
+        }
+        let seen = [
+            report.global_v4.map(|a| IpAddr::V4(*a.ip())),
+            report.global_v6.map(|a| IpAddr::V6(*a.ip())),
+        ];
+        Reach {
+            udp: report.has_udp(),
+            varies: report.mapping_varies_by_dest(),
+            public: seen.into_iter().flatten().any(|ip| own.contains(&ip)),
+        }
+    }
+}
+
+/// The NAT type games are told, as the platform counts it: 1 when others reach this PC
+/// directly, 2 when they reach it through a NAT or a relay, 3 when only some can; 0 while
+/// nothing is known. `relay` is whether a relay answers, which every peer can reach.
+pub fn nat_type(reach: Option<&Reach>, relay: bool) -> u8 {
+    match reach {
+        Some(reach) if reach.udp && reach.public => 1,
+        _ if relay => 2,
+        Some(reach) if reach.udp && reach.varies == Some(false) => 2,
+        Some(_) => 3,
+        None => 0,
+    }
+}
+
+/// This PC's own addresses, loopback included.
+async fn own_addresses() -> Vec<IpAddr> {
+    let addresses = netwatch::interfaces::State::new().await.local_addresses;
+    addresses
+        .regular
+        .into_iter()
+        .chain(addresses.loopback)
+        .collect()
+}
+
 struct Tunnel {
     peer: Peer,
     connection: Option<Connection>,
@@ -131,6 +192,8 @@ pub struct Tunnels {
     voice: Arc<Mutex<Option<voice::Sink>>>,
     /// Where connections with the screen ALPN go; none while the player is in no party.
     screen: Arc<Mutex<Option<screen::Sink>>>,
+    relay_only: bool,
+    relay_quic_port: Option<u16>,
 }
 
 /// Settings of the endpoint.
@@ -145,6 +208,8 @@ pub struct Options {
     /// Never a direct path: every tunnel goes through a relay, and peers never learn this
     /// side's addresses. `bind` is then unused.
     pub relay_only: bool,
+    /// The relays' UDP port for address probes; their usual one (7842) when `None`.
+    pub relay_quic_port: Option<u16>,
 }
 
 impl Tunnels {
@@ -160,7 +225,10 @@ impl Tunnels {
                 voice::ALPN.to_vec(),
                 screen::ALPN.to_vec(),
             ])
-            .relay_mode(RelayMode::Custom(relay_map(&options.relays)));
+            .relay_mode(RelayMode::Custom(relay_map(
+                &options.relays,
+                options.relay_quic_port,
+            )));
         if options.relay_only {
             builder = builder.clear_ip_transports();
         } else if let Some(bind) = options.bind {
@@ -184,6 +252,8 @@ impl Tunnels {
             changes,
             voice: Arc::new(Mutex::new(None)),
             screen: Arc::new(Mutex::new(None)),
+            relay_only: options.relay_only,
+            relay_quic_port: options.relay_quic_port,
         };
         tokio::spawn(tunnels.clone().accept());
         Ok(tunnels)
@@ -215,6 +285,27 @@ impl Tunnels {
         self.endpoint.addr().relay_urls().next().cloned()
     }
 
+    /// Hands `send` what each net report finds, the last one first, until the endpoint
+    /// closes.
+    pub fn watch_reach(&self, send: impl Fn(Reach) + Send + Sync + 'static) {
+        let endpoint = self.endpoint.clone();
+        let relay_only = self.relay_only;
+        tokio::spawn(async move {
+            let mut reports = endpoint.net_report().stream();
+            loop {
+                let report = tokio::select! {
+                    _ = endpoint.closed() => return,
+                    report = reports.next() => match report {
+                        Some(Some(report)) => report,
+                        Some(None) => continue,
+                        None => return,
+                    },
+                };
+                send(Reach::of(&report, &own_addresses().await, relay_only));
+            }
+        });
+    }
+
     /// Waits until the endpoint is reachable through a relay, at most `limit`.
     pub async fn online(&self, limit: Duration) -> bool {
         tokio::time::timeout(limit, self.endpoint.online())
@@ -225,7 +316,7 @@ impl Tunnels {
     /// Replaces the tickets of the relays.
     pub async fn set_relays(&self, relays: &[RelayAccess]) {
         for relay in relays {
-            let config = RelayConfig::from(relay.url.clone()).with_auth_token(relay.token.clone());
+            let config = relay_config(relay, self.relay_quic_port);
             self.endpoint
                 .insert_relay(relay.url.clone(), Arc::new(config))
                 .await;
@@ -574,16 +665,84 @@ impl Tunnels {
     }
 }
 
-fn relay_map(relays: &[RelayAccess]) -> RelayMap {
+fn relay_map(relays: &[RelayAccess], quic_port: Option<u16>) -> RelayMap {
     relays
         .iter()
-        .map(|relay| RelayConfig::from(relay.url.clone()).with_auth_token(relay.token.clone()))
+        .map(|relay| relay_config(relay, quic_port))
         .collect()
+}
+
+fn relay_config(relay: &RelayAccess, quic_port: Option<u16>) -> RelayConfig {
+    let mut config = RelayConfig::from(relay.url.clone()).with_auth_token(relay.token.clone());
+    if let Some(port) = quic_port {
+        config.quic = Some(RelayQuicConfig::new(port));
+    }
+    config
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use iroh::unstable_net_report::NetReport;
+
+    fn reach(udp: bool, varies: Option<bool>, public: bool) -> Reach {
+        Reach {
+            udp,
+            varies,
+            public,
+        }
+    }
+
+    #[test]
+    fn the_nat_type_follows_the_net_report() {
+        assert_eq!(nat_type(None, false), 0, "nothing known yet");
+        assert_eq!(
+            nat_type(None, true),
+            2,
+            "a relay answers before the first report"
+        );
+        assert_eq!(nat_type(Some(&reach(true, None, true)), false), 1);
+        assert_eq!(nat_type(Some(&reach(true, Some(true), true)), true), 1);
+        // Behind a NAT: the relay is the floor, a NAT that keeps one address is 2 without it.
+        assert_eq!(nat_type(Some(&reach(true, Some(true), false)), true), 2);
+        assert_eq!(nat_type(Some(&reach(false, None, false)), true), 2);
+        assert_eq!(nat_type(Some(&reach(true, Some(false), false)), false), 2);
+        assert_eq!(nat_type(Some(&reach(true, Some(true), false)), false), 3);
+        assert_eq!(nat_type(Some(&reach(true, None, false)), false), 3);
+        assert_eq!(nat_type(Some(&reach(false, None, false)), false), 3);
+        // UDP that never came back says nothing about the address.
+        assert_eq!(nat_type(Some(&reach(false, None, true)), false), 3);
+    }
+
+    #[test]
+    fn a_report_is_read_against_this_pc_s_addresses() {
+        let mut report = NetReport::default();
+        report.udp_v4 = true;
+        report.global_v4 = Some("203.0.113.7:4000".parse().unwrap());
+        report.mapping_varies_by_dest_ipv4 = Some(false);
+        let own: Vec<IpAddr> = vec!["192.168.1.20".parse().unwrap()];
+        assert_eq!(
+            Reach::of(&report, &own, false),
+            reach(true, Some(false), false)
+        );
+        let own: Vec<IpAddr> = vec!["203.0.113.7".parse().unwrap()];
+        assert_eq!(
+            Reach::of(&report, &own, false),
+            reach(true, Some(false), true)
+        );
+        assert_eq!(
+            Reach::of(&report, &own, true),
+            Reach::default(),
+            "relay only"
+        );
+        report.global_v4 = None;
+        report.udp_v4 = false;
+        report.mapping_varies_by_dest_ipv4 = None;
+        report.udp_v6 = true;
+        report.global_v6 = Some("[2001:db8::5]:4000".parse().unwrap());
+        let own: Vec<IpAddr> = vec!["2001:db8::5".parse().unwrap()];
+        assert_eq!(Reach::of(&report, &own, false), reach(true, None, true));
+    }
 
     #[test]
     fn totals_count_each_settled_path_once() {

@@ -62,6 +62,7 @@ async fn node(relay: &support::relay::TestRelay, relay_only: bool, account: u64)
             relay_roots: vec![relay.root.clone()],
             bind: Some(SocketAddr::from((Ipv4Addr::LOCALHOST, 0))),
             relay_only,
+            relay_quic_port: None,
         },
         traffic,
         changes,

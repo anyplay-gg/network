@@ -4,12 +4,14 @@ use std::net::Ipv4Addr;
 use std::sync::Arc;
 
 use iroh::RelayUrl;
-use iroh_relay::server::{CertConfig, RelayConfig, Server, ServerConfig, TlsConfig};
+use iroh_relay::server::{CertConfig, QuicConfig, RelayConfig, Server, ServerConfig, TlsConfig};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 
 pub struct TestRelay {
     pub url: RelayUrl,
     pub root: CertificateDer<'static>,
+    /// Where it answers address probes (QUIC address discovery).
+    pub quic_port: u16,
     _server: Server,
 }
 
@@ -34,6 +36,7 @@ pub async fn start() -> TestRelay {
     ));
     let mut config = ServerConfig::default();
     config.relay = Some(relay);
+    config.quic = Some(QuicConfig::new((Ipv4Addr::LOCALHOST, 0)));
     let server = Server::spawn(config).await.expect("relay");
     let url = format!(
         "https://localhost:{}",
@@ -41,9 +44,11 @@ pub async fn start() -> TestRelay {
     )
     .parse()
     .expect("url");
+    let quic_port = server.quic_addr().expect("quic").port();
     TestRelay {
         url,
         root,
+        quic_port,
         _server: server,
     }
 }

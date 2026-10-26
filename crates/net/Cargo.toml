@@ -33,8 +33,13 @@ bytes = "1"
 data-encoding = "2"
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 http = "1"
-iroh = "1.4.1"
+# The net report tells how this PC is reached, for the NAT type games see.
+# Its net report is outside semver: a bump of iroh needs a look at `tunnel::Reach::of`.
+iroh = { version = "1.4.1", features = ["unstable-net-report"] }
 keyring = "4"
+netwatch = "0.19.3"
+# The relays' port for address probes.
+iroh-relay = "1.4.1"
 rand = "0.10"
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls-no-provider"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }

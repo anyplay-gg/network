@@ -216,6 +216,7 @@ dependencies = [
  "iroh",
  "iroh-relay",
  "keyring",
+ "netwatch",
  "rand 0.10.3",
  "rcgen",
  "reqwest",

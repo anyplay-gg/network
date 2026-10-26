@@ -25,6 +25,15 @@ struct Side {
 }
 
 async fn side(relay: &support::relay::TestRelay, relay_only: bool) -> Side {
+    side_probing(relay, relay_only, None).await
+}
+
+/// A side whose endpoint sends address probes to the relay's `quic_port`.
+async fn side_probing(
+    relay: &support::relay::TestRelay,
+    relay_only: bool,
+    quic_port: Option<u16>,
+) -> Side {
     let traffic = Traffic::start().await.unwrap();
     let (tx, changes) = mpsc::unbounded_channel();
     let tunnels = Tunnels::start(
@@ -37,6 +46,7 @@ async fn side(relay: &support::relay::TestRelay, relay_only: bool) -> Side {
             relay_roots: vec![relay.root.clone()],
             bind: Some(SocketAddr::from((Ipv4Addr::LOCALHOST, 0))),
             relay_only,
+            relay_quic_port: quic_port,
         },
         traffic.clone(),
         tx,
@@ -371,4 +381,58 @@ async fn a_tunnel_that_held_for_a_while_is_redialed_quickly() {
     );
     dialer.tunnels.close().await;
     acceptor.tunnels.close().await;
+}
+
+/// The first net report that passes `test`, or the last one seen when none did in time.
+async fn reach(side: &Side, test: impl Fn(&tunnel::Reach) -> bool) -> Option<tunnel::Reach> {
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    side.tunnels.watch_reach(move |reach| {
+        let _ = tx.send(reach);
+    });
+    let mut last = None;
+    let _ = tokio::time::timeout(Duration::from_secs(10), async {
+        while let Some(reach) = rx.recv().await {
+            let done = test(&reach);
+            last = Some(reach);
+            if done {
+                return;
+            }
+        }
+    })
+    .await;
+    last
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_pc_whose_public_address_is_its_own_is_nat_type_1() {
+    let relay = support::relay::start().await;
+    let side = side_probing(&relay, false, Some(relay.quic_port)).await;
+    let reach = reach(&side, |r| r.udp).await.expect("a net report");
+    // The relay saw 127.0.0.1, an address of this PC: nothing in between.
+    assert!(reach.udp && reach.public, "{reach:?}");
+    let relay_answers = side.tunnels.home_relay().is_some();
+    assert_eq!(tunnel::nat_type(Some(&reach), relay_answers), 1);
+    side.tunnels.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_relay_only_endpoint_is_never_type_1() {
+    let relay = support::relay::start().await;
+    let side = side_probing(&relay, true, Some(relay.quic_port)).await;
+    let reach = reach(&side, |_| true).await.unwrap_or_default();
+    assert_eq!(reach, tunnel::Reach::default());
+    assert!(side.tunnels.home_relay().is_some());
+    assert_eq!(tunnel::nat_type(Some(&reach), true), 2);
+    side.tunnels.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn without_an_answer_to_the_probes_the_relay_still_makes_it_type_2() {
+    let relay = support::relay::start().await;
+    // Probes go to a port the relay does not answer on.
+    let side = side(&relay, false).await;
+    let reach = reach(&side, |_| true).await.expect("a net report");
+    assert!(!reach.udp, "{reach:?}");
+    assert_eq!(tunnel::nat_type(Some(&reach), true), 2);
+    side.tunnels.close().await;
 }
