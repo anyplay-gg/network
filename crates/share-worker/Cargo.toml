@@ -62,7 +62,7 @@ openh264-sys2 = { version = "0.9", default-features = false, features = ["libloa
 
 # The viewer's window (MIT or Apache-2.0), on Windows and on Linux (X11 and Wayland).
 [target.'cfg(any(windows, target_os = "linux"))'.dependencies]
-minifb = "0.28"
+minifb = "0.29"
 
 [dev-dependencies]
 anyplay-control = { path = "../control" }
