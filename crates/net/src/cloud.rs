@@ -11,10 +11,11 @@ use anyplay_api::{
     DiscordTokens, EmailAnswer, EmailRequest, ErrorCode, FriendLists, FriendRequest,
     FriendRequestAnswer, Info, Invite, Invited, JoinCode, JoinSession, MarkRead, Me, Message,
     Messages, MoveParty, Party, PartyEndpoint, PartyInvitations, PlaytimeAdded, PlaytimeEntry,
-    PlaytimeUpload, PresenceRequest, Privacy, ProfilePage, Rarity, ReactionRequest, Reactions,
-    Redeemed, RefreshRequest, Relays, Report, RunReport, RunSummary, SecretsChanged, SendMessage,
-    Session, SignedIn, SignupRequest, Statement, Statements, TicketRequest, Tokens, TrophiesAdded,
-    Trophy, TrophyCompare, TrophyNumbers, TrophyUpload, UpdateParty, UpdateSession, path,
+    PlaytimeUpload, PresenceRequest, Privacy, ProfilePage, PublicProfile, Rarity, ReactionRequest,
+    Reactions, Redeemed, RefreshRequest, Relays, Report, RunReport, RunSummary, SecretsChanged,
+    SendMessage, Session, SignedIn, SignupRequest, Statement, Statements, TicketRequest, Tokens,
+    TrophiesAdded, Trophy, TrophyCompare, TrophyNumbers, TrophyUpload, UpdateParty, UpdateSession,
+    path,
 };
 use anyplay_proof::{DeviceKey, Subject};
 use reqwest::{Method, StatusCode};
@@ -702,6 +703,17 @@ impl Cloud {
     pub async fn set_appear_offline(&self, on: bool) -> Result<AppearOffline, CloudError> {
         let body = AppearOffline { appear_offline: on };
         self.call(Method::PUT, path::APPEAR_OFFLINE, Some(&body))
+            .await
+    }
+
+    pub async fn public_profile(&self) -> Result<PublicProfile, CloudError> {
+        self.call::<(), _>(Method::GET, path::PUBLIC_PROFILE, None)
+            .await
+    }
+
+    pub async fn set_public_profile(&self, on: bool) -> Result<PublicProfile, CloudError> {
+        let body = PublicProfile { public_profile: on };
+        self.call(Method::PUT, path::PUBLIC_PROFILE, Some(&body))
             .await
     }
 

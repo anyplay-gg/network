@@ -41,6 +41,7 @@ The Rust reference is [`crates/api`](../crates/api). The cloud in [anyplaynet/cl
 Account   { id, handle }
 Me        { id, handle, email, created, appear_offline }   appear_offline: bool, false when absent
 AppearOffline { appear_offline }                   the setting alone
+PublicProfile { public_profile }                   bool, false for a new account
 Tokens    { access, access_expires, refresh, device }
 Device    { name, platform, key }                  platform: "windows" | "linux" | "macos" | "other"; key: the device's public key or absent
 Presence  { online, activity, revision }           activity: Activity or null
@@ -167,6 +168,8 @@ The browser's own session on these pages is a cookie that never reaches the API.
 | `GET /v1/me` | `Me` |
 | `GET /v1/me/appear-offline` | `AppearOffline` |
 | `PUT /v1/me/appear-offline` | `AppearOffline` in and out: see [Appearing offline](#appearing-offline) |
+| `GET /v1/me/public-profile` | `PublicProfile` |
+| `PUT /v1/me/public-profile` | `PublicProfile` in and out: see [Public profile](#public-profile) |
 | `DELETE /v1/me` | 200 `{deletion: {at}}`. Schedules the deletion of the account for `at` (Unix seconds), 30 days from now, signs out every device and every browser, and refuses the access tokens issued so far; the player can cancel on the [web portal](portal-api.md#deleting-the-account) until `at`. A request that comes again keeps the first `at`. At `at` the cloud deletes the account with its devices, friends, requests, blocks, trophy records, profile, avatar and playtime. Reports the account filed lose their link to it; reports about it, the actions against it and the ban on its e-mail address stay until their retention ends (see Moderation). |
 | `GET /v1/me/export` | Everything the cloud stores about the account, as JSON, trophy records, privacy settings, profile, avatar and playtime included. |
 | `GET /v1/accounts/{id}` | `Account` |
@@ -204,6 +207,10 @@ An account can **appear offline**: its friends see `Presence { online: false, ac
 - **What is not hidden.** The account itself: it sees its own state as online, with its activity, and a client shows an "Appearing offline" hint. Members of a session or a party see each other in the member lists, which go to members only. Messages, invitations, friend requests, joining and leaving sessions and parties, and answering invitations work as before, and a friend can invite the account as they can any account that is offline. Moderation and reports see the real state.
 - **Not a block.** The setting hides presence and nothing else; a friend who holds an invitation or a join code can still join.
 - **Other devices.** When the setting changes, the cloud sends the `appear_offline` event to every device of the account, so a second device updates its toggle.
+
+## Public profile
+
+A player's page at `/u/<handle>` on the account web is off until the player turns it on. `PUT /v1/me/public-profile` with `{public_profile: true | false}` sets it and answers the same object; `GET /v1/me/public-profile` reads it. It is idempotent and a new account has `false`. While it is false, the page and the profile and trophy reads below it answer `not_found` to everyone but the player; friends keep seeing the profile in the apps through `Privacy` as before. When it is true, a stranger still sees only the parts whose `Privacy` is `everyone`. The setting is part of `GET /v1/me/export`.
 
 ## Sessions
 

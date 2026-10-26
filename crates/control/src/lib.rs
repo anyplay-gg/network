@@ -184,6 +184,12 @@ pub enum Command {
     SetPrivacy {
         privacy: anyplay_api::Privacy,
     },
+    /// Whether the player's page at `/u/<handle>` is shown to everyone.
+    PublicProfile,
+    /// `{on}`: shows the page to everyone, or only to the player and friends again.
+    SetPublicProfile {
+        on: bool,
+    },
     Profile {
         account: AccountId,
     },
@@ -1378,6 +1384,14 @@ mod tests {
         assert_eq!(
             parse_command(r#"{"id":6,"do":"privacy"}"#),
             Ok((6, Command::Privacy))
+        );
+        assert_eq!(
+            parse_command(r#"{"id":7,"do":"public_profile"}"#),
+            Ok((7, Command::PublicProfile))
+        );
+        assert_eq!(
+            parse_command(r#"{"id":8,"do":"set_public_profile","on":true}"#),
+            Ok((8, Command::SetPublicProfile { on: true }))
         );
         assert_eq!(
             parse_command(r#"{"id":3,"do":"feed","before":90,"limit":20}"#),
