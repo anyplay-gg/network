@@ -16,12 +16,17 @@ pub mod clips;
 pub mod host;
 pub mod limits;
 #[cfg(windows)]
+pub mod loopback;
+#[cfg(windows)]
 pub mod mf;
 #[cfg(target_os = "linux")]
 pub mod oh264;
 #[cfg(target_os = "linux")]
 pub mod portal;
 pub mod socket;
+pub mod sound;
+#[cfg(windows)]
+pub mod speakers;
 pub mod viewer;
 #[cfg(any(windows, target_os = "linux"))]
 pub mod window;

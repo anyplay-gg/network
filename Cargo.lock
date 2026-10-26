@@ -270,12 +270,14 @@ dependencies = [
  "anyplay-net",
  "anyplay-share",
  "ashpd",
+ "cpal",
  "iroh",
  "iroh-relay",
  "minifb",
  "mp4",
  "openh264",
  "openh264-sys2",
+ "opus",
  "pipewire",
  "rcgen",
  "rustls",
@@ -284,6 +286,7 @@ dependencies = [
  "tokio",
  "windows",
  "windows-capture",
+ "windows-core",
 ]
 
 [[package]]

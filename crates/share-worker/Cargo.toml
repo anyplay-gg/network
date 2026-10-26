@@ -21,6 +21,8 @@ serde.workspace = true
 serde_json.workspace = true
 # Clips: the MP4 file (MIT, pure Rust; docs/adr/0028).
 mp4 = "0.14"
+# The game's sound: Opus, as voice uses it (libopus, BSD-3-Clause; docs/adr/0014).
+opus = "0.4"
 
 # Windows: the system's own H.264 encoders and decoders (Media Foundation), Windows Graphics
 # Capture of one window, and a window for the viewer. All of it ships with the system or is
@@ -29,13 +31,22 @@ mp4 = "0.14"
 windows = { version = "0.62", features = [
     "Win32_Foundation",
     "Win32_Graphics_Dwm",
+    "Win32_Media_Audio",
     "Win32_Media_MediaFoundation",
+    "Win32_Media_Multimedia",
+    "Win32_Security",
     "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
     "Win32_System_Ole",
+    "Win32_System_Threading",
     "Win32_System_Variant",
     "Win32_UI_WindowsAndMessaging",
 ] }
 windows-capture = "2"
+# The COM object that hears when the system hands out the game's sound (`implement`).
+windows-core = "0.62"
+# The viewer's speakers for the game's sound (Apache-2.0; WASAPI underneath, as voice uses it).
+cpal = "0.18"
 
 # Linux: the desktop portal's ScreenCast (the player picks the game's window in the system's
 # own dialog) through ashpd (MIT), on a small tokio runtime of its own.
