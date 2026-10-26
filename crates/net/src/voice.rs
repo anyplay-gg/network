@@ -162,6 +162,8 @@ pub type Members = HashMap<EndpointId, Member>;
 pub struct Settings {
     pub mode: TalkMode,
     pub talking: bool,
+    /// Noise suppression on the microphone; `None` leaves what the engine was opened with.
+    pub noise_suppression: Option<bool>,
     /// Volume per account, 0.0 to 2.0; missing is 1.0.
     pub volumes: HashMap<u64, f32>,
     pub muted: HashSet<u64>,
@@ -194,6 +196,7 @@ enum Ctl {
     Members(Members),
     Talking(bool),
     Mode(TalkMode),
+    Noise(bool),
     Volume(u64, f32),
     Muted(u64, bool),
     MicMuted(bool),
@@ -262,6 +265,10 @@ impl Hub {
         let _ = self.ctl.send(Ctl::Mode(mode));
     }
 
+    pub fn set_noise_suppression(&self, enabled: bool) {
+        let _ = self.ctl.send(Ctl::Noise(enabled));
+    }
+
     /// 0.0 (silent) to 2.0.
     pub fn set_volume(&self, account: u64, volume: f32) {
         let _ = self.ctl.send(Ctl::Volume(account, volume));
@@ -325,6 +332,9 @@ struct Task {
 impl Task {
     async fn run(mut self, mut ctl: mpsc::UnboundedReceiver<Ctl>, mut net: mpsc::Receiver<Net>) {
         self.engine.set_mode(self.settings.mode);
+        if let Some(enabled) = self.settings.noise_suppression {
+            self.engine.set_noise_suppression(enabled);
+        }
         self.engine.set_talking(self.settings.talking);
         self.engine.set_mic_muted(self.settings.mic_muted);
         self.engine.set_deafened(self.settings.deafened);
@@ -372,6 +382,10 @@ impl Task {
             Ctl::Mode(mode) => {
                 self.settings.mode = mode;
                 self.engine.set_mode(mode);
+            }
+            Ctl::Noise(enabled) => {
+                self.settings.noise_suppression = Some(enabled);
+                self.engine.set_noise_suppression(enabled);
             }
             Ctl::MicMuted(muted) => {
                 self.settings.mic_muted = muted;

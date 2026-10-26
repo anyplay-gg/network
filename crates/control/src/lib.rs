@@ -265,6 +265,10 @@ pub enum Command {
     PushToTalk {
         talking: bool,
     },
+    /// Noise suppression on the microphone: on (the default of a new service) or off.
+    VoiceNoise {
+        enabled: bool,
+    },
     VoiceMode {
         mode: VoiceMode,
     },
@@ -1523,6 +1527,10 @@ mod tests {
         assert_eq!(
             parse_command(r#"{"id":1,"do":"voice","on":true}"#),
             Ok((1, Command::Voice { on: true }))
+        );
+        assert_eq!(
+            parse_command(r#"{"id":7,"do":"voice_noise","enabled":false}"#),
+            Ok((7, Command::VoiceNoise { enabled: false }))
         );
         assert_eq!(
             parse_command(r#"{"id":2,"do":"push_to_talk","talking":false}"#),

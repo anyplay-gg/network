@@ -260,6 +260,11 @@ impl Engine {
         self.sender.set_mode(mode);
     }
 
+    /// Switches the noise suppression on the microphone on or off while the engine runs.
+    pub fn set_noise_suppression(&mut self, enabled: bool) {
+        self.sender.set_noise_suppression(enabled);
+    }
+
     /// How loud one member is heard, 0.0 (silent) to 2.0 (double). Applies to members not yet
     /// heard from too.
     pub fn set_peer_volume(&mut self, peer: PeerId, volume: f32) {
