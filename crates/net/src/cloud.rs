@@ -21,6 +21,9 @@ use reqwest::{Method, StatusCode};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
+/// How long an upload or download of a screenshot or clip may take.
+const MEDIA_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+
 /// The environment variable with which the launcher names itself when it starts the service.
 pub const CLIENT_ENV: &str = "ANYPLAY_CLIENT";
 
@@ -1011,6 +1014,170 @@ impl Cloud {
             Some(&body),
         )
         .await
+    }
+
+    /// Uploads a screenshot or clip into a conversation as a media message. The bytes are held in
+    /// memory (a clip is at most 100 MB). The access token is refreshed first; an upload whose
+    /// token the cloud refuses anyway is not repeated.
+    pub async fn send_media(
+        &self,
+        id: &str,
+        content_type: &str,
+        bytes: Vec<u8>,
+    ) -> Result<Message, CloudError> {
+        let access = self.access().await?;
+        let response = self
+            .http
+            .post(format!(
+                "{}{}",
+                self.base,
+                path::fill(path::CONVERSATION_MEDIA, id)
+            ))
+            .bearer_auth(access)
+            .header(reqwest::header::CONTENT_TYPE, content_type)
+            .timeout(MEDIA_TIMEOUT)
+            .body(bytes)
+            .send()
+            .await
+            .map_err(|e| CloudError::Offline(e.without_url().to_string()))?;
+        let status = response.status();
+        let body = response
+            .bytes()
+            .await
+            .map_err(|e| CloudError::Offline(e.without_url().to_string()))?;
+        if status.is_success() {
+            return serde_json::from_slice(&body)
+                .map_err(|e| CloudError::Offline(format!("unreadable answer: {e}")));
+        }
+        match serde_json::from_slice::<ApiError>(&body) {
+            Ok(error) => Err(CloudError::Api(error)),
+            Err(_) => Err(CloudError::Offline(format!("status {status}"))),
+        }
+    }
+
+    /// Downloads a media file into `dest`, through a `.part` file that is renamed when the
+    /// download is whole. `max` stops a file larger than the cloud promised.
+    pub async fn fetch_media(
+        &self,
+        media: &str,
+        dest: std::path::PathBuf,
+        max: u64,
+    ) -> Result<(), CloudError> {
+        use std::io::Write as _;
+        let access = self.access().await?;
+        let mut response = self
+            .http
+            .get(format!("{}{}", self.base, path::fill(path::MEDIA, media)))
+            .bearer_auth(access)
+            .timeout(MEDIA_TIMEOUT)
+            .send()
+            .await
+            .map_err(|e| CloudError::Offline(e.without_url().to_string()))?;
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.bytes().await.unwrap_or_default();
+            return match serde_json::from_slice::<ApiError>(&body) {
+                Ok(error) => Err(CloudError::Api(error)),
+                Err(_) => Err(CloudError::Offline(format!("status {status}"))),
+            };
+        }
+        let mut part = dest.clone().into_os_string();
+        part.push(".part");
+        let part = std::path::PathBuf::from(part);
+        let offline =
+            |e: std::io::Error| CloudError::Offline(format!("cannot write the file: {e}"));
+        let mut file = std::fs::File::create(&part).map_err(offline)?;
+        let mut written = 0u64;
+        loop {
+            match response.chunk().await {
+                Ok(Some(chunk)) => {
+                    written += chunk.len() as u64;
+                    if written > max {
+                        drop(file);
+                        let _ = std::fs::remove_file(&part);
+                        return Err(CloudError::Offline(
+                            "the file is larger than allowed".into(),
+                        ));
+                    }
+                    if let Err(e) = file.write_all(&chunk) {
+                        drop(file);
+                        let _ = std::fs::remove_file(&part);
+                        return Err(offline(e));
+                    }
+                }
+                Ok(None) => break,
+                Err(e) => {
+                    drop(file);
+                    let _ = std::fs::remove_file(&part);
+                    return Err(CloudError::Offline(e.without_url().to_string()));
+                }
+            }
+        }
+        drop(file);
+        std::fs::rename(&part, &dest).map_err(|e| {
+            let _ = std::fs::remove_file(&part);
+            offline(e)
+        })
+    }
+
+    // Looking for group
+
+    pub async fn lfg(
+        &self,
+        title_id: &str,
+        mode: Option<anyplay_api::LfgMode>,
+        language: Option<&str>,
+    ) -> Result<anyplay_api::Listings, CloudError> {
+        let mut query = vec![format!("title={title_id}")];
+        if let Some(mode) = mode {
+            query.push(format!("mode={}", mode.as_str()));
+        }
+        if let Some(language) = language {
+            query.push(format!("language={language}"));
+        }
+        let path = format!("{}?{}", path::LFG, query.join("&"));
+        self.call::<(), _>(Method::GET, &path, None).await
+    }
+
+    pub async fn lfg_mine(&self) -> Result<anyplay_api::LfgMine, CloudError> {
+        self.call::<(), _>(Method::GET, path::LFG_MINE, None).await
+    }
+
+    pub async fn lfg_post(
+        &self,
+        body: &anyplay_api::CreateListing,
+    ) -> Result<anyplay_api::Listing, CloudError> {
+        self.call(Method::POST, path::LFG, Some(body)).await
+    }
+
+    pub async fn lfg_close(&self, listing: &str) -> Result<(), CloudError> {
+        self.empty(Method::DELETE, &path::fill(path::LFG_LISTING, listing))
+            .await
+    }
+
+    pub async fn lfg_ask(&self, listing: &str) -> Result<anyplay_api::Listing, CloudError> {
+        self.call::<(), _>(Method::POST, &path::fill(path::LFG_ASK, listing), None)
+            .await
+    }
+
+    pub async fn lfg_withdraw(&self, listing: &str) -> Result<(), CloudError> {
+        self.empty(Method::DELETE, &path::fill(path::LFG_ASK, listing))
+            .await
+    }
+
+    pub async fn lfg_answer(
+        &self,
+        listing: &str,
+        account: AccountId,
+        accept: bool,
+    ) -> Result<anyplay_api::Listing, CloudError> {
+        if accept {
+            let path = path::fill2(path::LFG_REQUEST_ACCEPT, listing, account);
+            self.call::<(), _>(Method::POST, &path, None).await
+        } else {
+            let path = path::fill2(path::LFG_REQUEST, listing, account);
+            self.call::<(), _>(Method::DELETE, &path, None).await
+        }
     }
 
     pub async fn unsend_message(&self, id: &str, seq: u64) -> Result<Message, CloudError> {

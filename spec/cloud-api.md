@@ -330,10 +330,32 @@ An item carries `id`, the `account` it is about, `at`, the counts of the four re
 - **Retention.** The cloud deletes items, with their reactions, 90 days after they were recorded (a setting of the cloud). Deleting an account deletes its items and its reactions on other accounts' items.
 - **News.** The cloud sends `feed` on the event connection to the friends of an account that has a new item, and to the members for a party item.
 
+## Looking for group
+
+A short public listing: "I want to play this game, in this way, with this many people." A player posts one for a game they own, others who own it see it and ask to join, and the poster accepts into their party ([ADR 0031](../docs/adr/0031-looking-for-group-is-a-listing-that-ends-in-a-party-invitation.md)). The cloud knows no games; the `title_id` and the claim of owning it are the poster's own, so showing listings only for a game is a filter, not a security rule.
+
+```
+Listing { id, poster: Account, title_id, mode, language?, note, slots, filled, created, expires, ask?, requests[] }
+CreateListing { title_id, mode, language?, note, slots }
+LfgMine { posted: [Listing], asked: [Listing] }
+```
+
+- `mode` is `online`, `lan` or `play_together`. `language` is two or three lower-case letters or absent for any. `note` has at most 140 characters of plain text, no control characters and no links (the rules of a profile text). `slots` is 1 to 7: how many players the poster looks for; with the poster that is a full party.
+- `POST /v1/lfg` posts a listing that stays open for 1 hour. An account has at most 3 open listings and one per game (`limit`), posts at most 5 in 10 minutes (`rate_limited`), and a muted account cannot post (`restricted`).
+- `GET /v1/lfg?title=<id>[&mode=][&language=]` lists the open listings of that game, newest first, at most 50. The `title` is required: there is no list of everything. Listings of accounts the caller blocked, or that blocked the caller, and the caller's own are left out; `ask` holds the caller's own request (`pending`, `accepted`).
+- `GET /v1/lfg/mine` answers the caller's own open listings, with `requests` (who asked, oldest first), and the listings the caller asked to join.
+- `DELETE /v1/lfg/{id}` closes the caller's own listing; its requests go with it.
+- `POST /v1/lfg/{id}/ask` asks to join (answers the `Listing`); `DELETE` takes the request back. Not on the caller's own listing (`bad_request`), not while muted (`restricted`), at most 20 requests an hour (`rate_limited`). A listing holds 20 open requests (`full`). The poster gets `lfg_request`.
+- `POST /v1/lfg/{id}/requests/{account}/accept` is the poster's. It makes the poster's party when there is none and sends the requester a party invitation from the poster (the invitation needs no friendship), then `lfg_accepted` to the requester. `filled` counts up; at `slots` the listing closes. A full party answers `full`. `DELETE` on the same path declines: the request disappears and nobody is told.
+- **Moderation.** `POST /v1/reports` with `listing` reports it. A block hides the poster's listings from the blocker, and the blocker's from the poster. A ban or a deleted account removes the account's listings and requests.
+- **Retention.** A listing closes after an hour; the cloud deletes it a day later. A report keeps what it needs in its snapshot.
+- Other limits: see Limits.
+
 ## Reports
 
-`POST /v1/reports` with `{account, reason, details, conversation, seq}` answers 204. `reason` is `cheating`, `harassment`, `spam`, `name` or `other`; `details` has at most 1,000 characters. `conversation` and `seq` are optional and go together: they name one message written by `account` in a conversation the reporter can read. The reporter cannot report a message they cannot see (`not_found`), or one written by someone else (`bad_request`).
+`POST /v1/reports` with `{account, reason, details, conversation, seq, listing}` answers 204. `reason` is `cheating`, `harassment`, `spam`, `name` or `other`; `details` has at most 1,000 characters. `conversation` and `seq` are optional and go together: they name one message written by `account` in a conversation the reporter can read. The reporter cannot report a message they cannot see (`not_found`), or one written by someone else (`bad_request`).
 
+- `listing` is optional and names one open or recently closed looking-for-group listing of `account` (`not_found` otherwise; see [Looking for group](#looking-for-group)); the snapshot then holds the listing's note, game, mode and language. It does not go with `conversation` and `seq`. A message that carries media keeps its file for moderation (see [Media in messages](#media-in-messages)).
 - The cloud saves a snapshot of what was reported with the report: the reported handle, and for a message its text, so a report is evidence even when the message was swept or the account is gone. A moderator reads it as `content`.
 - An account may have one open report about the same account at a time (`limit`), and files at most 20 reports a day and 5 in 10 minutes (`limit`, `rate_limited`). The numbers are settings of the cloud.
 
@@ -556,9 +578,22 @@ A message is reported with `POST /v1/reports` and `conversation` plus `seq` (see
 | Edit a message of another account | `forbidden` |
 | Edit after 15 minutes | `forbidden` | The clients offer it on every message of another account.
 
+### Media in messages
+
+A friend can send a screenshot or a clip into their direct conversation ([ADR 0032](../docs/adr/0032-friends-can-send-screenshots-and-clips.md)). A media message is an ordinary numbered message with an empty `text` and a `media` object `{id, kind, content_type, bytes, width, height, duration_ms, expires}`; `kind` is `image` or `clip`.
+
+- **Send.** `POST /v1/conversations/{id}/media` with the raw file as the body and its `Content-Type` (`image/png`, `image/jpeg` or `video/mp4`) answers the `Message`. The file is not wrapped in JSON, so the cloud streams it to disk. The cloud checks the first bytes against the type, decodes an image under size limits, and reads an MP4's length; a file that does not match answers `bad_request`.
+- **Who.** Only in a direct conversation between two accounts that are friends and have both accepted it, with no block between them. A message request, a group, a party chat and a stranger answer `forbidden`. A muted account answers `restricted`.
+- **Limits.** A screenshot is at most 10 MB; a clip at most 100 MB and 60 seconds (`too_large` for size, `bad_request` for length). An account sends at most 10 media files in 10 minutes (`rate_limited`) and holds at most 1 GiB of files that are still kept (`limit`). The numbers are settings of the cloud.
+- **Fetch.** `GET /v1/media/{id}` answers the file to the two members of the conversation and to nobody else (`not_found` for everyone else, so an ID tells nothing). The `id` is 128 random bits and is not a guess-and-check address, but the check on the account is the rule, not the secrecy of the ID.
+- **Expiry.** The file is deleted 30 days after it was sent, at the latest when the message is swept. After that, or after an unsend, the message has no `media` and `GET` answers `not_found`.
+- **Unsend.** The sender takes the message back with the ordinary unsend (`DELETE .../messages/{seq}`); access ends at once and the file is deleted.
+- **Report.** A media message is reported like any message (`conversation`, `seq`). The file is then kept for as long as the report is open or kept, even if the sender unsends it, and a moderator reads it with `GET /v1/moderation/media/{id}`. Nobody else can.
+- Export and account deletion: the export lists the media an account sent (ID, kind, time; not the bytes); deleting the account deletes its files, except those held by a report.
+
 ### Not yet
 
-Attachments, images, voice notes, link previews, and end-to-end encryption are not part of this version: where attachments live and who reviews them is not decided ([ADR 0011](../docs/adr/0011-messages-are-stored-to-be-delivered.md) keeps the cloud able to read text for reports; pictures need storage, scanning and a review path first). Timed mutes, a setting to switch read receipts and typing off, and search are later steps.
+Voice notes, link previews, captions on media, media in groups and party chats, and end-to-end encryption are not part of this version ([ADR 0011](../docs/adr/0011-messages-are-stored-to-be-delivered.md) keeps the cloud able to read text for reports). Timed mutes, a setting to switch read receipts and typing off, and search are later steps.
 
 ## Events
 
@@ -592,6 +627,8 @@ Attachments, images, voice notes, link previews, and end-to-end encryption are n
 | `conversation` | `id` | A conversation is new, or its members, name, mute or pin changed. Fetch it. |
 | `conversation_gone` | `id` | This account is no longer in the conversation. |
 | `appear_offline` | `appear_offline` | The setting of this account changed (on another device or in the portal). Sent to the account's own devices only. |
+| `lfg_request` | `listing, title_id, from` | Someone asked to join a listing of this account. Fetch `GET /v1/lfg/mine`. |
+| `lfg_accepted` | `listing, title_id, by` | The poster accepted this account's request. The party invitation arrives as `party_invitation`. |
 | `feed` | | A feed has news (a friend's new item, or a reaction to one of this account's). Fetch `GET /v1/feed`. It carries nothing; a client fetches at most every two seconds. |
 
 - After `welcome`, and after every reconnect, a client reads what it may have missed: `GET /v1/party` and `GET /v1/party/invitations`, `GET /v1/calls/missed`, and `GET /v1/conversations` with the messages after the numbers it holds. News is a pointer or a numbered state and may be lost; reading the state is always right.
@@ -635,6 +672,9 @@ DiscordTokens { access, refresh, expires_in, scope }   expires_in: seconds; scop
 | `relays/tickets` | 20 per account per hour |
 | `PUT /v1/me/avatar` | 5 per account per hour, besides the limit below |
 | messages | 30 per account per minute |
+| media messages | 10 per account per 10 minutes, 1 GiB kept per account, 4 uploads at once per node |
+| `POST /v1/lfg` | 5 per account per 10 minutes; 3 open per account |
+| `POST /v1/lfg/{id}/ask` | 20 per account per hour |
 | edits, unsends and reactions | 60 per account per minute |
 | typing | 1 per account and conversation every 2 seconds, 30 per account per minute (others are dropped; `false` is never dropped) |
 | conversations with strangers | 10 per account per hour |

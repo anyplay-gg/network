@@ -137,6 +137,15 @@ When the cloud retires this launcher's version ([cloud API](cloud-api.md#convent
 | `send_message` | `conversation`, `text`, `reply` | the `Message`; `reply` (optional) is the number of the message it answers |
 | `edit_message` | `conversation`, `seq`, `text` | the `Message`, within 15 minutes of writing it |
 | `unsend_message` | `conversation`, `seq` | the `Message` with `deleted` true |
+| `send_media` | `conversation`, `path` | the `Message` with `media`, when the upload is done (a clip can take minutes; other commands are answered meanwhile). The service reads the file at `path`, checks that it is a PNG, JPEG or MP4 within the limits, and refuses before sending anything otherwise |
+| `fetch_media` | `media`, `path` | `{}` once the file is whole at `path`; it is written through `path.part` and nothing is left behind on a failure |
+| `lfg` | `title_id`, `mode`, `language` | `{listings}`: the open listings of the game; `mode` and `language` may be left out |
+| `lfg_mine` | | `{posted, asked}` |
+| `lfg_post` | `title_id`, `mode`, `language`, `note`, `slots` | the `Listing` |
+| `lfg_close` | `listing` | `{}` |
+| `lfg_ask` | `listing` | the `Listing` with `ask` |
+| `lfg_withdraw` | `listing` | `{}` |
+| `lfg_answer` | `listing`, `account`, `accept` | the `Listing`; accepting sends a party invitation to `account`, declining is silent |
 | `react_message` | `conversation`, `seq`, `reaction` | the `Message`; `reaction` is `nice`, `love`, `laugh`, `gg`, `wow`, `sad`, or null to take it back |
 | `typing` | `conversation`, `typing` | `{}`: the net service passes on at most one `true` every 3 seconds per conversation |
 | `conversation_settings` | `conversation`, `muted`, `pinned` | the `Conversation`; a field left out stays |
@@ -204,6 +213,8 @@ When the cloud retires this launcher's version ([cloud API](cloud-api.md#convent
 | `conversation` | `id` | a conversation is new, or its members, name, mute or pin changed |
 | `conversation_gone` | `id` | the player is no longer in the conversation |
 | `screen` | `can_share`, `can_watch`, `hosting`, `offers`, `watching` | share screen changed; while a stream runs its numbers at most twice a second |
+| `lfg_request` | `listing`, `title_id`, `from` | someone asked to join a listing of the player; fetch `lfg_mine` |
+| `lfg_accepted` | `listing`, `title_id`, `by` | the poster accepted the player's request; their party invitation arrives as `party_invitation` |
 | `feed` | | the feed has news; fetch `feed`. The net service sends at most one every two seconds, with one trailing event for news inside that time |
 
 - `client_too_old` ends the event connection for good: the `cloud` state goes to `offline` and stays there, and the net service does not try again until it is started again, so the launcher shows its update screen and does not wait for the connection. The sign-in stays kept. Every command that reaches the cloud afterwards still fails with the `client_too_old` failure (with `minimum`), without a second event. A launcher that does not know the event ignores it, and a failure with an unknown code is a failure like any other.
@@ -211,7 +222,7 @@ When the cloud retires this launcher's version ([cloud API](cloud-api.md#convent
 - To appeal: a mute is appealed with the `appeal` command. A ban signs the account out, so it is appealed on the account web: the launcher starts `browser_sign_in`, and the cloud's sign-in ends on the page with the statement and the form (after a ban the player proves who they are there, as in [ADR 0015](../docs/adr/0015-moderators-are-accounts.md)).
 - `cloud` is `offline`, `connecting` or `online`. `account` is `{id, handle, email}` or null. `pending` is `code` (an e-mail is out), `handle` (the account needs a handle), `browser` (the system browser has the sign-in) or null.
 - `friends` carries the whole lists each time, with each friend's presence as in the cloud API. The net service sends at most four of them per second.
-- `report` takes the optional `conversation` and `seq` together: it reports that message of the account ([cloud API](cloud-api.md#reporting-a-message)).
+- `report` takes the optional `conversation` and `seq` together: it reports that message of the account ([cloud API](cloud-api.md#reporting-a-message)). It takes an optional `listing` instead to report a looking-for-group listing ([cloud API](cloud-api.md#looking-for-group)).
 - Edits, unsends, reactions, typing and the settings are the [cloud API](cloud-api.md#changes-to-messages) one to one, with its errors. `typing` is fire and forget: the launcher sends it on every key if it likes, and the net service drops all but one `true` in three seconds for a conversation (`false` always goes) and answers `{}`.
 - `message` carries no text: the launcher keeps the highest number it has for each conversation and calls `messages` with `after`. The `conversations` event after a reconnect carries every conversation's newest number (`last`), so what arrived while the connection was down is fetched the same way.
 - `muted` and `deafened` in the `voice` event say what `mic_mute` and `deafen` set (both false after the service starts, and remembered while it runs). Both silence `me`: its `speaking` is false.
