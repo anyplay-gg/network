@@ -22,6 +22,7 @@ pub mod oh264;
 #[cfg(target_os = "linux")]
 pub mod portal;
 pub mod socket;
+pub mod sound;
 pub mod viewer;
 #[cfg(any(windows, target_os = "linux"))]
 pub mod window;

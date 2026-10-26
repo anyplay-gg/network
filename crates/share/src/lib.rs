@@ -6,6 +6,7 @@
 //! microseconds from the caller's own monotonic clock) and no codec library (codecs plug in
 //! behind [`VideoEncoder`] and [`VideoDecoder`]).
 //!
+//! * [`audio`]: the numbering of the game's sound and the viewer's jitter buffer.
 //! * [`wire`]: the video and audio datagrams, with a [`wire::Refusal`] for each reason the
 //!   receiver rules give.
 //! * [`packetiser`]: one encoded frame into datagrams with Reed-Solomon parity.
@@ -36,6 +37,7 @@
 //! assert_eq!((number, picture.width), (Some(0), 320));
 //! ```
 
+pub mod audio;
 pub mod codec;
 pub mod control;
 pub mod link;

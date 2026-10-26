@@ -7,8 +7,10 @@ use anyplay_share::codec::{CodecError, Frame, VideoDecoder};
 use anyplay_share::control::{Key, Report};
 use anyplay_share::link::{FromWorker, ToWorker, WorkerStats};
 use anyplay_share::reassembler::Reassembler;
+use anyplay_share::wire::TYPE_AUDIO;
 
 use crate::Port;
+use crate::sound::{SoundOut, SoundReceiver};
 
 /// Where pictures go: a window, or a counter in tests.
 pub trait FrameSink {
@@ -42,7 +44,26 @@ const SLICE: Duration = Duration::from_millis(5);
 /// Runs the viewer until the net service stops it, hangs up or the sink is closed. Pictures
 /// are shown as they arrive; a delta frame that cannot be decoded asks for a key frame and
 /// shows nothing damaged.
-pub fn run(decoders: DecoderFactory, mut sink: Box<dyn FrameSink>, port: Port) {
+pub fn run(decoders: DecoderFactory, sink: Box<dyn FrameSink>, port: Port) {
+    run_with_sound(decoders, sink, None, port);
+}
+
+/// Like [`run`], and the game's sound played on `sound`. Without it, sound datagrams are
+/// dropped.
+pub fn run_with_sound(
+    decoders: DecoderFactory,
+    mut sink: Box<dyn FrameSink>,
+    mut sound: Option<Box<dyn SoundOut>>,
+    port: Port,
+) {
+    let mut receiver = match sound.as_ref().map(|_| SoundReceiver::new()) {
+        Some(Ok(receiver)) => Some(receiver),
+        Some(Err(why)) => {
+            eprintln!("share worker: no sound: {why}");
+            None
+        }
+        None => None,
+    };
     let Port {
         from_service,
         to_service,
@@ -78,6 +99,11 @@ pub fn run(decoders: DecoderFactory, mut sink: Box<dyn FrameSink>, port: Port) {
                     return;
                 }
             }
+            Ok(ToWorker::Datagram(bytes)) if bytes.get(1) == Some(&TYPE_AUDIO) => {
+                if let Some(receiver) = receiver.as_mut() {
+                    receiver.insert(&bytes);
+                }
+            }
             Ok(ToWorker::Datagram(bytes)) => {
                 // Before the setup there is no decoder: such a picture is of no use.
                 if decoder.is_some() {
@@ -90,6 +116,9 @@ pub fn run(decoders: DecoderFactory, mut sink: Box<dyn FrameSink>, port: Port) {
             }
             Ok(ToWorker::Rate { .. }) | Ok(ToWorker::KeyFrame) => {}
             Err(RecvTimeoutError::Timeout) => {}
+        }
+        if let (Some(receiver), Some(sound)) = (receiver.as_mut(), sound.as_mut()) {
+            crate::sound::feed(receiver, sound.as_mut());
         }
         // Pictures that are complete now.
         while let Some(done) = reassembler.poll_frame(now_us(&clock)) {

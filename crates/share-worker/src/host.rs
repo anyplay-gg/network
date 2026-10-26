@@ -9,6 +9,7 @@ use anyplay_share::packetiser::Packetiser;
 use anyplay_share::testcodec::TestPattern;
 
 use crate::Port;
+use crate::sound::SoundSource;
 
 /// What a source gives when asked for a picture.
 #[derive(Debug)]
@@ -114,7 +115,18 @@ pub fn run(source: Box<dyn FrameSource>, encoder: Box<dyn VideoEncoder>, port: P
 
 /// Like [`run`], with an encoder made from each `Start`: a change of size or codec makes a new
 /// one, and the rate of a `Rate` message goes to the running one.
-pub fn run_with(mut source: Box<dyn FrameSource>, mut make_encoder: EncoderFactory, port: Port) {
+pub fn run_with(source: Box<dyn FrameSource>, make_encoder: EncoderFactory, port: Port) {
+    run_with_sound(source, make_encoder, None, port);
+}
+
+/// Like [`run_with`], and the game's sound from `sound` once the stream starts, on a thread of
+/// its own, until the stream ends. Without a source the stream has no sound.
+pub fn run_with_sound(
+    mut source: Box<dyn FrameSource>,
+    mut make_encoder: EncoderFactory,
+    sound: Option<Box<dyn SoundSource>>,
+    port: Port,
+) {
     let Port {
         from_service,
         to_service,
@@ -126,6 +138,12 @@ pub fn run_with(mut source: Box<dyn FrameSource>, mut make_encoder: EncoderFacto
             Ok(_) => {}
         }
     };
+    // Stops with this function.
+    let _sound = sound.and_then(|sound| {
+        crate::sound::capture(sound, start.epoch, to_service.clone())
+            .inspect_err(|why| eprintln!("share worker: no sound: {why}"))
+            .ok()
+    });
     let mut state = State {
         packetiser: Packetiser::new(start.max_payload, start.epoch),
         parity: start.parity_percent,

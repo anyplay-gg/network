@@ -21,6 +21,8 @@ serde.workspace = true
 serde_json.workspace = true
 # Clips: the MP4 file (MIT, pure Rust; docs/adr/0028).
 mp4 = "0.14"
+# The game's sound: Opus, as voice uses it (libopus, BSD-3-Clause; docs/adr/0014).
+opus = "0.4"
 
 # Windows: the system's own H.264 encoders and decoders (Media Foundation), Windows Graphics
 # Capture of one window, and a window for the viewer. All of it ships with the system or is
