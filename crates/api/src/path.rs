@@ -42,6 +42,7 @@ pub const RUNS: &str = "/v1/titles/{id}/runs";
 pub const CARDS: &str = "/v1/cards";
 pub const PRIVACY: &str = "/v1/me/privacy";
 pub const APPEAR_OFFLINE: &str = "/v1/me/appear-offline";
+pub const PUBLIC_PROFILE: &str = "/v1/me/public-profile";
 pub const MY_PROFILE: &str = "/v1/me/profile";
 pub const ACCOUNT_PROFILE: &str = "/v1/accounts/{id}/profile";
 pub const FEED: &str = "/v1/feed";

@@ -1,5 +1,7 @@
 # Messages change in place, and a counter says what changed
 
+_Renumbered from 0030 on 2026-10-26._
+
 A player can fix a typo, take a message back and answer with a reaction. All three change a message that already has its number ([ADR 0013](0013-messages-are-numbered-per-conversation.md)), so "ask for what comes after the number I hold" no longer finds them. Each conversation therefore has a second counter, its revision, that rises by one with every edit, unsend and reaction. It is taken in the same transaction and under the same row lock as the message numbers. A client holds the highest revision it has seen and asks for the messages that changed after it. A missed event, a reconnect or a second device loses nothing and needs one more number.
 
 Three rules come with it.

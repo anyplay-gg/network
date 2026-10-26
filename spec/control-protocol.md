@@ -103,6 +103,8 @@ When the cloud retires this launcher's version ([cloud API](cloud-api.md#convent
 | `run_reports` | `title_id`, `version` (or null) | `{title_id, version, reports, verdict, counts}` |
 | `cards` | `accounts` | `{cards}` |
 | `set_appear_offline` | `on` | `{appear_offline}`: the new setting, see [Appearing offline](cloud-api.md#appearing-offline); `offline` when the cloud cannot be reached (nothing is changed then) |
+| `public_profile` | | `{public_profile}`: whether the page at `/u/<handle>` is shown to everyone, false until the player turns it on ([Public profile](cloud-api.md#public-profile)) |
+| `set_public_profile` | `on` | `{public_profile}`: the new setting |
 | `privacy` | | the player's `Privacy` |
 | `set_privacy` | `privacy` | the new `Privacy` |
 | `profile` | `account` | `ProfilePage`: the `Profile` with the parts the player may see of that account, their trophy counts (null when hidden) and the connections they show (`links`) |
