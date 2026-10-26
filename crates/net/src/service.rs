@@ -712,9 +712,11 @@ impl Service {
                 details,
                 conversation,
                 seq,
+                listing,
             } => {
                 if conversation.as_deref().is_some_and(|c| !is_title_id(c))
                     || conversation.is_some() != seq.is_some()
+                    || listing.as_deref().is_some_and(|l| !is_title_id(l))
                 {
                     self.fail(id, bad_id());
                     return;
@@ -736,6 +738,7 @@ impl Service {
                                 details,
                                 conversation,
                                 seq,
+                                listing,
                             })
                             .await
                     },
@@ -1424,7 +1427,16 @@ impl Service {
             | Command::MarkRead { .. }
             | Command::AcceptRequest { .. }
             | Command::LeaveConversation { .. }
-            | Command::AddToConversation { .. }) => self.social_command(id, social),
+            | Command::AddToConversation { .. }
+            | Command::SendMedia { .. }
+            | Command::FetchMedia { .. }
+            | Command::Lfg { .. }
+            | Command::LfgMine
+            | Command::LfgPost { .. }
+            | Command::LfgClose { .. }
+            | Command::LfgAsk { .. }
+            | Command::LfgWithdraw { .. }
+            | Command::LfgAnswer { .. }) => self.social_command(id, social),
         }
     }
 
@@ -2259,6 +2271,163 @@ impl Service {
                     |_, added| added,
                 );
             }
+            Command::SendMedia { conversation, path } => {
+                if !is_title_id(&conversation) {
+                    self.fail(id, bad_id());
+                    return;
+                }
+                self.request(
+                    id,
+                    async move {
+                        let (content_type, bytes) = read_media(path.into()).await?;
+                        cloud.send_media(&conversation, content_type, bytes).await
+                    },
+                    |_, message| message,
+                );
+            }
+            Command::FetchMedia { media, path } => {
+                if !is_title_id(&media) {
+                    self.fail(id, bad_id());
+                    return;
+                }
+                self.request(
+                    id,
+                    async move {
+                        cloud
+                            .fetch_media(
+                                &media,
+                                std::path::PathBuf::from(path),
+                                anyplay_api::MAX_CLIP_BYTES,
+                            )
+                            .await
+                    },
+                    |_, ()| Done {},
+                );
+            }
+            Command::Lfg {
+                title_id,
+                mode,
+                language,
+            } => {
+                if !is_title_id(&title_id) {
+                    self.fail(id, bad_title());
+                    return;
+                }
+                if language
+                    .as_deref()
+                    .is_some_and(|l| !anyplay_api::is_language_tag(l))
+                {
+                    self.fail(id, bad_language());
+                    return;
+                }
+                self.request(
+                    id,
+                    async move { cloud.lfg(&title_id, mode, language.as_deref()).await },
+                    |_, listings| listings,
+                );
+            }
+            Command::LfgMine => {
+                self.request(id, async move { cloud.lfg_mine().await }, |_, mine| mine);
+            }
+            Command::LfgPost {
+                title_id,
+                mode,
+                language,
+                note,
+                slots,
+            } => {
+                if !is_title_id(&title_id) {
+                    self.fail(id, bad_title());
+                    return;
+                }
+                if language
+                    .as_deref()
+                    .is_some_and(|l| !anyplay_api::is_language_tag(l))
+                {
+                    self.fail(id, bad_language());
+                    return;
+                }
+                if anyplay_api::check_lfg_note(&note).is_err() {
+                    self.fail(
+                        id,
+                        Failure::new(
+                            ErrorCode::BadRequest.as_str(),
+                            "A note has at most 140 characters and no links.",
+                        ),
+                    );
+                    return;
+                }
+                if !(1..=anyplay_api::MAX_LFG_SLOTS).contains(&slots) {
+                    self.fail(
+                        id,
+                        Failure::new(
+                            ErrorCode::BadRequest.as_str(),
+                            "A listing looks for 1 to 7 players.",
+                        ),
+                    );
+                    return;
+                }
+                let body = anyplay_api::CreateListing {
+                    title_id,
+                    mode,
+                    language,
+                    note,
+                    slots,
+                };
+                self.request(
+                    id,
+                    async move { cloud.lfg_post(&body).await },
+                    |_, listing| listing,
+                );
+            }
+            Command::LfgClose { listing } => {
+                if !is_title_id(&listing) {
+                    self.fail(id, bad_id());
+                    return;
+                }
+                self.request(
+                    id,
+                    async move { cloud.lfg_close(&listing).await },
+                    |_, ()| Done {},
+                );
+            }
+            Command::LfgAsk { listing } => {
+                if !is_title_id(&listing) {
+                    self.fail(id, bad_id());
+                    return;
+                }
+                self.request(
+                    id,
+                    async move { cloud.lfg_ask(&listing).await },
+                    |_, listing| listing,
+                );
+            }
+            Command::LfgWithdraw { listing } => {
+                if !is_title_id(&listing) {
+                    self.fail(id, bad_id());
+                    return;
+                }
+                self.request(
+                    id,
+                    async move { cloud.lfg_withdraw(&listing).await },
+                    |_, ()| Done {},
+                );
+            }
+            Command::LfgAnswer {
+                listing,
+                account,
+                accept,
+            } => {
+                if !is_title_id(&listing) {
+                    self.fail(id, bad_id());
+                    return;
+                }
+                self.request(
+                    id,
+                    async move { cloud.lfg_answer(&listing, account, accept).await },
+                    |_, listing| listing,
+                );
+            }
             _ => self.fail(
                 id,
                 Failure::new(Failure::UNKNOWN_COMMAND, "Not a social command."),
@@ -2339,6 +2508,24 @@ impl Service {
             Event::ConversationGone { id } => {
                 self.event(control::Event::ConversationGone { id });
             }
+            Event::LfgRequest {
+                listing,
+                title_id,
+                from,
+            } => self.event(control::Event::LfgRequest {
+                listing,
+                title_id,
+                from,
+            }),
+            Event::LfgAccepted {
+                listing,
+                title_id,
+                by,
+            } => self.event(control::Event::LfgAccepted {
+                listing,
+                title_id,
+                by,
+            }),
             Event::Feed => self.feed_dirty = true,
             Event::AppearOffline { appear_offline } => self.set_appear_offline(appear_offline),
             _ => {}
@@ -4247,6 +4434,62 @@ fn bad_message_text() -> Failure {
         ErrorCode::BadRequest.as_str(),
         "A message has 1 to 2000 characters and is not only white space.",
     )
+}
+
+fn bad_language() -> Failure {
+    Failure::new(
+        ErrorCode::BadRequest.as_str(),
+        "A language is two or three lower-case letters, such as en or de.",
+    )
+}
+
+/// Reads a screenshot or clip for an upload: the `Content-Type` by the file's first bytes, and
+/// the bytes. Refuses a file that is not a PNG, JPEG or MP4, or is larger than the cloud takes,
+/// before anything is sent.
+async fn read_media(path: std::path::PathBuf) -> Result<(&'static str, Vec<u8>), CloudError> {
+    let refuse =
+        |message: &str| CloudError::Api(anyplay_api::ApiError::new(ErrorCode::BadRequest, message));
+    tokio::task::spawn_blocking(move || {
+        use std::io::Read as _;
+        let mut file =
+            std::fs::File::open(&path).map_err(|_| refuse("The file cannot be opened."))?;
+        let size = file
+            .metadata()
+            .map_err(|_| refuse("The file cannot be read."))?
+            .len();
+        let mut head = [0u8; 12];
+        let got = file.read(&mut head).unwrap_or(0);
+        let content_type = media_type(&head[..got])
+            .ok_or_else(|| refuse("Only PNG and JPEG screenshots and MP4 clips can be sent."))?;
+        let kind = anyplay_api::MediaKind::from_content_type(content_type)
+            .ok_or_else(|| refuse("Only PNG and JPEG screenshots and MP4 clips can be sent."))?;
+        if size == 0 || size > kind.max_bytes() {
+            return Err(CloudError::Api(anyplay_api::ApiError::new(
+                ErrorCode::TooLarge,
+                "A screenshot may be 10 MB, a clip 100 MB.",
+            )));
+        }
+        let mut bytes = Vec::with_capacity(size as usize);
+        bytes.extend_from_slice(&head[..got]);
+        file.read_to_end(&mut bytes)
+            .map_err(|_| refuse("The file cannot be read."))?;
+        Ok((content_type, bytes))
+    })
+    .await
+    .map_err(|_| CloudError::Offline("the file could not be read".into()))?
+}
+
+/// The `Content-Type` of a screenshot or clip by its first bytes.
+fn media_type(head: &[u8]) -> Option<&'static str> {
+    if head.starts_with(&[0x89, b'P', b'N', b'G']) {
+        Some("image/png")
+    } else if head.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        Some("image/jpeg")
+    } else if head.len() >= 8 && &head[4..8] == b"ftyp" {
+        Some("video/mp4")
+    } else {
+        None
+    }
 }
 
 fn bad_id() -> Failure {

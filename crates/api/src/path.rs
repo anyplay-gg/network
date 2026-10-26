@@ -86,6 +86,15 @@ pub const CONVERSATION_READ: &str = "/v1/conversations/{id}/read";
 pub const CONVERSATION_TYPING: &str = "/v1/conversations/{id}/typing";
 pub const CONVERSATION_SETTINGS: &str = "/v1/conversations/{id}/settings";
 pub const CONVERSATION_MESSAGE: &str = "/v1/conversations/{id}/messages/{seq}";
+pub const CONVERSATION_MEDIA: &str = "/v1/conversations/{id}/media";
+pub const MEDIA: &str = "/v1/media/{id}";
+pub const MOD_MEDIA: &str = "/v1/moderation/media/{id}";
+pub const LFG: &str = "/v1/lfg";
+pub const LFG_MINE: &str = "/v1/lfg/mine";
+pub const LFG_LISTING: &str = "/v1/lfg/{id}";
+pub const LFG_ASK: &str = "/v1/lfg/{id}/ask";
+pub const LFG_REQUEST: &str = "/v1/lfg/{id}/requests/{account}";
+pub const LFG_REQUEST_ACCEPT: &str = "/v1/lfg/{id}/requests/{account}/accept";
 pub const CONVERSATION_REACTION: &str = "/v1/conversations/{id}/messages/{seq}/reaction";
 
 /// The path with `{id}` replaced by `id`. IDs are numbers or URL-safe tokens, so nothing needs
