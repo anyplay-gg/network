@@ -1299,6 +1299,13 @@ impl Service {
                 self.voice_event();
                 self.ok(id, Done {});
             }
+            Command::VoiceNoise { enabled } => {
+                self.voice.settings.noise_suppression = Some(enabled);
+                if let Some(hub) = &self.voice.hub {
+                    hub.set_noise_suppression(enabled);
+                }
+                self.ok(id, Done {});
+            }
             Command::MicMute { muted } => {
                 self.voice.settings.mic_muted = muted;
                 if let Some(hub) = &self.voice.hub {
@@ -2692,12 +2699,14 @@ impl Service {
         let audio = self.config.audio.clone();
         let (input, output) = (self.voice.input.clone(), self.voice.output.clone());
         let mode = self.voice.settings.mode;
+        let noise = self.voice.settings.noise_suppression;
         self.spawn(
             async move {
                 tokio::task::spawn_blocking(move || {
                     let device = audio.open(input.as_deref(), output.as_deref())?;
                     let config = anyplay_voice::Config {
                         mode,
+                        noise_suppression: noise.unwrap_or(true),
                         ..anyplay_voice::Config::default()
                     };
                     Engine::new(config, device).map_err(|e| e.to_string())

@@ -77,6 +77,15 @@ impl Sender {
         self.mode = mode;
     }
 
+    /// Keeps a running suppressor (and what it learned) when it is already on.
+    pub(crate) fn set_noise_suppression(&mut self, enabled: bool) {
+        match (enabled, self.denoise.is_some()) {
+            (true, false) => self.denoise = Some(DenoiseState::new()),
+            (false, true) => self.denoise = None,
+            _ => {}
+        }
+    }
+
     pub(crate) fn set_talking(&mut self, talking: bool) {
         self.talking = talking;
     }
