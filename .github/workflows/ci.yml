@@ -27,7 +27,7 @@ jobs:
             runner: blacksmith-8vcpu-windows-2025
           - os: ubuntu-latest
             runner: blacksmith-8vcpu-ubuntu-2404
-    name: ${{ github.job }} (${{ matrix.os }})
+    name: check (${{ matrix.os }})
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -68,7 +68,7 @@ jobs:
             runner: blacksmith-8vcpu-windows-2025
           - os: ubuntu-latest
             runner: blacksmith-8vcpu-ubuntu-2404
-    name: ${{ github.job }} (${{ matrix.os }})
+    name: devices (${{ matrix.os }})
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
