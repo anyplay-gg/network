@@ -24,9 +24,9 @@ jobs:
       matrix:
         include:
           - os: windows-latest
-            runner: blacksmith-8vcpu-windows-2025
+            runner: windows-latest
           - os: ubuntu-latest
-            runner: blacksmith-8vcpu-ubuntu-2404
+            runner: ubuntu-latest
     name: check (${{ matrix.os }})
     runs-on: ${{ matrix.runner }}
     steps:
@@ -65,9 +65,9 @@ jobs:
       matrix:
         include:
           - os: windows-latest
-            runner: blacksmith-8vcpu-windows-2025
+            runner: windows-latest
           - os: ubuntu-latest
-            runner: blacksmith-8vcpu-ubuntu-2404
+            runner: ubuntu-latest
     name: devices (${{ matrix.os }})
     runs-on: ${{ matrix.runner }}
     steps:
