@@ -602,10 +602,10 @@ impl Task {
             .find(|((_, side), p)| *side == Side::In && p.account == account && p.hello.is_some())
             .map(|(key, _)| *key)
             .ok_or(Refusal::NotFound)?;
-        if !self
+        if self
             .workers
             .capabilities()
-            .is_some_and(|c| !c.decode.is_empty())
+            .is_none_or(|c| c.decode.is_empty())
         {
             return Err(Refusal::NoDecoder);
         }
@@ -697,7 +697,7 @@ impl Task {
         let gone: Vec<PeerKey> = self
             .peers
             .iter()
-            .filter(|((id, _), peer)| !members.get(id).is_some_and(|m| m.account == peer.account))
+            .filter(|((id, _), peer)| members.get(id).is_none_or(|m| m.account != peer.account))
             .map(|(key, _)| *key)
             .collect();
         for key in gone {
