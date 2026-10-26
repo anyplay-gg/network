@@ -12,5 +12,5 @@ publish = false
 base64 = "0.22"
 ed25519-dalek = "3"
 rand = "0.10"
-sha2 = "0.10"
+sha2 = "0.11"
 subtle = "2"
