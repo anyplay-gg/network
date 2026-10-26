@@ -42,6 +42,7 @@ async fn side(relay: &support::relay::TestRelay) -> Side {
             relay_roots: vec![relay.root.clone()],
             bind: Some(SocketAddr::from((Ipv4Addr::LOCALHOST, 0))),
             relay_only: false,
+            relay_quic_port: None,
         },
         traffic.clone(),
         tx,

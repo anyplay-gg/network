@@ -291,6 +291,20 @@ fn noise_suppression_quiets_steady_noise() {
     assert!(b < a * 0.3, "{a} vs {b}");
 }
 
+#[test]
+fn noise_suppression_can_be_switched_on_while_running() {
+    let mut rng = Lcg(99);
+    let noise: Vec<f32> = (0..48_000 * 3).map(|_| 0.05 * rng.signed()).collect();
+    let mut loud = Rig::new(no_ns());
+    loud.run(&noise, false, &mut clean);
+    let mut switched = Rig::new(no_ns());
+    switched.sender.set_noise_suppression(true);
+    switched.run(&noise, false, &mut clean);
+    let span = 48_000..48_000 * 2;
+    let (a, b) = (rms(&loud.played[span.clone()]), rms(&switched.played[span]));
+    assert!(b < a * 0.3, "{a} vs {b}");
+}
+
 // ---------------------------------------------------------------- the network
 
 /// The longest run of near-silence inside the talk, in ms.

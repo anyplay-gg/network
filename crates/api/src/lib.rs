@@ -682,6 +682,9 @@ pub struct Report {
     pub conversation: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub seq: Option<u64>,
+    /// The looking-for-group listing being reported; its note is saved with the report.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub listing: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1076,6 +1079,12 @@ pub fn check_about(text: &str) -> Result<(), AboutProblem> {
     if text.chars().count() > MAX_ABOUT {
         return Err(AboutProblem::TooLong);
     }
+    check_about_chars(text)
+}
+
+/// The rules of a short plain text that do not depend on its length: no control or
+/// direction-changing characters and no links.
+fn check_about_chars(text: &str) -> Result<(), AboutProblem> {
     if text.chars().any(|c| {
         c.is_control()
             || matches!(
@@ -1514,6 +1523,19 @@ pub enum Event {
     /// Sent to this account's devices only.
     AppearOffline {
         appear_offline: bool,
+    },
+    /// Someone asked to join a listing of this account. Fetch `GET /v1/lfg/mine`.
+    LfgRequest {
+        listing: String,
+        title_id: String,
+        from: Account,
+    },
+    /// The poster of a listing this account asked to join accepted. A party invitation from
+    /// them is waiting.
+    LfgAccepted {
+        listing: String,
+        title_id: String,
+        by: Account,
     },
     /// An event this version does not know.
     #[serde(other)]
@@ -2030,6 +2052,9 @@ pub struct Message {
     /// The conversation's `rev` at this message's last change; 0 for one never changed.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub rev: u64,
+    /// A screenshot or clip. The message has no text then.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media: Option<MediaInfo>,
 }
 
 /// Messages in ascending order of `seq`, or of `rev` for `changed_after`.
@@ -2109,6 +2134,207 @@ pub fn join_code_from_text(text: &str) -> Option<String> {
     let tail = tail.split(['?', '#']).next()?.to_ascii_lowercase();
     (tail.len() == JOIN_CODE_LEN && tail.chars().all(|c| JOIN_CODE_ALPHABET.contains(c)))
         .then_some(tail)
+}
+
+// Looking for group
+
+/// How long a listing stays open, in seconds.
+pub const LFG_TTL_SECS: u64 = 60 * 60;
+
+/// The longest note on a listing, in characters.
+pub const MAX_LFG_NOTE: usize = 140;
+
+/// The most places a listing can ask for: a party has [`MAX_PARTY_MEMBERS`], and the poster is one.
+pub const MAX_LFG_SLOTS: u8 = (MAX_PARTY_MEMBERS - 1) as u8;
+
+/// How many listings one account may keep open.
+pub const MAX_LFG_OPEN: usize = 3;
+
+/// How many open requests one listing holds. The next one is turned away with `full`.
+pub const MAX_LFG_REQUESTS: usize = 20;
+
+/// The most listings one answer carries.
+pub const MAX_LFG_PAGE: usize = 50;
+
+/// How the poster wants to play.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LfgMode {
+    /// Online play through the network's platform services.
+    Online,
+    /// A virtual LAN.
+    Lan,
+    /// Play Together: one player's game, others join it.
+    PlayTogether,
+    /// A mode this version does not know.
+    #[serde(other)]
+    Unknown,
+}
+
+impl LfgMode {
+    /// The name on the wire and in the database.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            LfgMode::Online => "online",
+            LfgMode::Lan => "lan",
+            LfgMode::PlayTogether => "play_together",
+            LfgMode::Unknown => "unknown",
+        }
+    }
+
+    pub fn parse(text: &str) -> Option<Self> {
+        [LfgMode::Online, LfgMode::Lan, LfgMode::PlayTogether]
+            .into_iter()
+            .find(|m| m.as_str() == text)
+    }
+}
+
+/// True for a language tag a listing can carry: two or three lower-case letters, such as `en`,
+/// `de` or `tr`.
+pub fn is_language_tag(text: &str) -> bool {
+    (2..=3).contains(&text.len()) && text.bytes().all(|b| b.is_ascii_lowercase())
+}
+
+/// Checks the note of a listing: at most [`MAX_LFG_NOTE`] characters of plain text, no control
+/// characters and no links. The same rules as the profile text, with a shorter limit.
+pub fn check_lfg_note(text: &str) -> Result<(), AboutProblem> {
+    if text.chars().count() > MAX_LFG_NOTE {
+        return Err(AboutProblem::TooLong);
+    }
+    check_about_chars(text)
+}
+
+/// A new listing. The poster has the game, which the cloud takes on trust.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CreateListing {
+    pub title_id: String,
+    pub mode: LfgMode,
+    /// The language the poster plays in; none for any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
+    /// Up to [`MAX_LFG_NOTE`] characters.
+    #[serde(default)]
+    pub note: String,
+    /// How many players the poster looks for, 1 to [`MAX_LFG_SLOTS`].
+    pub slots: u8,
+}
+
+/// Where the viewer's own request to a listing stands.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LfgAsk {
+    Pending,
+    /// The poster accepted: a party invitation is waiting.
+    Accepted,
+    #[serde(other)]
+    Unknown,
+}
+
+/// A player who asked to join a listing, as its poster sees them.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LfgRequest {
+    pub from: Account,
+    pub created: u64,
+    pub accepted: bool,
+}
+
+/// A listing. Anyone who can see it sees everything but `requests`, which only the poster gets.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Listing {
+    pub id: String,
+    pub poster: Account,
+    pub title_id: String,
+    pub mode: LfgMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
+    #[serde(default)]
+    pub note: String,
+    /// How many players the poster looks for in all.
+    pub slots: u8,
+    /// How many of them the poster accepted already.
+    pub filled: u8,
+    pub created: u64,
+    /// Unix seconds when the listing closes.
+    pub expires: u64,
+    /// The viewer's own request, if they asked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ask: Option<LfgAsk>,
+    /// The poster's view only: who asked, oldest first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub requests: Vec<LfgRequest>,
+}
+
+/// The open listings of one game, newest first.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Listings {
+    pub listings: Vec<Listing>,
+}
+
+/// The caller's own listings, with their requests, and the listings the caller asked to join.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LfgMine {
+    pub posted: Vec<Listing>,
+    pub asked: Vec<Listing>,
+}
+
+// Media in messages
+
+/// The largest screenshot, in bytes.
+pub const MAX_IMAGE_BYTES: u64 = 10 * 1024 * 1024;
+/// The largest clip, in bytes.
+pub const MAX_CLIP_BYTES: u64 = 100 * 1024 * 1024;
+/// The longest clip, in seconds.
+pub const MAX_CLIP_SECS: u32 = 60;
+/// How long the cloud keeps a media file, in seconds.
+pub const MEDIA_KEEP_SECS: u64 = 30 * 24 * 60 * 60;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MediaKind {
+    /// A PNG or JPEG screenshot.
+    Image,
+    /// An MP4 clip.
+    Clip,
+    #[serde(other)]
+    Unknown,
+}
+
+impl MediaKind {
+    /// The kind a `Content-Type` names: `image/png`, `image/jpeg` or `video/mp4`.
+    pub fn from_content_type(content_type: &str) -> Option<Self> {
+        match content_type.split(';').next()?.trim() {
+            "image/png" | "image/jpeg" => Some(MediaKind::Image),
+            "video/mp4" => Some(MediaKind::Clip),
+            _ => None,
+        }
+    }
+
+    /// The most bytes a file of this kind may have.
+    pub fn max_bytes(self) -> u64 {
+        match self {
+            MediaKind::Clip => MAX_CLIP_BYTES,
+            _ => MAX_IMAGE_BYTES,
+        }
+    }
+}
+
+/// The file a media message carries. The bytes come from `GET /v1/media/{id}`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MediaInfo {
+    pub id: String,
+    pub kind: MediaKind,
+    /// The `Content-Type` the file is served with.
+    pub content_type: String,
+    pub bytes: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height: Option<u32>,
+    /// A clip's length in milliseconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u32>,
+    /// Unix seconds when the cloud deletes the file.
+    pub expires: u64,
 }
 
 #[cfg(test)]
@@ -2898,5 +3124,48 @@ mod tests {
                 assert_eq!(step, before + 12);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod lfg_and_media_tests {
+    use super::*;
+
+    #[test]
+    fn a_note_is_short_plain_text() {
+        assert!(check_lfg_note("Ranked tonight, mic on").is_ok());
+        assert_eq!(
+            check_lfg_note(&"x".repeat(MAX_LFG_NOTE + 1)),
+            Err(AboutProblem::TooLong)
+        );
+        assert_eq!(check_lfg_note("join example.com"), Err(AboutProblem::Link));
+        assert_eq!(check_lfg_note("a\nb"), Err(AboutProblem::Character));
+    }
+
+    #[test]
+    fn languages_and_modes_have_names() {
+        assert!(is_language_tag("de") && is_language_tag("fil"));
+        assert!(!is_language_tag("DE") && !is_language_tag("english") && !is_language_tag(""));
+        for mode in [LfgMode::Online, LfgMode::Lan, LfgMode::PlayTogether] {
+            assert_eq!(LfgMode::parse(mode.as_str()), Some(mode));
+        }
+        assert_eq!(LfgMode::parse("co-op"), None);
+        let unknown: LfgMode = serde_json::from_str("\"ranked\"").unwrap();
+        assert_eq!(unknown, LfgMode::Unknown);
+    }
+
+    #[test]
+    fn media_kinds_follow_the_content_type() {
+        assert_eq!(
+            MediaKind::from_content_type("image/png"),
+            Some(MediaKind::Image)
+        );
+        assert_eq!(
+            MediaKind::from_content_type("video/mp4; codecs=avc1"),
+            Some(MediaKind::Clip)
+        );
+        assert_eq!(MediaKind::from_content_type("image/gif"), None);
+        assert_eq!(MediaKind::Image.max_bytes(), 10 * 1024 * 1024);
+        assert_eq!(MediaKind::Clip.max_bytes(), 100 * 1024 * 1024);
     }
 }

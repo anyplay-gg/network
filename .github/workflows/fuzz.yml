@@ -53,6 +53,9 @@ jobs:
           toolchain: nightly
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
+          # Only main writes the cache; pull requests restore it (a PR run used to save its own
+          # 1-1.5 GB entry and pushed main's caches out of the 10 GB limit).
+          save-if: ${{ github.ref == 'refs/heads/main' }}
           workspaces: fuzz
       - name: Install cargo-fuzz
         run: cargo install cargo-fuzz --version 0.13.2 --locked

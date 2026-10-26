@@ -551,6 +551,7 @@ mod report_tests {
             details: String::new(),
             conversation: Some("c-1".into()),
             seq: Some(7),
+            listing: None,
         };
         let text = serde_json::to_string(&report).unwrap();
         assert!(text.contains(r#""conversation":"c-1""#) && text.contains(r#""seq":7"#));

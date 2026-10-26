@@ -78,6 +78,9 @@ pub enum Command {
         conversation: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         seq: Option<u64>,
+        /// The looking-for-group listing being reported.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        listing: Option<String>,
     },
     Playing {
         game: Option<Game>,
@@ -205,6 +208,8 @@ pub enum Command {
     // Parties and messages
     /// The player's party, or null.
     Party,
+    /// Makes a party of one with the player as its leader, or returns the one they are in.
+    PartyCreate,
     /// Invites friends to the party; makes one when the player is in none.
     PartyInvite {
         accounts: Vec<AccountId>,
@@ -264,6 +269,10 @@ pub enum Command {
     /// Push-to-talk: whether the key is down.
     PushToTalk {
         talking: bool,
+    },
+    /// Noise suppression on the microphone: on (the default of a new service) or off.
+    VoiceNoise {
+        enabled: bool,
     },
     VoiceMode {
         mode: VoiceMode,
@@ -382,6 +391,59 @@ pub enum Command {
     AddToConversation {
         conversation: String,
         accounts: Vec<AccountId>,
+    },
+    /// Sends a screenshot (PNG, JPEG) or a clip (MP4) from a file on this PC to a friend's
+    /// conversation. Answers the `Message` once the upload is done; a clip can take minutes. The
+    /// service checks the size and the file's type before it sends anything.
+    SendMedia {
+        conversation: String,
+        path: String,
+    },
+    /// Downloads the file of a media message into `path`. Answers `Done` when the file is whole;
+    /// nothing is left at `path` on a failure.
+    FetchMedia {
+        media: String,
+        path: String,
+    },
+    // Looking for group
+    /// The open listings of one game, newest first. `mode` and `language` narrow them.
+    Lfg {
+        title_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        mode: Option<anyplay_api::LfgMode>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        language: Option<String>,
+    },
+    /// The player's own listings with their requests, and the listings they asked to join.
+    LfgMine,
+    /// Posts a listing for 1 hour.
+    LfgPost {
+        title_id: String,
+        mode: anyplay_api::LfgMode,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        language: Option<String>,
+        #[serde(default)]
+        note: String,
+        slots: u8,
+    },
+    /// Closes the player's own listing.
+    LfgClose {
+        listing: String,
+    },
+    /// Asks to join someone's listing.
+    LfgAsk {
+        listing: String,
+    },
+    /// Takes the player's request back.
+    LfgWithdraw {
+        listing: String,
+    },
+    /// The poster's answer to a request: accepting puts the player into the poster's party by
+    /// invitation, declining removes the request without telling them.
+    LfgAnswer {
+        listing: String,
+        account: AccountId,
+        accept: bool,
     },
     /// Starts signing in (or creating an account) in the system browser. Answers the URL for the
     /// launcher to open; the end comes as a `state` event with the account.
@@ -1156,6 +1218,19 @@ pub enum Event {
     ConversationGone {
         id: String,
     },
+    /// Someone asked to join a listing of the player; fetch `lfg_mine`.
+    LfgRequest {
+        listing: String,
+        title_id: String,
+        from: Account,
+    },
+    /// The poster of a listing the player asked to join accepted; their party invitation arrives
+    /// as `party_invitation`.
+    LfgAccepted {
+        listing: String,
+        title_id: String,
+        by: Account,
+    },
     /// The feed has news; fetch `feed`. Sent at most once every two seconds.
     Feed,
     /// An event this version does not know.
@@ -1444,6 +1519,10 @@ mod tests {
             ))
         );
         assert_eq!(
+            parse_command(r#"{"id":4,"do":"party_create"}"#),
+            Ok((4, Command::PartyCreate))
+        );
+        assert_eq!(
             parse_command(r#"{"id":9,"do":"calls_seen"}"#),
             Ok((9, Command::CallsSeen { account: None }))
         );
@@ -1523,6 +1602,10 @@ mod tests {
         assert_eq!(
             parse_command(r#"{"id":1,"do":"voice","on":true}"#),
             Ok((1, Command::Voice { on: true }))
+        );
+        assert_eq!(
+            parse_command(r#"{"id":7,"do":"voice_noise","enabled":false}"#),
+            Ok((7, Command::VoiceNoise { enabled: false }))
         );
         assert_eq!(
             parse_command(r#"{"id":2,"do":"push_to_talk","talking":false}"#),
@@ -2216,6 +2299,7 @@ mod tests {
                     details: "äb".into(),
                     conversation: Some("c1".into()),
                     seq: Some(3),
+                    listing: None,
                 },
             ),
             command_line(

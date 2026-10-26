@@ -22,8 +22,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
+        include:
+          - os: windows-latest
+            runner: windows-latest
+          - os: ubuntu-latest
+            runner: ubuntu-latest
+          - os: macos-latest
+            runner: macos-latest
+    name: check (${{ matrix.os }})
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -33,6 +40,10 @@ jobs:
           toolchain: stable
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          # Only main writes the cache; pull requests restore it (a PR run used to save its own
+          # 1-1.5 GB entry and pushed main's caches out of the 10 GB limit).
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       # The share worker on Linux: PipeWire's headers for window capture, and Cisco's OpenH264
       # binary for the encoder round trip (the worker checks its SHA-256 before loading it).
       - name: PipeWire headers and OpenH264
@@ -58,8 +69,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
+        include:
+          - os: windows-latest
+            runner: windows-latest
+          - os: ubuntu-latest
+            runner: ubuntu-latest
+          - os: macos-latest
+            runner: macos-latest
+    name: devices (${{ matrix.os }})
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -69,6 +87,10 @@ jobs:
           toolchain: stable
           components: clippy
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          # Only main writes the cache; pull requests restore it (a PR run used to save its own
+          # 1-1.5 GB entry and pushed main's caches out of the 10 GB limit).
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: ALSA and PipeWire headers
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev libpipewire-0.3-dev clang
