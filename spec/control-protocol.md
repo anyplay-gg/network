@@ -83,8 +83,8 @@ When the cloud retires this launcher's version ([cloud API](cloud-api.md#convent
 | `unblock` | `account` | `{}` |
 | `report` | `account`, `reason`, `details` | `{}` |
 | `playing` | `game`: `{title_id, title, version}` or null | `{}` |
-| `check_join` | `session`, `title_id`, `version`, `build` | `{}`, or the error `version_mismatch` |
-| `game_start` | `title_id`, `title`, `version`, `build`, `join` (a session ID or null), `host` (Play Together: `{max_members, visibility, party}`, or absent) | `{env, session}` |
+| `check_join` | `session`, `title_id`, `version`, `build`, `version_rule` (`exact`, `major` or `any`; absent is `exact`), `override_version` (true for "Try Anyway"; absent is false) | `{}`, or the error `version_mismatch` |
+| `game_start` | `title_id`, `title`, `version`, `build`, `join` (a session ID or null), `host` (Play Together: `{max_members, visibility, party}`, or absent), `version_rule` and `override_version` (as in `check_join`, passed on to the cloud when `join` is set) | `{env, session}` |
 | `game_end` | | `{}` |
 | `invite` | `accounts` | `{sent}` |
 | `answer_invitation` | `invitation` (its `id`), `accept` | `{session, title_id}` when accepted, else `{}` |

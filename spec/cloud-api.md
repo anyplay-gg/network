@@ -211,13 +211,14 @@ An account can **appear offline**: its friends see `Presence { online: false, ac
 |---|---|---|
 | `POST /v1/sessions` | `{title_id, title, version, build, kind?, max_members, visibility, properties, endpoint, relay}` | `Session` |
 | `GET /v1/sessions/{id}` | | `Session` |
-| `POST /v1/sessions/{id}/join` | `{version, build, endpoint, relay, invitation}` | `Session` |
+| `POST /v1/sessions/{id}/join` | `{version, build, endpoint, relay, invitation, version_rule, override_version}` | `Session` |
 | `POST /v1/sessions/{id}/leave` | | 204 |
 | `PATCH /v1/sessions/{id}` | any of `{properties, visibility, max_members, leader}` | `Session` (leader only) |
 | `DELETE /v1/sessions/{id}/members/{account}` | | 204 (leader only) |
 
 - `max_members` is 2 to 64. An account is in at most 4 sessions at a time.
 - Joining checks, in this order: blocks between the joiner and any member (`forbidden`), visibility (`not_found`), the version guard (`version_mismatch`) and capacity (`full`). `invitation` is the ID of an invitation, or null. A member joining again only updates its `endpoint` and `relay`, for example after its net service moved to another relay.
+- **The version guard.** The joiner's `build` must equal the session's. Its `version` must fit the session's under `version_rule`: `exact` (the default when the field is absent: the same text), `major` (the same first dot-separated part, so `01.044.000` fits `01.050.000` and not `02.000.000`) or `any`. The cloud knows no games: the joiner's launcher sends the rule it reads from its own table of games ([Play Together](play-together.md#the-lan-title-table)), and the cloud applies it as given. The version is self-reported either way, so this is a courtesy that stops honest mismatches, not a security check. `override_version: true` ("Try Anyway") skips the version part of the guard and nothing else; a launcher sends it only after the player chose to join despite the rule.
 - When the leader leaves, the longest-standing member leads. The last member to leave closes the session.
 - Sessions live in the cloud's store, so they outlast a restart of the cloud. A member whose net service stays disconnected for 30 seconds leaves.
 
