@@ -17,7 +17,7 @@ publish = false
 sdk = ["dep:libloading", "dep:bindgen"]
 
 [dependencies]
-libloading = { version = "0.8", optional = true }
+libloading = { version = "0.9", optional = true }
 serde.workspace = true
 tokio = { version = "1.54", default-features = false, features = ["sync"] }
 tracing = "0.1"
