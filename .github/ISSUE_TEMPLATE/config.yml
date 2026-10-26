@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security problem
+    url: https://github.com/anyplaynet/network/security/advisories/new
+    about: Report it privately here. Do not open a public issue for a security problem.
+  - name: Questions and ideas
+    url: https://discord.gg/9zYqf8fEsh
+    about: Ask on the AnyPlay Discord before you open an issue if you are not sure it is a bug.
+  - name: AnyPlay website
+    url: https://anyplaynet.com
+    about: Accounts, downloads and news.

@@ -1,0 +1,68 @@
+name: Bug report
+description: The net service, a crate, a tool or a specification does not do what it says.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this form for a bug in this repository. A problem with one game belongs in a game report in the [launcher](https://github.com/anyplaynet/launcher/issues/new/choose) repository.
+        Security problems go through the private link on the issue chooser, not here.
+  - type: dropdown
+    id: part
+    attributes:
+      label: Which part
+      options:
+        - Net service (anyplay-net)
+        - Bridge protocol or the bridge-protocol crate
+        - Control protocol
+        - Cloud API crate
+        - Voice
+        - Probe (anyplay-probe)
+        - Specification or documentation
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The commit or release of this repository, or the launcher version that started the net service.
+      placeholder: "launcher 0.2.5, or commit 1a2b3c4"
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: "Windows 11, or Ubuntu 24.04"
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you saw, and what you expected to see instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Numbered steps, or the command you ran. If you can, name a test that would catch it. Say whether it happens every time.
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Log
+      description: |
+        When the launcher started the net service, its log is `Logs/network.log` in the launcher's data folder (Windows `%LOCALAPPDATA%\AnyPS5\Logs\network.log`, Linux `~/.local/share/anyps5/Logs/network.log`).
+        Paste the lines from the time of the problem and remove anything you do not want to share.
+      render: text
+  - type: checkboxes
+    id: no-game-data
+    attributes:
+      label: Game data
+      options:
+        - label: I attached no game files, saves, keys or tokens, and no observation log or dump that contains game memory.
+          required: true
