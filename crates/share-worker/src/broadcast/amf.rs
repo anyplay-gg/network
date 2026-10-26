@@ -106,6 +106,20 @@ pub fn command(name: &str, transaction: f64, args: &[Value]) -> Vec<u8> {
 
 /// Reads one value; `None` for a type this reader does not know or a cut-off body.
 pub fn read(data: &[u8], at: &mut usize) -> Option<Value> {
+    read_nested(data, at, 0)
+}
+
+/// How deep objects may nest. A server reply is flat; a chain of nested objects costs four bytes
+/// per level and would otherwise overflow the stack.
+const MAX_DEPTH: usize = 8;
+
+/// Most pairs one object may hold.
+const MAX_PAIRS: usize = 1024;
+
+fn read_nested(data: &[u8], at: &mut usize, depth: usize) -> Option<Value> {
+    if depth > MAX_DEPTH {
+        return None;
+    }
     let marker = *data.get(*at)?;
     *at += 1;
     match marker {
@@ -120,11 +134,11 @@ pub fn read(data: &[u8], at: &mut usize) -> Option<Value> {
             Some(Value::Bool(b != 0))
         }
         0x02 => Some(Value::Text(read_text(data, at)?)),
-        0x03 => read_pairs(data, at),
+        0x03 => read_pairs(data, at, depth),
         0x08 => {
             // The count is a hint; the end marker decides.
             *at += 4;
-            read_pairs(data, at)
+            read_pairs(data, at, depth)
         }
         0x05 | 0x06 => Some(Value::Null),
         _ => None,
@@ -139,7 +153,7 @@ fn read_text(data: &[u8], at: &mut usize) -> Option<String> {
     Some(String::from_utf8_lossy(bytes).into_owned())
 }
 
-fn read_pairs(data: &[u8], at: &mut usize) -> Option<Value> {
+fn read_pairs(data: &[u8], at: &mut usize, depth: usize) -> Option<Value> {
     let mut pairs = Vec::new();
     loop {
         if data.get(*at..*at + 3)? == [0, 0, 0x09] {
@@ -147,7 +161,10 @@ fn read_pairs(data: &[u8], at: &mut usize) -> Option<Value> {
             return Some(Value::Object(pairs));
         }
         let key = read_text(data, at)?;
-        pairs.push((key, read(data, at)?));
+        if pairs.len() >= MAX_PAIRS {
+            return None;
+        }
+        pairs.push((key, read_nested(data, at, depth + 1)?));
     }
 }
 
@@ -201,5 +218,21 @@ mod tests {
     fn a_cut_off_body_gives_what_is_whole() {
         let body = command("x", 2.0, &[]);
         assert_eq!(read_all(&body[..body.len() - 3]).len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod hostile_tests {
+    use super::*;
+
+    #[test]
+    fn deeply_nested_objects_are_refused_not_recursed() {
+        let body: Vec<u8> = std::iter::repeat([0x03u8, 0, 0].into_iter())
+            .take(100_000)
+            .flatten()
+            .collect();
+        let mut at = 0;
+        assert_eq!(read(&body, &mut at), None);
+        assert!(read_all(&body).is_empty());
     }
 }
