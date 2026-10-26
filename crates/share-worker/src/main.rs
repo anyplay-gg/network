@@ -8,6 +8,7 @@
 //!               [--source game|test_pattern] [--title TITLE] [--window HWND] [--pid PID]...
 //!               [--headless]
 //! anyplay-share --clips SECONDS [--title TITLE] [--window HWND] [--pid PID]...
+//! anyplay-share --screen-access | --request-screen-access | --open-screen-settings
 //! ```
 //!
 //! `--link` and `--token` default to `ANYPLAY_SHARE_ENDPOINT` and `ANYPLAY_SHARE_TOKEN`.
@@ -19,12 +20,17 @@
 //! `--broadcast` publishes the game's window live to an RTMP server (no link; JSON lines on
 //! standard input and output, see spec/broadcast.md); it takes `--width`, `--height`, `--fps`
 //! and `--kbps`, and the server address and stream key come as the first line on standard input.
+//! `--screen-access` prints where the Screen Recording permission stands (macOS; other systems
+//! need none), `--request-screen-access` shows the system's prompt first and prints the same, and
+//! `--open-screen-settings` opens the page of System Settings where the player switches it on.
+//! Clips, broadcast and a stream end with `no_permission` while it is off.
 //! `--headless` draws no window on the viewer's side (tests on a machine without a desktop).
 
 use std::process::ExitCode;
 
 use anyplay_share::control::Role;
 use anyplay_share::link::FromWorker;
+use anyplay_share_worker::access;
 use anyplay_share_worker::host::{self, FrameSource, PatternSource};
 use anyplay_share_worker::sound::{SoundOut, SoundSource, ToneSource};
 use anyplay_share_worker::viewer::{self, DecoderFactory, FrameSink};
@@ -58,6 +64,23 @@ fn main() -> ExitCode {
                     Some("guest") => Some(Role::Guest),
                     _ => None,
                 }
+            }
+            "--screen-access" => {
+                println!("{}", anyplay_share_worker::access::state().to_line());
+                return ExitCode::SUCCESS;
+            }
+            "--request-screen-access" => {
+                println!("{}", anyplay_share_worker::access::request().to_line());
+                return ExitCode::SUCCESS;
+            }
+            "--open-screen-settings" => {
+                return match anyplay_share_worker::access::open_settings() {
+                    Ok(()) => ExitCode::SUCCESS,
+                    Err(why) => {
+                        eprintln!("{why}");
+                        ExitCode::FAILURE
+                    }
+                };
             }
             "--clips" => clips = args.next().and_then(|v| v.parse().ok()),
             "--broadcast" => broadcast = true,
@@ -94,6 +117,9 @@ fn main() -> ExitCode {
     };
     match role {
         Role::Host => {
+            if source == "game" && !access::state().allows_capture() {
+                return fail(port, access::EXPLANATION.into());
+            }
             let sound = sound_source(&source, &pids);
             match frame_source(&source, &title, window, pids) {
                 Ok(frames) => host::run_with_sound(frames, Box::new(encoder_for), sound, port),
@@ -137,8 +163,8 @@ fn frame_source(
     }
 }
 
-/// Where the streamer's sound comes from: the game's processes on Windows, a tone for the test
-/// pattern. None where this build cannot capture it: the stream then has no sound.
+/// Where the streamer's sound comes from: the game's processes on Windows, the game's
+/// applications on macOS, a tone for the test pattern. None where this build cannot capture it: the stream then has no sound.
 fn sound_source(source: &str, pids: &[u32]) -> Option<Box<dyn SoundSource>> {
     match source {
         "test_pattern" => Some(Box::new(ToneSource::default())),
@@ -146,6 +172,16 @@ fn sound_source(source: &str, pids: &[u32]) -> Option<Box<dyn SoundSource>> {
         "game" => {
             let pid = *pids.first()?;
             match anyplay_share_worker::loopback::LoopbackSource::open(pid) {
+                Ok(source) => Some(Box::new(source)),
+                Err(why) => {
+                    eprintln!("share worker: no sound: {why}");
+                    None
+                }
+            }
+        }
+        #[cfg(target_os = "macos")]
+        "game" => {
+            match anyplay_share_worker::mac::sck::SckSound::open(pids) {
                 Ok(source) => Some(Box::new(source)),
                 Err(why) => {
                     eprintln!("share worker: no sound: {why}");
@@ -208,6 +244,12 @@ fn run_clips(seconds: u32, title: &str, window: Option<i64>, pids: Vec<u32>) -> 
             reason: reason.to_owned(),
         });
     };
+    if !access::state().allows_capture() {
+        end(access::NO_PERMISSION, access::EXPLANATION.into());
+        drop(event_tx);
+        let _ = printer.join();
+        return ExitCode::FAILURE;
+    }
     let mut setup = recorder::Setup::new(seconds);
     let encoder = match anyplay_share_worker::clips_encoder(&mut setup) {
         Ok(encoder) => encoder,
@@ -221,7 +263,7 @@ fn run_clips(seconds: u32, title: &str, window: Option<i64>, pids: Vec<u32>) -> 
     let source = match frame_source("game", title, window, pids) {
         Ok(source) => source,
         Err(why) => {
-            end("no_window", why);
+            end(access::open_failure_reason(&why), why);
             drop(event_tx);
             let _ = printer.join();
             return ExitCode::FAILURE;
@@ -277,6 +319,12 @@ fn run_broadcast(
         let _ = printer.join();
         return ExitCode::FAILURE;
     };
+    if !access::state().allows_capture() {
+        end(access::NO_PERMISSION, access::EXPLANATION.into());
+        drop(event_tx);
+        let _ = printer.join();
+        return ExitCode::FAILURE;
+    }
     let mut setup = broadcast::Setup {
         width: shape.0,
         height: shape.1,
@@ -296,7 +344,7 @@ fn run_broadcast(
     let source = match frame_source("game", title, window, pids) {
         Ok(source) => source,
         Err(why) => {
-            end("no_window", why);
+            end(access::open_failure_reason(&why), why);
             drop(event_tx);
             let _ = printer.join();
             return ExitCode::FAILURE;

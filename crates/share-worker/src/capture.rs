@@ -7,7 +7,9 @@
 //! change (or is minimised) gives its last picture again, so the stream keeps its pace and the
 //! viewer sees a live stream rather than a stalled one. On Linux the player picks the window in
 //! the desktop portal's dialog (the player confirms the window each time; [`crate::portal`]) and
-//! its pictures come from PipeWire, with the same newest-picture rule.
+//! its pictures come from PipeWire, with the same newest-picture rule. On macOS it is
+//! ScreenCaptureKit of one window ([`crate::mac::sck`]), found by the same rule
+//! ([`crate::pick`]), and needs the Screen Recording permission ([`crate::access`]).
 
 use crate::host::FrameSource;
 
@@ -39,8 +41,17 @@ pub fn open(_target: &WindowTarget) -> Result<Box<dyn FrameSource>, String> {
         .map(|source| Box::new(source) as Box<dyn FrameSource>)
 }
 
+/// Opens the source for `target`: the game's window through ScreenCaptureKit. Fails with a reason
+/// that `crate::mac::sck::is_permission_error` recognises while Screen Recording is not allowed.
+#[cfg(target_os = "macos")]
+pub fn open(target: &WindowTarget) -> Result<Box<dyn FrameSource>, String> {
+    use crate::mac::sck;
+    let window = sck::find_window(target)?;
+    sck::SckSource::open(&window).map(|source| Box::new(source) as Box<dyn FrameSource>)
+}
+
 /// Opens the source for `target`.
-#[cfg(not(any(windows, target_os = "linux")))]
+#[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
 pub fn open(_target: &WindowTarget) -> Result<Box<dyn FrameSource>, String> {
     Err("sharing a window is not built for this system yet".into())
 }

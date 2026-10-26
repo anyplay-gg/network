@@ -19,7 +19,7 @@ anyplay-share --clips SECONDS [--title TITLE] [--window HWND] [--pid PID]...
 | | |
 |---|---|
 | Picture | the game's window, scaled to fit 1280 by 720 with black bars, 30 pictures a second (the hardware encoder may lower it) |
-| Encoder | H.264 from the first **hardware** encoder Media Foundation lists; never the software encoder. Constant bit rate 6000 kbit/s, no B-frames, [as ADR 0027](../docs/adr/0027-video-is-h264-from-the-system.md) |
+| Encoder | H.264 from the first **hardware** encoder Media Foundation lists (on macOS the media engine through VideoToolbox, [ADR 0036](../docs/adr/0036-macos-captures-with-screencapturekit-and-encodes-with-videotoolbox.md)); never the software encoder. Constant bit rate 6000 kbit/s, no B-frames, [as ADR 0027](../docs/adr/0027-video-is-h264-from-the-system.md) |
 | Key frames | one every 2 seconds, with the SPS and PPS in front |
 | Ring | whole groups of pictures (a key frame and what follows it). The oldest group is dropped as soon as the groups after it cover `SECONDS`, so a clip is at least `SECONDS` long and at most 2 seconds longer, and starts on a key frame. A limit of 160 MiB drops older groups too, down to the newest one |
 | Sound | none (version 0); the file has one track |
@@ -45,7 +45,7 @@ One JSON object per line on standard output.
 | `ready` | `width`, `height`, `fps`, `kbps` | The encoder runs and the ring fills. |
 | `saved` | `path`, `seconds`, `bytes` | A `save` finished: the clip's length and the file's size. |
 | `save_failed` | `reason` | A `save` did not work: `empty` (no key frame yet, nothing kept) or the error in words. The recorder goes on. |
-| `ended` | `reason` | The worker is ending: `no_encoder` (no hardware H.264 encoder, or none that accepts the setup), `no_window` (the game's window was not found), `window_closed`, `encoder_failed: ...`, `quit`. |
+| `ended` | `reason` | The worker is ending: `no_encoder` (no hardware H.264 encoder, or none that accepts the setup), `no_window` (the game's window was not found), `no_permission` (macOS: Screen Recording is not switched on for the app that started the worker, see [the permission](screen-share.md#screen-recording-permission)), `window_closed`, `encoder_failed: ...`, `quit`. |
 
 Exactly one `saved` or `save_failed` answers each `save`, in the order the files finish. Diagnostics go to standard error and are not part of the protocol.
 
