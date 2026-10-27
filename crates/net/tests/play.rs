@@ -99,6 +99,8 @@ impl TestWorkers {
                 queue_ms: 0,
                 decoded_fps: 30,
                 shown_fps: 30,
+                stream_delay: None,
+                input_delay: None,
             }))
             .unwrap();
     }
