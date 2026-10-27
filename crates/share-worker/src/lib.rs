@@ -5,10 +5,11 @@
 //! (`anyplay_share::link`), on a loopback socket for the real program ([`socket`]) or on
 //! channels in tests. Everything with a seam is a trait: [`host::FrameSource`] (where pictures
 //! come from: window capture, or the test pattern), `VideoEncoder` and `VideoDecoder` (H.264
-//! from the system on Windows, [`mf`]; OpenH264 from Cisco's binary on Linux, `oh264`; the test
-//! codec for tests) and [`viewer::FrameSink`]
+//! from the system on Windows, [`mf`], and on macOS, `mac::vt`; OpenH264 from Cisco's binary on
+//! Linux, `oh264`; the test codec for tests) and [`viewer::FrameSink`]
 //! (where pictures go: a window, or a counter in tests).
 
+pub mod access;
 pub mod annexb;
 pub mod broadcast;
 pub mod capture;
@@ -18,10 +19,13 @@ pub mod input;
 pub mod limits;
 #[cfg(windows)]
 pub mod loopback;
+#[cfg(target_os = "macos")]
+pub mod mac;
 #[cfg(windows)]
 pub mod mf;
 #[cfg(target_os = "linux")]
 pub mod oh264;
+pub mod pick;
 #[cfg(target_os = "linux")]
 pub mod portal;
 pub mod ring_source;
@@ -62,9 +66,10 @@ pub fn test_codec_caps() -> CodecCaps {
     }
 }
 
-/// What this build can do on this PC: H.264 from the system where the system has it (Windows),
+/// What this build can do on this PC: H.264 from the system where the system has it (Windows,
+/// macOS),
 /// from Cisco's OpenH264 where it is installed (Linux), the test codec, and window capture where
-/// it is built (Windows, Linux).
+/// it is built (Windows, Linux, macOS).
 pub fn capabilities() -> Capabilities {
     #[cfg(windows)]
     let ((mut encode, mut decode), libraries) = (mf::capabilities(), Vec::new());
@@ -73,7 +78,12 @@ pub fn capabilities() -> Capabilities {
         let (encode, decode, openh264) = oh264::capabilities();
         (encode, decode, vec![openh264])
     };
-    #[cfg(not(any(windows, target_os = "linux")))]
+    #[cfg(target_os = "macos")]
+    let (mut encode, mut decode, libraries) = {
+        let (encode, decode) = mac::vt::capabilities();
+        (encode, decode, Vec::new())
+    };
+    #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
     let (mut encode, mut decode, libraries) = (Vec::new(), Vec::new(), Vec::new());
     // After the real codecs: the net service prefers the first both sides have.
     encode.push(test_codec_caps());
@@ -81,7 +91,7 @@ pub fn capabilities() -> Capabilities {
     Capabilities {
         encode,
         decode,
-        capture: cfg!(any(windows, target_os = "linux")),
+        capture: cfg!(any(windows, target_os = "linux", target_os = "macos")),
         libraries,
     }
 }
@@ -117,6 +127,32 @@ pub fn encoder_for(start: &mut Start) -> Result<Box<dyn VideoEncoder>, String> {
             let setup = limits::Limits::SOFTWARE.clamp(start);
             let encoder = oh264::OhEncoder::open(setup)?;
             eprintln!("share worker: encoding with OpenH264 (software)");
+            start.width = setup.width;
+            start.height = setup.height;
+            start.fps = setup.fps;
+            Ok(Box::new(encoder))
+        }
+        #[cfg(target_os = "macos")]
+        "h264" => {
+            use mac::vt::{Kind, VtEncoder};
+            let attempt = |limits: limits::Limits, kind| {
+                let setup = limits.clamp(start);
+                VtEncoder::open(setup, kind).map(|e| (e, setup))
+            };
+            let (encoder, setup) =
+                attempt(limits::Limits::HARDWARE, Kind::Hardware).or_else(|why| {
+                    attempt(limits::Limits::SOFTWARE, Kind::Software)
+                        .map_err(|software| format!("hardware: {why}; software: {software}"))
+                })?;
+            eprintln!(
+                "share worker: encoding with {} ({})",
+                encoder.name(),
+                if encoder.is_hardware() {
+                    "hardware"
+                } else {
+                    "software"
+                }
+            );
             start.width = setup.width;
             start.height = setup.height;
             start.fps = setup.fps;
@@ -163,7 +199,28 @@ pub fn clips_encoder(setup: &mut clips::recorder::Setup) -> Result<Box<dyn Video
         setup.fps = lowered.fps;
         Ok(Box::new(encoder))
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        use mac::vt::{Kind, VtEncoder};
+        let start = Start {
+            epoch: 0,
+            codec: "h264".into(),
+            width: setup.width,
+            height: setup.height,
+            fps: setup.fps,
+            kbps: setup.kbps,
+            parity_percent: 0,
+            max_payload: 0,
+        };
+        let lowered = limits::Limits::HARDWARE.clamp(&start);
+        let encoder = VtEncoder::open(lowered, Kind::Hardware)?;
+        eprintln!("share worker: encoding with {} (hardware)", encoder.name());
+        setup.width = lowered.width;
+        setup.height = lowered.height;
+        setup.fps = lowered.fps;
+        Ok(Box::new(encoder))
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         // Linux has only OpenH264 in software, which clips never use.
         let _ = setup;

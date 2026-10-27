@@ -1047,9 +1047,20 @@ impl Service {
                 let Some(cloud) = self.signed_in_cloud(id) else {
                     return;
                 };
-                self.request(id, async move { cloud.account_link().await }, |_, link| {
-                    Opened { url: link.url }
-                });
+                self.request(
+                    id,
+                    async move {
+                        let link = cloud.account_link().await?;
+                        if browser::is_web_url(&link.url) {
+                            Ok(link)
+                        } else {
+                            Err(CloudError::Offline(
+                                "the cloud sent a page address that is not http or https".into(),
+                            ))
+                        }
+                    },
+                    |_, link| Opened { url: link.url },
+                );
             }
             Command::Appeal { action, text } => {
                 let Some(cloud) = self.signed_in_cloud(id) else {
@@ -3297,7 +3308,7 @@ impl Service {
     /// session's members, and no one when the player is in none.
     fn sync_audience(&self) {
         let me = self.me.as_ref().map(|m| m.id);
-        let audience = self
+        let audience: std::collections::HashSet<std::net::Ipv4Addr> = self
             .current_session()
             .and_then(|id| self.sessions.get(&id))
             .map(|session| {
@@ -3309,6 +3320,7 @@ impl Service {
                     .collect()
             })
             .unwrap_or_default();
+        self.traffic.set_inbound(audience.clone());
         self.traffic.set_audience(audience);
     }
 
@@ -4217,6 +4229,11 @@ impl Service {
                 Err(_) => reply(service, 0, Vec::new()),
             }
         };
+        // A game's own words never steer the cloud path: every segment is a plain id or a fixed word.
+        if parts.iter().any(|part| !anyplay_api::is_title_id(part)) {
+            reply(self, 400, Vec::new());
+            return;
+        }
         match (method.as_str(), parts.as_slice()) {
             ("POST", ["v1", "sessions"]) => {
                 #[derive(serde::Deserialize)]
@@ -4406,8 +4423,24 @@ where
         }
         if line.last() != Some(&b'\n') && line.len() >= control::MAX_LINE {
             tracing::warn!("a line from the launcher is too long; skipping it");
-            let mut rest = Vec::new();
-            if reader.read_until(b'\n', &mut rest).await.unwrap_or(0) == 0 {
+            // Throw the rest of the line away piece by piece, never holding it.
+            let mut ended = false;
+            loop {
+                line.clear();
+                match (&mut reader)
+                    .take(control::MAX_LINE as u64)
+                    .read_until(b'\n', &mut line)
+                    .await
+                {
+                    Ok(0) | Err(_) => break,
+                    Ok(_) if line.last() == Some(&b'\n') => {
+                        ended = true;
+                        break;
+                    }
+                    Ok(_) => {}
+                }
+            }
+            if !ended {
                 break;
             }
             continue;
@@ -4625,9 +4658,9 @@ fn endpoint_key(data: &std::path::Path) -> SecretKey {
         tracing::warn!("the endpoint key is unreadable; making a new one");
     }
     let key = SecretKey::generate();
-    let _ = std::fs::create_dir_all(data);
     let text = data_encoding::HEXLOWER.encode(&key.to_bytes());
-    if let Err(error) = std::fs::write(&path, text) {
+    // Owner-only and through a temporary file, like the sign-in: the key is this device's identity.
+    if let Err(error) = crate::credentials::write_private(&path, &text) {
         tracing::warn!("could not keep the endpoint key: {error}");
     }
     key
@@ -4742,5 +4775,39 @@ mod party_voice_tests {
         assert_eq!(seen.members[0].endpoint, "");
         assert_eq!(seen.members[0].relay, None);
         assert!(seen.members[0].voice, "who takes part is for the launcher");
+    }
+}
+
+#[cfg(test)]
+mod hardening_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn a_line_without_end_is_dropped_and_the_next_line_is_read() {
+        let mut bytes = vec![b'x'; control::MAX_LINE * 5 + 17];
+        bytes.push(b'\n');
+        bytes.extend_from_slice(b"{\"id\":4,\"do\":\"join_code_revoke\"}\n");
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        read_commands(std::io::Cursor::new(bytes), tx).await;
+        let first = rx.recv().await.unwrap();
+        assert!(matches!(first, Input::Command(4, _)));
+        assert!(matches!(rx.recv().await.unwrap(), Input::ControlClosed));
+    }
+
+    #[test]
+    fn the_endpoint_key_is_kept_and_read_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = endpoint_key(dir.path());
+        let second = endpoint_key(dir.path());
+        assert_eq!(first.to_bytes(), second.to_bytes());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(dir.path().join("endpoint.key"))
+                .unwrap()
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o077, 0, "the key is for the owner only");
+        }
     }
 }

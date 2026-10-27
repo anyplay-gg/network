@@ -197,6 +197,13 @@ struct Partial {
     payload: Vec<u8>,
 }
 
+/// Largest message a server may send us; its replies and acknowledgements are tiny.
+const MAX_INCOMING_MESSAGE: usize = 1024 * 1024;
+/// Largest chunk size we accept from a server.
+const MAX_INCOMING_CHUNK: usize = 64 * 1024;
+/// Most chunk streams open at once.
+const MAX_CHUNK_STREAMS: usize = 64;
+
 /// Joins chunks back into messages. A "set chunk size" message is applied here and still given
 /// to the caller.
 pub struct ChunkReader<R: Read> {
@@ -251,6 +258,12 @@ impl<R: Read> ChunkReader<R> {
                 }
                 n => u32::from(n),
             };
+            if !self.streams.contains_key(&csid) && self.streams.len() >= MAX_CHUNK_STREAMS {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "the server uses too many chunk streams",
+                ));
+            }
             let mut partial = self.streams.remove(&csid).unwrap_or_default();
             let continuing = !partial.payload.is_empty();
             match format {
@@ -294,13 +307,19 @@ impl<R: Read> ChunkReader<R> {
                     }
                 }
             }
-            if partial.length > 16 * 1024 * 1024 {
+            if partial.length > MAX_INCOMING_MESSAGE {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
                     "the server sent a message that is too large",
                 ));
             }
-            let want = (partial.length - partial.payload.len()).min(self.chunk_size);
+            let Some(left) = partial.length.checked_sub(partial.payload.len()) else {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "the server shrank a message that was already in part",
+                ));
+            };
+            let want = left.min(self.chunk_size);
             let part = self.take(want)?;
             partial.payload.extend_from_slice(&part);
             if partial.payload.len() >= partial.length {
@@ -313,7 +332,8 @@ impl<R: Read> ChunkReader<R> {
                 self.streams.insert(csid, partial);
                 if message.kind == SET_CHUNK_SIZE && message.payload.len() >= 4 {
                     let size = u32::from_be_bytes(message.payload[..4].try_into().unwrap());
-                    self.chunk_size = (size & 0x7FFF_FFFF).clamp(1, 16 * 1024 * 1024) as usize;
+                    self.chunk_size =
+                        (size & 0x7FFF_FFFF).clamp(1, MAX_INCOMING_CHUNK as u32) as usize;
                 }
                 return Ok(message);
             }
@@ -700,6 +720,33 @@ fn listen(mut reader: ChunkReader<In>, writer: Shared, lost: Arc<Mutex<Option<St
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_server_cannot_shrink_a_message_under_what_was_read() {
+        let mut bytes = vec![0x03, 0, 0, 0, 0, 0, 200, 9, 0, 0, 0, 0];
+        bytes.extend(vec![0u8; 128]);
+        bytes.extend([0x43, 0, 0, 0, 0, 0, 50, 9]);
+        let mut reader = ChunkReader::new(std::io::Cursor::new(bytes));
+        assert!(reader.read_message().is_err());
+    }
+
+    #[test]
+    fn a_server_cannot_open_endless_chunk_streams() {
+        let mut bytes = Vec::new();
+        for csid in 3..200u8 {
+            bytes.extend([csid, 0, 0, 0, 0, 0, 200, 9, 0, 0, 0, 0]);
+            bytes.extend(vec![0u8; 128]);
+        }
+        let mut reader = ChunkReader::new(std::io::Cursor::new(bytes));
+        let mut failed = false;
+        for _ in 0..200 {
+            if reader.read_message().is_err() {
+                failed = true;
+                break;
+            }
+        }
+        assert!(failed);
+    }
 
     #[test]
     fn addresses_are_split_into_server_port_and_application() {

@@ -118,9 +118,14 @@ async fn game_traffic_crosses_the_tunnel_both_as_datagrams_and_as_streams() {
         .set_peers(HashMap::from([(b.tunnels.id(), peer(2, B, &b))]));
     b.tunnels
         .set_peers(HashMap::from([(a.tunnels.id(), peer(1, A, &a))]));
-    let link_a = linked(&mut a.changes).await;
+    linked(&mut a.changes).await;
     linked(&mut b.changes).await;
-    assert_eq!(a.tunnels.link_of(B).map(|(link, _)| link), Some(link_a));
+    // The path may move from the relay to a direct one between the report and this look (hole
+    // punching races the first packets), so only a working path is asserted, not which one.
+    assert!(matches!(
+        a.tunnels.link_of(B).map(|(link, _)| link),
+        Some(Link::Direct | Link::Relay)
+    ));
 
     let game_a = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
     let game_b = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
