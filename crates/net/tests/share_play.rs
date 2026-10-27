@@ -47,6 +47,13 @@ fn ring_name() -> String {
             .as_nanos() as u64)
             .to_le_bytes(),
     );
+    // Tests run at the same time, and a clock may tick coarsely: a counter keeps names apart.
+    static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    random[12..].copy_from_slice(
+        &NEXT
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            .to_le_bytes(),
+    );
     name_from_random(random)
 }
 
