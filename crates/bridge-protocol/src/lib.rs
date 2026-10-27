@@ -16,6 +16,9 @@ pub const VERSION: u16 = 0;
 /// The largest payload a frame may carry.
 pub const MAX_PAYLOAD: usize = 16 * 1024 * 1024;
 
+/// The largest payload the hello frame may carry. A connection that sends more before hello is closed.
+pub const MAX_HELLO_PAYLOAD: usize = 1024;
+
 /// The size of the key that opens a game traffic stream.
 pub const STREAM_KEY_LEN: usize = 16;
 
@@ -142,15 +145,40 @@ impl Frame {
 }
 
 /// Collects bytes as they arrive and cuts them into frames.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Decoder {
     buf: Vec<u8>,
     start: usize,
+    max_payload: usize,
+}
+
+impl Default for Decoder {
+    fn default() -> Self {
+        Self {
+            buf: Vec::new(),
+            start: 0,
+            max_payload: MAX_PAYLOAD,
+        }
+    }
 }
 
 impl Decoder {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// A decoder that limits the payload of frames to `max_payload`.
+    pub fn with_max_payload(max_payload: usize) -> Self {
+        Self {
+            buf: Vec::new(),
+            start: 0,
+            max_payload,
+        }
+    }
+
+    /// Sets the maximum payload size accepted for subsequent frames.
+    pub fn set_max_payload(&mut self, max_payload: usize) {
+        self.max_payload = max_payload;
     }
 
     pub fn push(&mut self, bytes: &[u8]) {
@@ -169,7 +197,7 @@ impl Decoder {
             return Ok(None);
         }
         let len = u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]) as usize;
-        if len > MAX_PAYLOAD {
+        if len > self.max_payload {
             return Err(Error::TooLarge(len));
         }
         if buf.len() < HEADER + len {

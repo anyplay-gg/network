@@ -6,16 +6,12 @@
 use std::net::Ipv4Addr;
 use std::time::Duration;
 
-use anyplay_bridge_protocol::{Decoder, Frame, Kind, Message, Reject};
+pub use anyplay_bridge_protocol::MAX_HELLO_PAYLOAD;
+use anyplay_bridge_protocol::{Decoder, Frame, Kind, MAX_PAYLOAD, Message, Reject};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc::{self, UnboundedSender};
 use tokio::sync::oneshot;
-
-/// The largest payload accepted for the hello frame. A hello carries a 2-byte version and a
-/// token (a 32-byte secret), so 1024 bytes is ample and stops an unauthenticated peer buffering
-/// up to [`anyplay_bridge_protocol::MAX_PAYLOAD`].
-pub const MAX_HELLO_PAYLOAD: usize = 1024;
 
 /// What the bridge listener hands to the service.
 #[derive(Debug)]
@@ -64,44 +60,19 @@ pub async fn listen(out: UnboundedSender<BridgeInput>) -> std::io::Result<u16> {
 async fn serve(connection: u64, stream: TcpStream, out: &UnboundedSender<BridgeInput>) {
     let _ = stream.set_nodelay(true);
     let (mut read, mut write) = stream.into_split();
-    let mut decoder = Decoder::new();
+    let mut decoder = Decoder::with_max_payload(MAX_HELLO_PAYLOAD);
     let mut buf = vec![0u8; 64 * 1024];
 
     let hello = tokio::time::timeout(Duration::from_secs(5), async {
-        let mut total = 0usize;
-        let mut header_buf = [0u8; 4];
-        let mut header_read = 0usize;
         loop {
             match decoder.next_frame() {
-                Ok(Some(frame)) => {
-                    if frame.payload.len() > MAX_HELLO_PAYLOAD {
-                        return None;
-                    }
-                    return Some(frame);
-                }
+                Ok(Some(frame)) => return Some(frame),
                 Ok(None) => {}
                 Err(_) => return None,
             }
             match read.read(&mut buf).await {
                 Ok(0) | Err(_) => return None,
-                Ok(n) => {
-                    total = total.saturating_add(n);
-                    if total > 12 + MAX_HELLO_PAYLOAD {
-                        return None;
-                    }
-                    if header_read < 4 {
-                        let take = (4 - header_read).min(n);
-                        header_buf[header_read..header_read + take].copy_from_slice(&buf[..take]);
-                        header_read += take;
-                        if header_read == 4 {
-                            let announced = u32::from_le_bytes(header_buf) as usize;
-                            if announced > MAX_HELLO_PAYLOAD {
-                                return None;
-                            }
-                        }
-                    }
-                    decoder.push(&buf[..n]);
-                }
+                Ok(n) => decoder.push(&buf[..n]),
             }
         }
     })
@@ -112,6 +83,8 @@ async fn serve(connection: u64, stream: TcpStream, out: &UnboundedSender<BridgeI
     let Ok(Some(Message::Hello(hello))) = Message::parse(hello.kind, &hello.payload) else {
         return;
     };
+
+    decoder.set_max_payload(MAX_PAYLOAD);
 
     let (frames, mut outgoing) = mpsc::unbounded_channel();
     let (verdict, answer) = oneshot::channel();
@@ -271,6 +244,73 @@ mod tests {
         match rx.recv().await.unwrap() {
             BridgeInput::Closed { .. } => {}
             other => panic!("expected Closed without Hello, got {other:?}"),
+        }
+    }
+    #[tokio::test]
+    async fn a_hello_with_exact_max_payload_is_accepted_at_boundary() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let port = listen(tx).await.unwrap();
+        let mut stream = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+
+        // Exactly MAX_HELLO_PAYLOAD bytes: 2 bytes version + 1022 bytes token.
+        let token = vec![0x42u8; MAX_HELLO_PAYLOAD - 2];
+        let hello = Frame::event(&Message::Hello(Hello {
+            version: VERSION,
+            token: token.clone(),
+        }))
+        .unwrap();
+        assert_eq!(hello.payload.len(), MAX_HELLO_PAYLOAD);
+
+        let mut bytes = Vec::new();
+        hello.encode(&mut bytes).unwrap();
+        stream.write_all(&bytes).await.unwrap();
+
+        match rx.recv().await.unwrap() {
+            BridgeInput::Hello {
+                version,
+                token: received_token,
+                verdict,
+                ..
+            } => {
+                assert_eq!(version, VERSION);
+                assert_eq!(received_token, token);
+                let _ = verdict.send(Ok(()));
+            }
+            other => panic!("expected Hello at exact boundary, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_hello_split_over_tiny_writes_is_accepted() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let port = listen(tx).await.unwrap();
+        let mut stream = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+
+        let hello = Frame::event(&Message::Hello(Hello {
+            version: VERSION,
+            token: vec![9, 8, 7, 6, 5],
+        }))
+        .unwrap();
+        let mut bytes = Vec::new();
+        hello.encode(&mut bytes).unwrap();
+
+        for chunk in bytes.chunks(2) {
+            stream.write_all(chunk).await.unwrap();
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+
+        match rx.recv().await.unwrap() {
+            BridgeInput::Hello {
+                version,
+                token,
+                verdict,
+                ..
+            } => {
+                assert_eq!(version, VERSION);
+                assert_eq!(token, vec![9, 8, 7, 6, 5]);
+                let _ = verdict.send(Ok(()));
+            }
+            other => panic!("expected Hello, got {other:?}"),
         }
     }
 }
