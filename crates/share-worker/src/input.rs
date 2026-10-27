@@ -1,5 +1,5 @@
 //! The guest's pad, from the viewer's window: which keys make which buttons, and how often a
-//! state may leave (`spec/share-play.md`, Input).
+//! state may leave (`spec/share-play.md`, Input). A real gamepad is merged in by `crate::gamepad`.
 //!
 //! Only the keys listed in [`PadKey`] are read, and only while the viewer's window has the
 //! focus. What leaves is a [`PadState`] and nothing else: no key code, no text, no mouse.
