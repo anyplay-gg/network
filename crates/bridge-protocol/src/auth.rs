@@ -145,15 +145,16 @@ impl Sha256 {
         }
         self.update(&bits.to_be_bytes());
         let mut digest = [0u8; 32];
-        for (out, word) in digest.chunks_exact_mut(4).zip(self.state) {
-            out.copy_from_slice(&word.to_be_bytes());
+        for (i, word) in self.state.iter().enumerate() {
+            digest[i * 4..i * 4 + 4].copy_from_slice(&word.to_be_bytes());
         }
         digest
     }
 
     fn compress(&mut self, chunk: &[u8; 64]) {
         let mut w = [0u32; 64];
-        for (word, bytes) in w.iter_mut().zip(chunk.chunks_exact(4)) {
+        for (i, word) in w.iter_mut().take(16).enumerate() {
+            let bytes = &chunk[i * 4..i * 4 + 4];
             *word = u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
         }
         for i in 16..64 {
