@@ -35,7 +35,9 @@ pub const MAX_HEIGHT: u32 = 2_160;
 /// The highest frame rate a ring is made for.
 pub const MAX_FPS: u32 = 240;
 /// The longest name of a ring.
-pub const MAX_NAME: usize = 64;
+/// macOS limits the name of a `shm_open` object to 31 bytes with its leading `/` (PSHMNAMLEN),
+/// so a name is 30 characters at most on every system.
+pub const MAX_NAME: usize = 30;
 
 // Offsets in the header.
 const OFF_MAGIC: usize = 0;
@@ -197,7 +199,7 @@ impl Layout {
 }
 
 /// True for a name the net service may hand out and the engine may open: `anyplay-` and then
-/// letters, digits, `-` and `_`, 64 characters at most. Nothing that could name a path or
+/// letters, digits, `-` and `_`, 30 characters at most (it must fit macOS). Nothing that could name a path or
 /// another namespace.
 pub fn name_is_valid(name: &str) -> bool {
     name.len() <= MAX_NAME
@@ -208,13 +210,15 @@ pub fn name_is_valid(name: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
 }
 
-/// A ring name from 128 random bits: `anyplay-ring-` and 32 hex digits.
+/// A ring name from 128 random bits, folded to 64 by FNV-1a: `anyplay-` and 16 hex digits,
+/// 24 characters, which fits every system's limit for a shared memory name.
 pub fn name_from_random(random: [u8; 16]) -> String {
-    let mut name = String::from("anyplay-ring-");
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
     for byte in random {
-        name.push_str(&format!("{byte:02x}"));
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
     }
-    name
+    format!("anyplay-{hash:016x}")
 }
 
 /// A block of memory that the other process writes at the same time. Reads and writes of the
@@ -666,8 +670,9 @@ mod tests {
     fn names_are_plain() {
         assert!(name_is_valid("anyplay-ring-0123456789abcdef"));
         assert!(name_is_valid(&name_from_random([0xAB; 16])));
-        assert_eq!(name_from_random([0; 16]).len(), 13 + 32);
-        let long = format!("anyplay-{}", "a".repeat(60));
+        assert_eq!(name_from_random([0; 16]).len(), 8 + 16);
+        assert_ne!(name_from_random([1; 16]), name_from_random([2; 16]));
+        let long = format!("anyplay-{}", "a".repeat(23));
         for bad in [
             "",
             "anyplay-",
@@ -681,6 +686,17 @@ mod tests {
         ] {
             assert!(!name_is_valid(bad), "{bad:?}");
         }
+    }
+
+    #[test]
+    fn a_name_fits_the_shm_open_limit_of_every_system() {
+        // macOS: 31 bytes with the leading slash (PSHMNAMLEN).
+        const PSHMNAMLEN: usize = 31;
+        assert!(name_from_random([0xFF; 16]).len() < PSHMNAMLEN);
+        const { assert!(MAX_NAME < PSHMNAMLEN) };
+        let longest = format!("anyplay-{}", "z".repeat(MAX_NAME - "anyplay-".len()));
+        assert!(name_is_valid(&longest));
+        assert!(!name_is_valid(&format!("{longest}z")));
     }
 
     #[test]

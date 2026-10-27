@@ -286,7 +286,7 @@ mod tests {
 
     fn ring() -> RingReady {
         RingReady {
-            name: "anyplay-ring-00112233445566778899aabbccddeeff".into(),
+            name: "anyplay-00112233445566ff".into(),
             bytes: 123_456,
             width: 1280,
             height: 720,
@@ -513,7 +513,8 @@ mod tests {
         );
         // The viewer's numbering goes on; the gate starts again for the new mode.
         let steps = host.on_pad_datagram(2_000, &datagram(&mut sender, button::EAST));
-        let [Message::SharePad(pad)] = sent(&steps).try_into().unwrap() else {
+        let messages = sent(&steps);
+        let [Message::SharePad(pad)] = messages.as_slice() else {
             panic!("one pad state");
         };
         assert_eq!((pad.slot, pad.buttons), (1, button::EAST));

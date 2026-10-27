@@ -82,14 +82,12 @@ impl<M: Memory + Send> SoundSource for RingSound<M> {
     }
 }
 
+/// The readers on a new ring and what the net service is told about it.
+pub type NewRing = (RingSource<Arc<Shm>>, RingSound<Arc<Shm>>, RingReady);
+
 /// Makes the ring for a share and the two readers on it. The mapping goes away when the last of
 /// them is dropped.
-pub fn create(
-    name: &str,
-    width: u32,
-    height: u32,
-    max_fps: u32,
-) -> Result<(RingSource<Arc<Shm>>, RingSound<Arc<Shm>>, RingReady), String> {
+pub fn create(name: &str, width: u32, height: u32, max_fps: u32) -> Result<NewRing, String> {
     let layout = Layout::new(width, height, max_fps).map_err(|e| e.to_string())?;
     let bytes = layout.total_bytes();
     let memory = Arc::new(Shm::create(name, bytes)?);

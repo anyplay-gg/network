@@ -144,7 +144,7 @@ Created by the worker; the engine maps it when the bridge tells it the name. One
 
 The width and the height are even, and at most 3840 by 2160, so that every slot starts on a multiple of 8 bytes, where its `seq` is read atomically. The header is 64 bytes. After the header come the slots, each with a 32-byte slot header and `stride × height` bytes, then the audio ring. A slot header holds `seq: u64` (written last, 0 while the engine writes), `present_us: u64` (the engine's monotonic clock when the picture was presented), `kind: u32` (0 for pixels in the slot; 1 reserved for a GPU handle) and `frame: u32` (the game's flip count). The consumer reads the slot with the highest `seq` it has not seen, copies or uses it, and reads `seq` again; if it changed, the slot was overwritten and the consumer drops the frame. The audio ring is a plain single-producer ring of stereo float frames.
 
-The name is random for each share (`anyplay-ring-` and 32 hex digits) and the mapping is readable only by the user who runs the game; the engine opens it without a namespace prefix ([bridge protocol](bridge-protocol.md#share-play-0x05xx)). On Windows it is a named file mapping in the local namespace; on Linux a `shm_open` object. Nothing else is shared: pad states do not use the ring.
+The name is random for each share (`anyplay-` and 16 hex digits, 24 characters, so that it fits macOS's 31-byte limit for a shared memory name) and the mapping is readable only by the user who runs the game; the engine opens it without a namespace prefix ([bridge protocol](bridge-protocol.md#share-play-0x05xx)). On Windows it is a named file mapping in the local namespace; on Linux a `shm_open` object. Nothing else is shared: pad states do not use the ring.
 
 ### Codecs
 
