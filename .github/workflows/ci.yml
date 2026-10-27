@@ -44,12 +44,14 @@ jobs:
           # Only main writes the cache; pull requests restore it (a PR run used to save its own
           # 1-1.5 GB entry and pushed main's caches out of the 10 GB limit).
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      # The share worker on Linux: PipeWire's headers for window capture, and Cisco's OpenH264
-      # binary for the encoder round trip (the worker checks its SHA-256 before loading it).
-      - name: PipeWire headers and OpenH264
+      # The share worker on Linux: PipeWire's headers for window capture, Cisco's OpenH264
+      # binary for the encoder round trip (the worker checks its SHA-256 before loading it), and
+      # libva's runtime so that the VA-API backend's dlopen path runs (the runner has no GPU, so
+      # the hardware round trips skip; ANYPLAY_REQUIRE_HW makes them fail on a machine that has one).
+      - name: PipeWire headers, OpenH264 and libva
         if: runner.os == 'Linux'
         run: |
-          sudo apt-get update && sudo apt-get install -y libpipewire-0.3-dev libudev-dev clang
+          sudo apt-get update && sudo apt-get install -y libpipewire-0.3-dev libudev-dev clang libva2 libva-drm2
           curl -sSfL --retry 3 https://ciscobinary.openh264.org/libopenh264-2.6.0-linux64.8.so.bz2 \
             | bunzip2 > "$RUNNER_TEMP/libopenh264-2.6.0-linux64.8.so"
           echo "ANYPLAY_OPENH264=$RUNNER_TEMP/libopenh264-2.6.0-linux64.8.so" >> "$GITHUB_ENV"

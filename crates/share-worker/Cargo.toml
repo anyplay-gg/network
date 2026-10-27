@@ -63,6 +63,8 @@ pipewire = "0.10"
 # Software H.264 from Cisco's OpenH264 binary, loaded at run time and checked by its hash
 # (BSD-2-Clause; docs/adr/0027). Nothing of OpenH264 is built into the worker.
 openh264 = { version = "0.9", default-features = false, features = ["libloading"] }
+# The GPU's encoders from the system (ISC): VA-API and NVENC are opened with dlopen, never linked.
+libloading = "0.8"
 openh264-sys2 = { version = "0.9", default-features = false, features = ["libloading"] }
 
 # The frame ring is shared memory by name: shm_open and mmap on Linux and the other Unixes
