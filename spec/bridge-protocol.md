@@ -262,6 +262,29 @@ Version 0, implemented in `crates/bridge-protocol` (the net service's side) and 
 - `sequence` counts the guest's states, wrapping; the service has ordered them already and the bridge need not check it.
 - `share status` is sent once a second while the ring is in use. The service sends nothing of this group before the bridge has answered a `share open` with 0, except `share close`.
 
+### Leaderboards (`0x06xx`)
+
+Added in version 1 without changing it: four new kinds, so a net service that does not know them answers a request with **unsupported** and a bridge that does not know them never sends them. Decision: [ADR 0040](../docs/adr/0040-leaderboards-are-boards-of-best-scores-named-by-the-game.md); the cloud side: [Leaderboards](cloud-api.md#leaderboards).
+
+| Kind | Name | Direction | Payload |
+|---|---|---|---|
+| `0x0601` | score record | bridge → service, request | `user_id: i32`, `board: str`, `score: i64` |
+| `0x8601` | score recorded | service → bridge | `result: u8`, `score: i64`, `rank: u32`, `total: u32` |
+| `0x0602` | board read | bridge → service, request | `user_id: i32`, `board: str`, `view: u8`, `start: u32`, `count: u16` |
+| `0x8602` | board page | service → bridge | `result: u8`, `total: u32`, `me_rank: u32`, `me_score: i64`, then `entries`: a `u16` count and that many of `rank: u32`, `account_id: u64`, `handle: str`, `score: i64`, `achieved: u64` |
+
+- `i64` is a little-endian signed 64-bit integer.
+- **board** is the game's own name for the board as text, 1 to 64 characters from `A-Z a-z 0-9 _ -`: a number is written in decimal. The bridge sends no title. The net service uses the title ID of the running game start, so the same game always reaches the same boards, and the bridge cannot name another title's board. The bridge passes the text as it is and never interprets it.
+- **score record** records the player's score on the board. `score` is the game's integer (a time is the game's units, a count is a count). The cloud keeps the player's best only, so a worse score changes nothing.
+  - `result`: 0 stored (a new best), 1 kept (the player's best was as good or better and stays), 2 out of range (the board does not take this score), 3 refused (the board is closed, the cloud does not offer leaderboards, the entry was removed by a moderator, or the board's name is not allowed), 4 limited (too many records; try later), 5 signed out.
+  - `score` is the player's best on the board after the call (0 when there is none), `rank` their place among the entries they may see (0 when they have none) and `total` the number of those entries. All three are 0 for a result of 2 or above.
+- **board read** asks for a range of a board as the player sees it.
+  - `view`: 1 top (the best entries, from place `start` counting from 0), 2 around (`count` entries with the player's own in the middle: `count / 2` above it and the rest below; `start` is ignored; empty while the player has no entry), 3 friends (the player and their friends, from `start`). `count` is 1 to 100; the net service asks the cloud for no more.
+  - `result`: 0 done, 1 unknown board (no entries, or a board name that is not allowed), 2 refused (the cloud does not offer leaderboards), 3 limited, 4 signed out. With a `result` other than 0 the page is empty and the numbers are 0.
+  - `total` is the number of entries in this view. `me_rank` and `me_score` are the player's own line in this view (0 and 0 when they have none). Each entry carries its own rank; equal scores share a rank. `achieved` is Unix seconds. `handle` is the account's handle.
+- A rank is counted among the entries the player may see, so it can differ between two players reading the same board. The engine passes ranks on as they come and never computes one.
+- Only the bridge sends requests, as for every group. The bridge waits at most 30 seconds for a reply, as for a web reply; on **unsupported** or a timeout the game gets what it gets when a ranking service is not available.
+
 ## Observation
 
 A bridge writes an [observation log](observation-log.md) when `ANYPS5_NET_OBSERVE` names a file, with or without a net service.

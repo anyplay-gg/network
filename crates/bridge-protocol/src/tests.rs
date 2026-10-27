@@ -320,7 +320,194 @@ fn samples() -> Vec<Message> {
             dropped: 12,
             audio_underruns: 1,
         }),
+        Message::ScoreRecord(ScoreRecord {
+            user_id: -1,
+            board: "weekly-1".into(),
+            score: -9_007_199_254_740_991,
+        }),
+        Message::ScoreRecorded(ScoreRecorded {
+            result: ScoreResult::Stored,
+            score: 9_007_199_254_740_991,
+            rank: 17,
+            total: 4_021,
+        }),
+        Message::BoardRead(BoardRead {
+            user_id: 0,
+            board: "7".into(),
+            view: BoardView::Around,
+            start: 0,
+            count: 11,
+        }),
+        Message::BoardPage(BoardPage {
+            result: BoardResult::Done,
+            total: 3,
+            me_rank: 2,
+            me_score: 450,
+            entries: vec![
+                BoardRow {
+                    rank: 1,
+                    account_id: 9,
+                    handle: "Lumen".into(),
+                    score: 900,
+                    achieved: 1_790_000_000,
+                },
+                BoardRow {
+                    rank: 2,
+                    account_id: 4,
+                    handle: "Ember".into(),
+                    score: 450,
+                    achieved: 1_790_000_100,
+                },
+            ],
+        }),
+        Message::BoardPage(BoardPage {
+            result: BoardResult::UnknownBoard,
+            total: 0,
+            me_rank: 0,
+            me_score: 0,
+            entries: Vec::new(),
+        }),
     ]
+}
+
+#[test]
+fn leaderboard_kinds_are_the_ones_in_the_spec() {
+    let kinds: Vec<u16> = [
+        Kind::SCORE_RECORD,
+        Kind::SCORE_RECORD.reply(),
+        Kind::BOARD_READ,
+        Kind::BOARD_READ.reply(),
+    ]
+    .iter()
+    .map(|k| k.0)
+    .collect();
+    assert_eq!(kinds, [0x0601, 0x8601, 0x0602, 0x8602]);
+}
+
+#[test]
+fn leaderboard_payloads_have_the_layout_of_the_spec() {
+    let record = Message::ScoreRecord(ScoreRecord {
+        user_id: 1,
+        board: "b".into(),
+        score: -2,
+    });
+    assert_eq!(
+        record.payload().unwrap(),
+        [
+            1, 0, 0, 0, // user_id
+            1, 0, b'b', // board: str
+            0xFE, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, // score: i64
+        ]
+    );
+    let recorded = Message::ScoreRecorded(ScoreRecorded {
+        result: ScoreResult::Kept,
+        score: 0x0102,
+        rank: 3,
+        total: 4,
+    });
+    assert_eq!(
+        recorded.payload().unwrap(),
+        [
+            1, // result
+            2, 1, 0, 0, 0, 0, 0, 0, // score
+            3, 0, 0, 0, // rank
+            4, 0, 0, 0, // total
+        ]
+    );
+    let read = Message::BoardRead(BoardRead {
+        user_id: 0,
+        board: "x".into(),
+        view: BoardView::Friends,
+        start: 5,
+        count: 25,
+    });
+    assert_eq!(
+        read.payload().unwrap(),
+        [
+            0, 0, 0, 0, // user_id
+            1, 0, b'x', // board
+            3,    // view
+            5, 0, 0, 0, // start
+            25, 0, // count
+        ]
+    );
+    let page = Message::BoardPage(BoardPage {
+        result: BoardResult::Done,
+        total: 9,
+        me_rank: 2,
+        me_score: 7,
+        entries: vec![BoardRow {
+            rank: 1,
+            account_id: 0x0102,
+            handle: "ab".into(),
+            score: 5,
+            achieved: 6,
+        }],
+    });
+    assert_eq!(
+        page.payload().unwrap(),
+        [
+            0, // result
+            9, 0, 0, 0, // total
+            2, 0, 0, 0, // me_rank
+            7, 0, 0, 0, 0, 0, 0, 0, // me_score
+            1, 0, // entry count
+            1, 0, 0, 0, // rank
+            2, 1, 0, 0, 0, 0, 0, 0, // account_id
+            2, 0, b'a', b'b', // handle
+            5, 0, 0, 0, 0, 0, 0, 0, // score
+            6, 0, 0, 0, 0, 0, 0, 0, // achieved
+        ]
+    );
+}
+
+#[test]
+fn a_board_page_cut_short_is_truncated_and_a_huge_count_costs_nothing() {
+    let page = Message::BoardPage(BoardPage {
+        result: BoardResult::Done,
+        total: 1,
+        me_rank: 0,
+        me_score: 0,
+        entries: vec![BoardRow {
+            rank: 1,
+            account_id: 1,
+            handle: "ab".into(),
+            score: 1,
+            achieved: 1,
+        }],
+    });
+    let payload = page.payload().unwrap();
+    for cut in 0..payload.len() {
+        assert_eq!(
+            Message::parse(Kind::BOARD_READ.reply(), &payload[..cut]),
+            Err(Error::Truncated),
+            "cut at {cut}"
+        );
+    }
+    // A count of 65,535 rows with none behind it is refused without a large allocation.
+    let mut lying = payload[..17].to_vec();
+    lying.extend_from_slice(&u16::MAX.to_le_bytes());
+    assert_eq!(
+        Message::parse(Kind::BOARD_READ.reply(), &lying),
+        Err(Error::Truncated)
+    );
+}
+
+#[test]
+fn unknown_leaderboard_values_are_tolerated() {
+    let Ok(Some(Message::ScoreRecorded(m))) = Message::parse(
+        Kind::SCORE_RECORD.reply(),
+        &[77, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    ) else {
+        panic!("not read");
+    };
+    assert_eq!(m.result, ScoreResult::Unknown);
+    let Ok(Some(Message::BoardRead(m))) =
+        Message::parse(Kind::BOARD_READ, &[0, 0, 0, 0, 0, 0, 9, 0, 0, 0, 0, 1, 0])
+    else {
+        panic!("not read");
+    };
+    assert_eq!(m.view, BoardView::Unknown);
 }
 
 #[test]

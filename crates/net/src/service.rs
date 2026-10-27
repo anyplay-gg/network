@@ -4266,7 +4266,10 @@ impl Service {
             | Message::ShareOpen(_)
             | Message::ShareClose
             | Message::ShareMode { .. }
-            | Message::SharePad(_) => {
+            | Message::SharePad(_)
+            // The leaderboard replies travel from the service to the game.
+            | Message::ScoreRecorded(_)
+            | Message::BoardPage(_) => {
                 if request != 0 {
                     self.bridge_reply(connection, request, Message::Unsupported);
                 }
