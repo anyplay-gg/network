@@ -12,6 +12,8 @@ const FRAME_MS: f64 = 20.0;
 /// The shortest and longest wait before a talk starts playing, in frames.
 const MIN_DEPTH: usize = 2;
 const MAX_DEPTH: usize = 10;
+/// Most frames held at once. A sender cannot make the buffer grow past this by sending ahead.
+const MAX_HELD: usize = 256;
 /// Extra frames the buffer may hold above the depth before it skips ahead.
 const SLACK: usize = 6;
 /// A frame that is missing while later ones are here is waited for this many ticks if the buffer
@@ -171,6 +173,9 @@ impl JitterBuffer {
                 .map_or(extended, |h| h.max(extended)),
         );
         self.stats.received += 1;
+        while self.frames.len() > MAX_HELD {
+            self.frames.pop_first();
+        }
     }
 
     /// RFC 3550 interarrival jitter, on the sender's sample clock.
@@ -327,6 +332,16 @@ mod tests {
 
     fn payload(seq: u16) -> Vec<u8> {
         vec![(seq & 0xff) as u8, 9, 9, 9]
+    }
+
+    #[test]
+    fn a_sender_cannot_make_the_buffer_grow_without_end() {
+        let mut jb = JitterBuffer::new();
+        let now = Instant::now();
+        for seq in 0..5000u16 {
+            jb.insert(seq, u32::from(seq) * 960, false, &payload(seq), now);
+        }
+        assert!(jb.frames.len() <= MAX_HELD);
     }
 
     impl Rig {

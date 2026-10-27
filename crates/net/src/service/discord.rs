@@ -148,9 +148,14 @@ impl Service {
                     .flatten()
                     .filter(|saved| saved.account == account)
             },
-            move |service, saved| match saved {
-                Some(saved) => service.discord_refresh(cloud, account, saved.refresh),
-                None => service.discord_authorize(),
+            move |service, saved| {
+                if !service.discord_current(account) {
+                    return;
+                }
+                match saved {
+                    Some(saved) => service.discord_refresh(cloud, account, saved.refresh),
+                    None => service.discord_authorize(),
+                }
             },
         );
     }
@@ -189,6 +194,11 @@ impl Service {
         account: anyplay_api::AccountId,
         tokens: anyplay_api::DiscordTokens,
     ) {
+        // An answer that comes after the player disconnected or signed out is dropped: it must
+        // not keep a token again or connect.
+        if !self.discord_current(account) {
+            return;
+        }
         self.discord.busy = false;
         self.discord_persist(Some(SavedDiscord {
             account,
@@ -198,6 +208,12 @@ impl Service {
             self.discord_notice(&error.to_string());
         }
         self.discord_changed();
+    }
+
+    /// Whether a connection flow for `account` is still wanted: one is under way and the player is
+    /// still that account.
+    fn discord_current(&self, account: anyplay_api::AccountId) -> bool {
+        self.discord.busy && self.me.as_ref().map(|me| me.id) == Some(account)
     }
 
     fn discord_cloud_failed(&mut self, error: &CloudError) {
