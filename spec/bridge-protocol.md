@@ -1,6 +1,6 @@
 # Bridge protocol
 
-The messages between the bridge in an AnyPS5 build and the net service. Version 0, a draft: it changes without notice until version 1.
+The messages between the bridge in an AnyPS5 build and the net service. Version 1, a draft: it changes without notice until the protocol is declared stable. Version 1 replaced the raw token in `hello` with a mutual challenge ([Authentication](#authentication), [ADR 0039](../docs/adr/0039-the-bridge-proves-the-token-instead-of-sending-it.md)); version 0 is no longer spoken.
 
 The Rust reference is [`crates/bridge-protocol`](../crates/bridge-protocol). The bridge side lives in C++ inside AnyPS5 and must match this file, not the Rust code.
 
@@ -8,11 +8,12 @@ The Rust reference is [`crates/bridge-protocol`](../crates/bridge-protocol). The
 
 - The launcher starts the game with two variables:
   - `ANYPS5_NET_ENDPOINT`: `127.0.0.1:<port>` where the net service listens;
-  - `ANYPS5_NET_TOKEN`: a random secret for this one game start, as lowercase hex.
+  - `ANYPS5_NET_TOKEN`: a random secret for this one game start, as lowercase hex. It is the key of the handshake and is never sent over the connection.
 - Without both variables the bridge stays off, and every network library behaves as it does today: offline and signed out.
-- The bridge opens one TCP connection to the endpoint and sends **hello** as its first frame. The payload of the hello frame is at most 1024 bytes, and a larger first frame closes the connection. The net service answers **welcome** or **reject**, then closes the connection after a reject. Nothing else is sent before welcome.
+- The bridge opens one TCP connection to the endpoint and sends **hello** as its first frame. The net service answers **challenge**, the bridge answers **auth**, and the net service answers **welcome** or **reject** and closes the connection after a reject ([Authentication](#authentication)). Nothing else is sent before welcome.
+- Until the handshake is done a frame carries at most 1024 bytes of payload, and a connection that sends a larger frame is closed. The handshake has 5 seconds, from the connection to the auth frame, and a connection that has not finished by then is closed.
 - The net service accepts connections from loopback addresses only, and one connection per token at a time; a new connection with the same token replaces the old one.
-- When the connection breaks, the bridge reports the player as signed out to the game and connects again every 2 seconds with the same token.
+- When the connection breaks, the bridge reports the player as signed out to the game and connects again every 2 seconds with the same token and a new handshake with new nonces.
 
 ## Frames
 
@@ -22,7 +23,7 @@ Every message is one frame. All integers are little-endian.
 |---|---|---|---|
 | 0 | 4 | `length` | Payload length in bytes, at most 16 MiB (16,777,216). |
 | 4 | 2 | `kind` | What the payload is; see below. |
-| 6 | 2 | `flags` | Senders write 0. Receivers ignore it in version 0. |
+| 6 | 2 | `flags` | Senders write 0. Receivers ignore it in version 1. |
 | 8 | 4 | `request` | 0 for an event. A request carries a number unique on this connection, and its reply carries the same number. |
 | 12 | `length` | payload | Depends on `kind`. |
 
@@ -31,7 +32,7 @@ A receiver that reads a `length` above the limit closes the connection. A frame 
 - An **event** has `request` 0 and gets no answer.
 - A **request** has a `request` number other than 0. Its **reply** has the same number and the kind of the request with the top bit set (`kind | 0x8000`).
 - A receiver that does not know the kind of a request answers with **unsupported** (`0x8000`, empty payload) and the request's number.
-- Only the bridge sends requests in version 0. Several may be open at once; replies can come in any order.
+- The bridge sends most requests. The net service sends one, `share open` (`0x0501`, [Share play](#share-play-0x05xx)). Several may be open at once; replies can come in any order.
 
 ## Payloads
 
@@ -54,12 +55,54 @@ A payload may be longer than the fields its receiver knows; the receiver ignores
 
 | Kind | Name | Direction | Payload |
 |---|---|---|---|
-| `0x0001` | hello | bridge → service | `version: u16`, then the token as raw bytes (the decoded hex); at most 1024 bytes |
+| `0x0001` | hello | bridge → service | `version: u16`, `nonce: 32 bytes` |
 | `0x0002` | welcome | service → bridge | `version: u16` (the version both sides will use), `udp_port: u16`, `tcp_port: u16`, `stream_key: 16 bytes` |
 | `0x0003` | reject | service → bridge | a UTF-8 reason for the log |
+| `0x0004` | challenge | service → bridge | `version: u16`, `nonce: 32 bytes`, `proof: 32 bytes` |
+| `0x0005` | auth | bridge → service | `proof: 32 bytes` |
 | `0x8000` | unsupported | either way | empty; the reply to a request of unknown kind |
 
 `udp_port` and `tcp_port` are the net service's loopback ports for game traffic (see below); 0 means the net service carries no game traffic.
+
+#### Authentication
+
+The bridge and the net service both know the token of the game start (`ANYPS5_NET_TOKEN`, decoded from hex; 1 to 512 bytes, 32 in practice). Each proves that it knows it with an HMAC over fresh values from both sides, and neither sends it.
+
+1. **hello**: the bridge sends the `version` it speaks (1) and its `nonce`, 32 random bytes from the system's secure random source. The payload may be longer than 34 bytes, within the 1024-byte limit; the receiver ignores the bytes after the nonce.
+2. The net service checks the version and answers **challenge** with its own `nonce` (32 random bytes, fresh for this connection) and its `proof`.
+3. The bridge recomputes the service's proof. If it differs, the bridge closes the connection, logs that the net service did not prove the token, and sends nothing more: it never answers an impostor. Otherwise it sends **auth** with its own `proof`.
+4. The net service recomputes the bridge's proof. It answers **welcome** if the proof matches the token of the running game start, else **reject** and closes the connection.
+
+A **proof** is HMAC-SHA-256 ([RFC 2104](https://www.rfc-editor.org/rfc/rfc2104)) keyed with the token over:
+
+| Part | Size | Content |
+|---|---|---|
+| context | 17 | the ASCII bytes `AnyPlay bridge v1` |
+| role | 1 | `01` for the bridge's proof, `02` for the net service's |
+| bridge nonce | 32 | the `nonce` of hello |
+| service nonce | 32 | the `nonce` of challenge |
+
+The context and the role make a proof of one side worthless as the other's: a reflected proof does not verify. The nonces of both sides make every proof single-use: a recorded challenge or auth fits no other connection, because the other side picks a new nonce. A receiver compares proofs in constant time (the time does not depend on where they differ). A key longer than the 64-byte block of SHA-256 is hashed first, as RFC 2104 says.
+
+What this gives against a process on the same PC that listens in on the loopback port or connects to it: it learns no token from the bytes it sees (the token is not in them, and an HMAC does not reveal its key); it cannot replay a recording; it cannot pose as the net service to a bridge, or as a bridge to the net service, without the token. It does not protect the game traffic that follows, which is plain loopback traffic, nor against a process that can already read the token from the game's environment or memory.
+
+**Rejects.** The reason text is for the log and not for parsing. A net service rejects with: no game is starting, a version it does not speak, a hello with no nonce, a proof that does not match, or a game start that changed during the handshake. It closes without a word on a first frame that is not hello, a second frame that is not auth, a frame over the limit, a payload that does not parse, or the time running out.
+
+**Versions.** The `version` of hello is the version both sides speak, and this is version 1. A net service that gets another version in hello answers with a reject that names both versions and says to update, then closes. A bridge that gets a reject logs the reason and tries again after 2 seconds like after any other failure. So a bridge of version 0 (which sent the token in hello) meets a clear reject from a net service of version 1. A bridge of version 1 meets a net service of version 0 as a reject that says the token does not match (version 0 reads the nonce as the token), and that net service learns only a random nonce. The launcher ships a net service and a bridge that match.
+
+##### Test vectors
+
+Both implementations (`anyplay_bridge_protocol::proof` in the net service and `NetBridgeAuth::MakeProof` in the bridge) check these bytes. In all of them the bridge nonce is `20 21 22 … 3f` and the service nonce is `40 41 42 … 5f` (32 bytes counting up).
+
+| Token | Role | Proof |
+|---|---|---|
+| `00 01 02 … 1f` (32 bytes counting up) | bridge (`01`) | `13d46f7dc5c37ff12cf336554acb4e1981ffbcc22ce374d68289bed0fd8f9651` |
+| `00 01 02 … 1f` | service (`02`) | `f4ec03176babba0072aaf8625da4e41230e772613a0062121d5597db8cffbf69` |
+| `73 65 63 72 65 74 01 fe` (8 bytes) | bridge | `c561da91325fb75af59d36d89ff0057ffa6f832333ef35ce9719a3e991ec2fa3` |
+| `73 65 63 72 65 74 01 fe` | service | `1a6117546f912bebe685c274f3bfc080292dee261310c8941a6bd530567bd792` |
+| `aa` repeated 100 times (longer than the HMAC block) | bridge | `a68cfdba801506b73275bad33fdb8b28a8d36e4e7d5f14ca82178ea2593f122f` |
+
+The hello frame with the bridge nonce above is 46 bytes: `22 00 00 00` (length 34), `01 00` (kind), `00 00` (flags), `00 00 00 00` (request), `01 00` (version 1), then `20 21 … 3f`.
 
 ### Sign-in state (`0x01xx`)
 
@@ -69,7 +112,7 @@ A payload may be longer than the fields its receiver knows; the receiver ignores
 | `0x0102` | feature | bridge → service | `user_id: i32`, `feature: u32` |
 
 - **state** comes right after welcome and again whenever a field changes. The bridge keeps the last one and answers the game's questions about sign-in, identity and NAT from it without waiting.
-  - `signed_in` is 1 while the player is signed in to the network and not banned, else 0. The online-permission check does not follow it yet. [ADR 0021](../docs/adr/0021-the-line-is-drawn-at-the-law.md) makes it follow: signed in and not banned, for the AnyPlay network only.
+  - `signed_in` is 1 while the player is signed in to the network and not banned, else 0. The bridge answers the online-permission check by the same rule, for the AnyPlay network only ([ADR 0021](../docs/adr/0021-the-line-is-drawn-at-the-law.md)).
   - `account_id` and `handle` are 0 and empty while signed out. A handle has at most 16 ASCII characters.
   - `nat_type` is 1, 2 or 3 as the platform counts NAT types, or 0 while unknown. The net service measures it over IPv4 with iroh's net report: 1 when the relays answer its UDP address probes and the public address they see is one of the PC's own; 2 while it is connected to a relay (every peer can reach it through the relay) or when the NAT shows the same public address to every relay; 3 when UDP works but neither holds; 0 when neither a relay nor UDP answers. A net service on relay only is never 1. A change comes as a new `state`.
   - `address` is the player's own virtual address, 0 when it has none. It is the address the player has in the session the launcher shows, else the one the cloud names for the account. It can change when the player enters a session, and `state` is sent again then.
@@ -201,7 +244,7 @@ The first user is Minecraft: Bedrock Edition in its LAN mode. What public source
 
 ### Share play (`0x05xx`)
 
-Version 0, implemented in `crates/bridge-protocol` (the net service's side) and in the AnyPS5 bridge. The frame ring, the pad rules and the host's override are in the [share play spec](share-play.md); this is the wire.
+Part of version 1. The net service's side is in `crates/bridge-protocol`; the bridge's side is open in the AnyPS5 fork (anyplaynet/AnyPS5#29). The frame ring, the pad rules and the host's override are in the [share play spec](share-play.md); this is the wire.
 
 | Kind | Name | Direction | Payload |
 |---|---|---|---|
@@ -218,6 +261,29 @@ Version 0, implemented in `crates/bridge-protocol` (the net service's side) and 
 - The bridge takes a `share pad` only after a `share open` answered 0, only while the last mode is `hand_over` (slot 0) or `together` (slot 1), and drops a state that sets a bit above bit 14. Whenever the mode changes, the share closes or the connection to the service breaks, the guest's pad is neutral and disconnected in the same step. The service sends a neutral `share pad` on the old slot before every change of mode and before the close, so a bridge that missed nothing sees the release first.
 - `sequence` counts the guest's states, wrapping; the service has ordered them already and the bridge need not check it.
 - `share status` is sent once a second while the ring is in use. The service sends nothing of this group before the bridge has answered a `share open` with 0, except `share close`.
+
+### Leaderboards (`0x06xx`)
+
+Added in version 1 without changing it: four new kinds, so a net service that does not know them answers a request with **unsupported** and a bridge that does not know them never sends them. Decision: [ADR 0041](../docs/adr/0041-leaderboards-are-boards-of-best-scores-named-by-the-game.md); the cloud side: [Leaderboards](cloud-api.md#leaderboards).
+
+| Kind | Name | Direction | Payload |
+|---|---|---|---|
+| `0x0601` | score record | bridge → service, request | `user_id: i32`, `board: str`, `score: i64` |
+| `0x8601` | score recorded | service → bridge | `result: u8`, `score: i64`, `rank: u32`, `total: u32` |
+| `0x0602` | board read | bridge → service, request | `user_id: i32`, `board: str`, `view: u8`, `start: u32`, `count: u16` |
+| `0x8602` | board page | service → bridge | `result: u8`, `total: u32`, `me_rank: u32`, `me_score: i64`, then `entries`: a `u16` count and that many of `rank: u32`, `account_id: u64`, `handle: str`, `score: i64`, `achieved: u64` |
+
+- `i64` is a little-endian signed 64-bit integer.
+- **board** is the game's own name for the board as text, 1 to 64 characters from `A-Z a-z 0-9 _ -`: a number is written in decimal. The bridge sends no title. The net service uses the title ID of the running game start, so the same game always reaches the same boards, and the bridge cannot name another title's board. The bridge passes the text as it is and never interprets it.
+- **score record** records the player's score on the board. `score` is the game's integer (a time is the game's units, a count is a count). The cloud keeps the player's best only, so a worse score changes nothing.
+  - `result`: 0 stored (a new best), 1 kept (the player's best was as good or better and stays), 2 out of range (the board does not take this score), 3 refused (the board is closed, the cloud does not offer leaderboards, the entry was removed by a moderator, or the board's name is not allowed), 4 limited (too many records; try later), 5 signed out.
+  - `score` is the player's best on the board after the call (0 when there is none), `rank` their place among the entries they may see (0 when they have none) and `total` the number of those entries. All three are 0 for a result of 2 or above.
+- **board read** asks for a range of a board as the player sees it.
+  - `view`: 1 top (the best entries, from place `start` counting from 0), 2 around (`count` entries with the player's own in the middle: `count / 2` above it and the rest below; `start` is ignored; empty while the player has no entry), 3 friends (the player and their friends, from `start`). `count` is 1 to 100; the net service asks the cloud for no more.
+  - `result`: 0 done, 1 unknown board (no entries, or a board name that is not allowed), 2 refused (the cloud does not offer leaderboards), 3 limited, 4 signed out. With a `result` other than 0 the page is empty and the numbers are 0.
+  - `total` is the number of entries in this view. `me_rank` and `me_score` are the player's own line in this view (0 and 0 when they have none). Each entry carries its own rank; equal scores share a rank. `achieved` is Unix seconds. `handle` is the account's handle.
+- A rank is counted among the entries the player may see, so it can differ between two players reading the same board. The engine passes ranks on as they come and never computes one.
+- Only the bridge sends requests, as for every group. The bridge waits at most 30 seconds for a reply, as for a web reply; on **unsupported** or a timeout the game gets what it gets when a ranking service is not available.
 
 ## Observation
 

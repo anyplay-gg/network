@@ -36,6 +36,7 @@ jobs:
         target:
           - bridge_message
           - bridge_stream
+          - bridge_handshake
           - traffic_header
           - control_line
           - voice_frame

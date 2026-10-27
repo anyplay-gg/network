@@ -39,6 +39,10 @@ impl Writer {
         self.out.extend_from_slice(&value.to_le_bytes());
     }
 
+    pub fn i64(&mut self, value: i64) {
+        self.out.extend_from_slice(&value.to_le_bytes());
+    }
+
     pub fn addr(&mut self, value: Ipv4Addr) {
         self.u32(u32::from(value));
     }
@@ -123,8 +127,17 @@ impl<'a> Reader<'a> {
         Ok(i32::from_le_bytes(self.array()?))
     }
 
+    pub fn i64(&mut self) -> Result<i64, Error> {
+        Ok(i64::from_le_bytes(self.array()?))
+    }
+
     pub fn addr(&mut self) -> Result<Ipv4Addr, Error> {
         Ok(Ipv4Addr::from(self.u32()?))
+    }
+
+    /// How many bytes are not read yet.
+    pub fn remaining(&self) -> usize {
+        self.rest.len()
     }
 
     /// Everything not read yet.

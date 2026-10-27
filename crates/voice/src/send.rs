@@ -1,11 +1,12 @@
 //! The sending half: microphone samples in, wire frames out.
 //!
-//! capture rate -> 48 kHz mono -> noise suppression -> gate (push-to-talk or voice activity) ->
+//! capture rate -> 48 kHz mono -> echo cancellation -> noise suppression -> gate (push-to-talk or voice activity) ->
 //! Opus -> frame.
 
 use nnnoiseless::DenoiseState;
 use opus::{Application, Bitrate, Channels, Encoder, Signal};
 
+use crate::echo::Path;
 use crate::gate::{Vad, rms, to_db};
 use crate::jitter::FRAME_SAMPLES;
 use crate::resample::Resampler;
@@ -23,6 +24,7 @@ const DTX_KEEPALIVE: u32 = 20;
 pub(crate) struct Sender {
     resampler: Resampler,
     pending: Vec<f32>,
+    echo: Option<Path>,
     denoise: Option<Box<DenoiseState<'static>>>,
     encoder: Encoder,
     vad: Vad,
@@ -58,6 +60,7 @@ impl Sender {
         Ok(Sender {
             resampler: Resampler::new(capture_rate, 48_000),
             pending: Vec::new(),
+            echo: config.echo_cancellation.then(Path::new),
             denoise: config.noise_suppression.then(DenoiseState::new),
             encoder,
             vad: Vad::new(config.vad),
@@ -83,6 +86,30 @@ impl Sender {
             (true, false) => self.denoise = Some(DenoiseState::new()),
             (false, true) => self.denoise = None,
             _ => {}
+        }
+    }
+
+    /// Starts or stops cancelling the echo of the speakers. A canceller that is already running
+    /// is kept, with what it learned of the room.
+    pub(crate) fn set_echo_cancellation(&mut self, enabled: bool) {
+        match (enabled, self.echo.is_some()) {
+            (true, false) => self.echo = Some(Path::new()),
+            (false, true) => self.echo = None,
+            _ => {}
+        }
+    }
+
+    /// Samples just written to the speakers' queue, at 48 kHz.
+    pub(crate) fn reference(&mut self, samples: &[f32]) {
+        if let Some(echo) = &mut self.echo {
+            echo.reference(samples);
+        }
+    }
+
+    /// How much of what was written is still queued at the device, at 48 kHz.
+    pub(crate) fn release_reference(&mut self, queued: usize) {
+        if let Some(echo) = &mut self.echo {
+            echo.release(queued);
         }
     }
 
@@ -118,6 +145,9 @@ impl Sender {
     fn frame(&mut self, frame: &mut [f32; FRAME_SAMPLES]) {
         for s in frame.iter_mut() {
             *s = s.clamp(-1.0, 1.0);
+        }
+        if let Some(echo) = &mut self.echo {
+            echo.capture(frame);
         }
         let probability = match &mut self.denoise {
             Some(dn) => {

@@ -47,13 +47,14 @@ It reports whether the tunnel went direct or through a relay, the round trip, lo
 
 | Path | What it is |
 |---|---|
-| `crates/net` | `anyplay-net`, the net service on each player's PC: account, cloud connection, bridge server, tunnels, voice and screen sharing |
+| `crates/net` | `anyplay-net`, the net service on each player's PC: account, cloud connection, bridge server, tunnels, voice, screen sharing and share play |
 | `crates/bridge-protocol` | the messages between the bridge and the net service |
 | `crates/control` | the messages between the launcher and the net service |
 | `crates/api` | the cloud's API, shared by the net service and the [cloud](https://github.com/anyplaynet/cloud) |
 | `crates/voice` | `anyplay-voice`, the party voice engine |
+| `crates/proof` | `anyplay-proof`, device keys, proofs of possession and PKCE for the cloud API |
 | `crates/fake-game` | `anyplay-fake-game`, a game's side of the bridge, for tests and for trying the network without a game |
-| `crates/share`, `crates/share-worker` | the share-screen media path, and the worker program that captures, encodes and shows the picture |
+| `crates/share`, `crates/share-worker` | the media path for share screen and share play, and the worker program that captures, encodes and shows the picture, records clips and broadcasts |
 | `crates/discord` | an optional Discord Social SDK seam, off by default ([ADR 0022](docs/adr/0022-discord-social-sdk.md)) |
 | `crates/probe` | `anyplay-probe`, which measures a tunnel |
 | `spec/` | the network's own specifications: [bridge protocol](spec/bridge-protocol.md), [control protocol](spec/control-protocol.md), [cloud API](spec/cloud-api.md), [portal API](spec/portal-api.md), [web API groups](spec/web-api/README.md) and more |
@@ -67,14 +68,15 @@ The network without games is live at anyplaynet.com, and the launcher uses it.
 |---|---|
 | Accounts, friends, presence, messages, notifications | Done and live. |
 | Parties with voice and push to talk | Done and live. |
-| Share screen to a party | Done. Game sound is Windows only. |
-| Broadcast to Twitch, YouTube or RTMP | Done on Windows, with the game's sound; `rtmp://` and `rtmps://`. |
-| Join links, Find Players, captures and clips sent to friends | Done. |
-| Bridge: sign-in, identity, NAT type, web API forwarding, push events, online-permission check, peer-to-peer datagrams and streams | Merged in the fork. The end-to-end CI that runs the bridge against the net service is in review. |
+| Share screen to a party | Done for the streamer on Windows, Linux and macOS. Game sound comes from Windows and macOS. A Mac cannot watch yet. |
+| Broadcast to Twitch, YouTube or RTMP | Done on Windows, Linux and macOS; `rtmp://` and `rtmps://`. The game's sound is sent from Windows; elsewhere the track is silence. |
+| Clips (the last seconds of a game, saved on the PC) | Done on Windows, Linux (GPU encode through NVENC or VA-API) and macOS. |
+| Join links, Find Players, played with recently, captures and clips sent to friends | Done. |
+| Bridge: sign-in, identity, NAT type, web API forwarding, push events, online-permission check, peer-to-peer datagrams and streams | Merged in the fork, speaking bridge protocol 1: the bridge and the net service prove the game start's token to each other with an HMAC challenge, and protocol 0 is no longer spoken ([ADR 0039](docs/adr/0039-the-bridge-proves-the-token-instead-of-sending-it.md)). The end-to-end CI that runs the bridge against the net service is in review. |
 | Web API groups answered for games | `userProfile` and `communicationRestrictionStatus`. Every other group is refused and logged. |
 | A first game played together over the internet | Not yet. This is phase 4 of the [roadmap](docs/DESIGN.md#roadmap). |
 | Measuring tunnels between two real networks | Waiting for a second network (phase 0). |
-| Share play (taking over a friend's pad) | Designed, not built. |
+| Share play (taking over a friend's pad) | Built in the net service, the cloud and the worker, and tested with fakes. The engine side (frame ring, guest pad, a second user) is in review in the fork. The launcher keeps it hidden and the public cloud keeps it off until a legal review. |
 | Several cloud nodes | Not built. The cloud runs as one node. |
 
 [docs/gaps.md](docs/gaps.md) lists what each part still lacks.
@@ -91,13 +93,13 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
-Every pull request runs these on Windows and Linux. The parsers are fuzzed every night ([fuzz/](fuzz/README.md)). Start with the [design](docs/DESIGN.md); the words are in [CONTEXT.md](CONTEXT.md). Issues and pull requests are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md). The rules shared by every AnyPlay repository are in the [organisation's CONTRIBUTING.md](https://github.com/anyplaynet/.github/blob/main/CONTRIBUTING.md).
+Every pull request runs these on Windows, Linux and macOS. The parsers are fuzzed every night ([fuzz/](fuzz/README.md)). Start with the [design](docs/DESIGN.md); the words are in [CONTEXT.md](CONTEXT.md). Issues and pull requests are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md). The rules shared by every AnyPlay repository are in the [organisation's CONTRIBUTING.md](https://github.com/anyplaynet/.github/blob/main/CONTRIBUTING.md).
 
 ### macOS
 
 `cargo build --release --locked -p anyplay-net --features devices` builds a native service with CoreAudio microphone and speaker support. CI builds and tests it on macOS as well as Windows and Linux. The launcher embeds the matching binary at build time with `ANYPLAY_NET_EMBED` and starts it over standard input/output with an explicit per-user data folder.
 
-Run standalone with `--data <folder>` or use its default under `~/Library/Application Support/AnyPlay/net`. Sign-ins use the macOS Keychain when available; `--file-credentials` is intended for isolated tests. Microphone access belongs to the launcher app's privacy prompt. Share-screen capture and Discord's optional SDK are separate platform integrations; this does not add them or a game engine bridge.
+Run standalone with `--data <folder>` or use its default under `~/Library/Application Support/AnyPlay/net`. Sign-ins use the macOS Keychain when available; `--file-credentials` is intended for isolated tests. Microphone access belongs to the launcher app's privacy prompt. On a Mac the share worker captures with ScreenCaptureKit and encodes with VideoToolbox ([ADR 0036](docs/adr/0036-macos-captures-with-screencapturekit-and-encodes-with-videotoolbox.md)), for share screen, clips and broadcast, and needs the Screen Recording permission. Discord's optional SDK is a separate integration, and there is no game engine bridge for macOS.
 
 ## Community
 

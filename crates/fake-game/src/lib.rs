@@ -8,9 +8,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyplay_bridge_protocol::{
-    Activate, ActivateResult, Bind, BindResult, Decoder, Frame, Hello, Kind, Message, SessionKind,
-    ShareMode, ShareOpen, SharePad, ShareResult, State, TrafficHeader, Transport, WebReply,
-    WebRequest, Welcome,
+    Activate, ActivateResult, Auth, Bind, BindResult, Decoder, Frame, Hello, Kind, Message, Nonce,
+    Role, SessionKind, ShareMode, ShareOpen, SharePad, ShareResult, State, TrafficHeader,
+    Transport, WebReply, WebRequest, Welcome, proof, verify,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpStream, UdpSocket};
@@ -47,7 +47,7 @@ pub struct ShareEngine {
 }
 
 impl ShareEngine {
-    fn slot_of(mode: ShareMode) -> Option<u8> {
+    pub fn slot_of(mode: ShareMode) -> Option<u8> {
         match mode {
             ShareMode::HandOver => Some(0),
             ShareMode::Together => Some(1),
@@ -55,11 +55,11 @@ impl ShareEngine {
         }
     }
 
-    fn disconnect(&mut self) {
+    pub fn disconnect(&mut self) {
         self.now = [None, None];
     }
 
-    fn apply(&mut self, message: &Message) -> Option<ShareResult> {
+    pub fn apply(&mut self, message: &Message) -> Option<ShareResult> {
         match message {
             Message::ShareOpen(open) => {
                 if self.opened.is_some() && !self.closed {
@@ -141,9 +141,10 @@ impl Bridge {
             .map_err(|e| e.to_string())?;
         stream.set_nodelay(true).map_err(|e| e.to_string())?;
         let (mut read, mut write) = stream.into_split();
+        let bridge_nonce: Nonce = rand::random();
         let hello = Frame::event(&Message::Hello(Hello {
             version: anyplay_bridge_protocol::VERSION,
-            token,
+            nonce: bridge_nonce.to_vec(),
         }))
         .map_err(|e| e.to_string())?;
         let mut bytes = Vec::new();
@@ -152,14 +153,37 @@ impl Bridge {
 
         let mut decoder = Decoder::new();
         let mut buf = vec![0u8; 64 * 1024];
+        let mut answered = false;
         let welcome = loop {
             if let Some(frame) = decoder.next_frame().map_err(|e| e.to_string())? {
                 match frame.message().map_err(|e| e.to_string())? {
-                    Some(Message::Welcome(welcome)) => break welcome,
+                    // The net service proves the token first; only then does the bridge answer.
+                    Some(Message::Challenge(challenge)) if !answered => {
+                        if challenge.version != anyplay_bridge_protocol::VERSION
+                            || !verify(
+                                &token,
+                                Role::Service,
+                                &bridge_nonce,
+                                &challenge.nonce,
+                                &challenge.proof,
+                            )
+                        {
+                            return Err("the net service did not prove the token".into());
+                        }
+                        let proof = proof(&token, Role::Bridge, &bridge_nonce, &challenge.nonce);
+                        let auth = Frame::event(&Message::Auth(Auth { proof }))
+                            .map_err(|e| e.to_string())?;
+                        let mut bytes = Vec::new();
+                        auth.encode(&mut bytes).map_err(|e| e.to_string())?;
+                        write.write_all(&bytes).await.map_err(|e| e.to_string())?;
+                        answered = true;
+                        continue;
+                    }
+                    Some(Message::Welcome(welcome)) if answered => break welcome,
                     Some(Message::Reject(reject)) => {
                         return Err(format!("rejected: {}", reject.reason));
                     }
-                    _ => return Err("the first frame was neither welcome nor reject".into()),
+                    _ => return Err("the handshake went wrong: unexpected frame".into()),
                 }
             }
             let n = tokio::time::timeout(Duration::from_secs(5), read.read(&mut buf))
@@ -435,6 +459,12 @@ impl Bridge {
     }
 }
 
+/// Limited broadcast address (`255.255.255.255`).
+pub const LIMITED_BROADCAST: Ipv4Addr = Ipv4Addr::BROADCAST;
+
+/// Broadcast address of the virtual subnet (`198.19.255.255`, subnet `198.18.0.0/15`).
+pub const SUBNET_BROADCAST: Ipv4Addr = Ipv4Addr::new(198, 19, 255, 255);
+
 /// A game's datagram socket on a virtual port.
 pub struct GameSocket {
     socket: UdpSocket,
@@ -458,6 +488,16 @@ impl GameSocket {
         .to_vec();
         datagram.extend_from_slice(bytes);
         self.socket.send_to(&datagram, self.service).await.map(drop)
+    }
+
+    /// Broadcasts a datagram to the virtual subnet (`198.19.255.255`).
+    pub async fn broadcast(&self, vport: u16, bytes: &[u8]) -> std::io::Result<()> {
+        self.send_to(SUBNET_BROADCAST, vport, bytes).await
+    }
+
+    /// Broadcasts a datagram to the limited broadcast address (`255.255.255.255`).
+    pub async fn broadcast_limited(&self, vport: u16, bytes: &[u8]) -> std::io::Result<()> {
+        self.send_to(LIMITED_BROADCAST, vport, bytes).await
     }
 
     /// The next datagram: who sent it from which port, and its bytes.
@@ -493,10 +533,219 @@ pub fn session_id(reply: &WebReply) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     #[test]
     fn hex_tokens_decode() {
         assert_eq!(super::decode_hex("00ff10"), Some(vec![0, 255, 16]));
         assert_eq!(super::decode_hex("0"), None);
         assert_eq!(super::decode_hex("zz"), None);
+    }
+
+    #[test]
+    fn share_engine_open_and_reopen() {
+        let mut engine = ShareEngine::default();
+        let open = ShareOpen {
+            ring: "anyplay_ring_test".into(),
+            ring_bytes: 4 * 1024 * 1024,
+            width: 1920,
+            height: 1080,
+            max_fps: 60,
+            mode: ShareMode::HandOver,
+        };
+
+        // First open succeeds with Copying.
+        assert_eq!(
+            engine.apply(&Message::ShareOpen(open.clone())),
+            Some(ShareResult::Copying)
+        );
+        assert!(engine.opened.is_some());
+        assert_eq!(engine.mode, Some(ShareMode::HandOver));
+        assert!(!engine.closed);
+
+        // Re-opening while already active reports Running.
+        assert_eq!(
+            engine.apply(&Message::ShareOpen(open.clone())),
+            Some(ShareResult::Running)
+        );
+
+        // ShareClose marks engine as closed.
+        assert_eq!(engine.apply(&Message::ShareClose), None);
+        assert!(engine.closed);
+
+        // Opening again after close succeeds with Copying.
+        assert_eq!(
+            engine.apply(&Message::ShareOpen(open)),
+            Some(ShareResult::Copying)
+        );
+        assert!(!engine.closed);
+    }
+
+    #[test]
+    fn share_engine_refusal_override() {
+        let mut engine = ShareEngine {
+            refuse_with: Some(ShareResult::RingUnavailable),
+            ..Default::default()
+        };
+        let open = ShareOpen {
+            ring: "anyplay_ring_test".into(),
+            ring_bytes: 1024,
+            width: 1280,
+            height: 720,
+            max_fps: 30,
+            mode: ShareMode::Together,
+        };
+        assert_eq!(
+            engine.apply(&Message::ShareOpen(open)),
+            Some(ShareResult::RingUnavailable)
+        );
+        assert!(engine.opened.is_none());
+    }
+
+    #[test]
+    fn share_engine_pad_handling_and_mode_switching() {
+        let mut engine = ShareEngine::default();
+        let open = ShareOpen {
+            ring: "test".into(),
+            ring_bytes: 1024,
+            width: 1920,
+            height: 1080,
+            max_fps: 60,
+            mode: ShareMode::HandOver,
+        };
+        assert_eq!(
+            engine.apply(&Message::ShareOpen(open)),
+            Some(ShareResult::Copying)
+        );
+
+        // In HandOver mode, only slot 0 is accepted.
+        let pad0 = SharePad {
+            slot: 0,
+            sequence: 1,
+            buttons: 0x0001,
+            lx: 128,
+            ly: 128,
+            rx: 128,
+            ry: 128,
+            l2: 0,
+            r2: 0,
+        };
+        let pad1 = SharePad {
+            slot: 1,
+            sequence: 2,
+            buttons: 0x0001,
+            lx: 128,
+            ly: 128,
+            rx: 128,
+            ry: 128,
+            l2: 0,
+            r2: 0,
+        };
+
+        assert_eq!(engine.apply(&Message::SharePad(pad0)), None);
+        assert_eq!(engine.taken.len(), 1);
+        assert_eq!(engine.now[0], Some(pad0));
+        assert_eq!(engine.refused, 0);
+
+        // Slot 1 is refused in HandOver mode.
+        assert_eq!(engine.apply(&Message::SharePad(pad1)), None);
+        assert_eq!(engine.taken.len(), 1);
+        assert_eq!(engine.refused, 1);
+
+        // Switch to Together mode: clears now[], accepts slot 1.
+        assert_eq!(
+            engine.apply(&Message::ShareMode {
+                mode: ShareMode::Together
+            }),
+            None
+        );
+        assert_eq!(engine.now, [None, None]);
+
+        assert_eq!(engine.apply(&Message::SharePad(pad1)), None);
+        assert_eq!(engine.taken.len(), 2);
+        assert_eq!(engine.now[1], Some(pad1));
+
+        // Slot 0 is refused in Together mode.
+        assert_eq!(engine.apply(&Message::SharePad(pad0)), None);
+        assert_eq!(engine.refused, 2);
+
+        // Switch to Watch mode: both slots refused.
+        assert_eq!(
+            engine.apply(&Message::ShareMode {
+                mode: ShareMode::Watch
+            }),
+            None
+        );
+        assert_eq!(engine.now, [None, None]);
+        assert_eq!(engine.apply(&Message::SharePad(pad0)), None);
+        assert_eq!(engine.apply(&Message::SharePad(pad1)), None);
+        assert_eq!(engine.refused, 4);
+    }
+
+    #[test]
+    fn share_engine_rejects_reserved_button_bits() {
+        let mut engine = ShareEngine::default();
+        let open = ShareOpen {
+            ring: "test".into(),
+            ring_bytes: 1024,
+            width: 1920,
+            height: 1080,
+            max_fps: 60,
+            mode: ShareMode::HandOver,
+        };
+        engine.apply(&Message::ShareOpen(open));
+
+        // Bit 15 set (0x8000) violates `buttons & !0x7FFF == 0`.
+        let reserved_pad = SharePad {
+            slot: 0,
+            sequence: 1,
+            buttons: 0x8000,
+            lx: 128,
+            ly: 128,
+            rx: 128,
+            ry: 128,
+            l2: 0,
+            r2: 0,
+        };
+        assert_eq!(engine.apply(&Message::SharePad(reserved_pad)), None);
+        assert_eq!(engine.refused, 1);
+        assert_eq!(engine.taken.len(), 0);
+
+        // Valid buttons within 0x7FFF are accepted.
+        let valid_pad = SharePad {
+            slot: 0,
+            sequence: 2,
+            buttons: 0x7FFF,
+            lx: 128,
+            ly: 128,
+            rx: 128,
+            ry: 128,
+            l2: 0,
+            r2: 0,
+        };
+        assert_eq!(engine.apply(&Message::SharePad(valid_pad)), None);
+        assert_eq!(engine.refused, 1);
+        assert_eq!(engine.taken.len(), 1);
+        assert_eq!(engine.now[0], Some(valid_pad));
+    }
+
+    #[test]
+    fn share_engine_unknown_messages_and_closed_rejection() {
+        let mut engine = ShareEngine::default();
+
+        // Pad received before any open is refused.
+        let pad = SharePad::neutral(0, 1);
+        assert_eq!(engine.apply(&Message::SharePad(pad)), None);
+        assert_eq!(engine.refused, 1);
+
+        // Unrelated message increments unknown count.
+        assert_eq!(engine.apply(&Message::Unsupported), None);
+        assert_eq!(engine.unknown, 1);
+    }
+
+    #[test]
+    fn broadcast_constants() {
+        assert_eq!(LIMITED_BROADCAST, Ipv4Addr::new(255, 255, 255, 255));
+        assert_eq!(SUBNET_BROADCAST, Ipv4Addr::new(198, 19, 255, 255));
     }
 }
