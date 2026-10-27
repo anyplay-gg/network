@@ -689,7 +689,10 @@ async fn a_game_that_cannot_open_the_ring_ends_the_share() {
 async fn loss_steps_the_picture_down_the_ladder_and_the_guest_follows() {
     let (_relay, host, guest, _game) = playing(ShareMode::Watch).await;
     // The game fills a ring of the ladder's top rung, whatever the stream starts at.
-    let ring = host.workers.launches.lock().unwrap()[0].ring.clone().unwrap();
+    let ring = host.workers.launches.lock().unwrap()[0]
+        .ring
+        .clone()
+        .unwrap();
     assert_eq!((ring.width, ring.height, ring.fps), (1920, 1080, 60));
     let first = host.workers.setups(Role::Host)[0].clone();
     assert_eq!(first.epoch, 0);

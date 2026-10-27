@@ -1549,7 +1549,10 @@ mod tests {
     fn a_new_size_or_frame_rate_starts_a_new_epoch() {
         let mut s = start();
         assert_eq!(retune(&mut s, &target(960, 540, 30, 2_000)), Retune::Shape);
-        assert_eq!((s.epoch, s.width, s.height, s.fps, s.kbps), (1, 960, 540, 30, 2_000));
+        assert_eq!(
+            (s.epoch, s.width, s.height, s.fps, s.kbps),
+            (1, 960, 540, 30, 2_000)
+        );
         assert_eq!(retune(&mut s, &target(1280, 720, 60, 6_000)), Retune::Shape);
         assert_eq!((s.epoch, s.height, s.fps), (2, 720, 60));
         // the codec and the datagram size stay
