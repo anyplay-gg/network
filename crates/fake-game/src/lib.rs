@@ -8,8 +8,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyplay_bridge_protocol::{
-    Activate, ActivateResult, Auth, Bind, BindResult, Decoder, Frame, Hello, Kind, Message,
-    Nonce, Role, SessionKind, ShareMode, ShareOpen, SharePad, ShareResult, State, TrafficHeader,
+    Activate, ActivateResult, Auth, Bind, BindResult, Decoder, Frame, Hello, Kind, Message, Nonce,
+    Role, SessionKind, ShareMode, ShareOpen, SharePad, ShareResult, State, TrafficHeader,
     Transport, WebReply, WebRequest, Welcome, proof, verify,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
