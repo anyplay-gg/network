@@ -183,10 +183,14 @@ mod real_window {
 
     use super::{WORKER, screen_access};
 
+    /// One test at a time has Calculator: the next one starts it again after this one closed it.
+    static ONE_AT_A_TIME: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     /// Calculator, started for the test and closed after it.
     struct Calculator {
         pid: u32,
         started_here: bool,
+        _turn: std::sync::MutexGuard<'static, ()>,
     }
 
     fn pid_of_calculator() -> Option<u32> {
@@ -215,6 +219,7 @@ mod real_window {
                 "granted",
                 "the CI runner is expected to allow Screen Recording"
             );
+            let turn = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
             let started_here = pid_of_calculator().is_none();
             Command::new("open")
                 .args(["-a", "Calculator"])
@@ -225,7 +230,11 @@ mod real_window {
                 if let Some(pid) = pid_of_calculator() {
                     // The window needs a moment to be drawn.
                     std::thread::sleep(Duration::from_secs(3));
-                    return Some(Calculator { pid, started_here });
+                    return Some(Calculator {
+                        pid,
+                        started_here,
+                        _turn: turn,
+                    });
                 }
                 std::thread::sleep(Duration::from_millis(250));
             }
