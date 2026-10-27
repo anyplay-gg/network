@@ -671,20 +671,35 @@ mod tests {
             .oversize_backlog
             .load(std::sync::atomic::Ordering::Relaxed);
         assert!(backlog > 9_000, "only {backlog} dropped");
-        // Let the sender hit its timeouts on the stalled streams: it neither grows nor ends.
+        // The sender stalls only once the connection's stream limit or windows are used up. How
+        // many of the 10_000 packets above reached the queue before that depends on how the
+        // sender task and this loop interleave: on a slow shared runner the sender can keep up
+        // with the whole burst and nothing has stalled yet. So keep feeding it, paced, until a
+        // queued packet expires (the stall happened), up to 20 s. The bound on the tasks is
+        // checked all the while.
+        let expired = || {
+            drops
+                .oversize_expired
+                .load(std::sync::atomic::Ordering::Relaxed)
+        };
+        let stalled_by = Instant::now() + Duration::from_secs(20);
+        let mut peak = peak;
+        while expired() == 0 && Instant::now() < stalled_by {
+            for _ in 0..64 {
+                send_datagram(&dialed, &oversize, &drops, 1, 1, &game);
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            peak = peak.max(alive_tasks());
+        }
+        // Then let the sender hit its timeouts on the stalled streams: it neither grows nor ends.
         tokio::time::sleep(Duration::from_millis(1500)).await;
         println!(
             "NEW tasks before={before} peak={peak} after_1.5s={}",
             alive_tasks()
         );
+        assert!(peak <= before + 1, "tasks grew with the packets");
         assert!(alive_tasks() <= before + 1);
-        assert!(
-            drops
-                .oversize_expired
-                .load(std::sync::atomic::Ordering::Relaxed)
-                > 0,
-            "queued packets neither went out nor expired"
-        );
+        assert!(expired() > 0, "queued packets neither went out nor expired");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

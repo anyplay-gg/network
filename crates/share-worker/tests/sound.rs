@@ -96,9 +96,22 @@ fn the_streamer_s_sound_is_played_by_the_viewer() {
         "80 sound datagrams in {took:?}"
     );
     let played = played.lock().unwrap();
-    // The tone's peak is 0.25; what the viewer played reaches it once the buffer filled.
-    let peak = played.iter().fold(0.0f32, |m, s| m.max(s.abs()));
-    assert!(peak > 0.15 && peak < 0.35, "peak {peak}");
+    // The tone's peak is 0.25. The single highest sample is no measure of the level: Opus
+    // overshoots on the first packets after a start and where a late packet was concealed or
+    // rebuilt, and a slow, shared runner (macOS in CI) stalls the pipeline often enough to hit
+    // that, with peaks of 0.39. The level of the tone is what most of its audible samples
+    // reach (their 90th percentile, 0.25 * sin(0.45 pi) for a sine), and no sample may be near
+    // double the gain.
+    let mut audible: Vec<f32> = played
+        .iter()
+        .map(|s| s.abs())
+        .filter(|s| *s > 0.05)
+        .collect();
+    audible.sort_by(f32::total_cmp);
+    let level = audible[audible.len() * 9 / 10];
+    let peak = audible.last().copied().unwrap_or(0.0);
+    assert!(level > 0.2 && level < 0.28, "level {level}, peak {peak}");
+    assert!(peak < 0.5, "level {level}, peak {peak}");
     let heard = heard(&played);
     assert!(heard > 0.4, "only {heard:.2} s of the tone were heard");
 }
