@@ -192,7 +192,7 @@ All numbers are big-endian.
 | 18 | 2 | parity | parity packets in the group, 0 to 254, with `data + parity ≤ 255` |
 | 20 | 1 to … | payload | bytes of the encoded frame, or parity over them |
 
-The bytes of the encoded frame are preceded by their length as 4 bytes (big-endian), at the start of the first data packet of the first group, so that a receiver knows the exact size even when the short last packet is lost. A receiver refuses, without a reply, a datagram that is shorter than 21 bytes, has another version, a flag bit set that must be 0, `index ≥ data + parity`, `groups` 0 or above 8, or a payload of another length than its group's other packets (the last data packet of a group may be shorter; parity packets have the length of the longest data packet). It keeps at most 4 frames in reassembly and 16 MiB in total; older ones are dropped.
+The bytes of the encoded frame are preceded by their length as 4 bytes (big-endian), at the start of the first data packet of the first group, so that a receiver knows the exact size even when the short last packet is lost. A receiver refuses, without a reply, a datagram that is shorter than 21 bytes, has another version, a flag bit set that must be 0, `index ≥ data + parity`, `groups` 0 or above 8, `parity` above 30% of `data` (rounded up; the most a sender makes), or a payload of another length than its group's other packets (the last data packet of a group may be shorter; parity packets have the length of the longest data packet). It keeps at most 4 frames in reassembly and 16 MiB in total; older ones are dropped.
 
 ### Audio datagram
 

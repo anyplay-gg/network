@@ -24,6 +24,22 @@ impl Frame {
     }
 }
 
+/// The widest or tallest picture a decoder may produce. Larger is a stream that lies about its
+/// size (or a driver that does), not a screen.
+pub const MAX_DECODED_SIDE: usize = 16_384;
+/// The most pixels a decoded picture may have: 8K (33.2 million) fits, 128 MiB of BGRA at most.
+pub const MAX_DECODED_PIXELS: usize = 1 << 25;
+
+/// `true` when a decoder may allocate and present a picture of this size. The size comes out of
+/// the remote peer's stream, so every decoder checks it before it allocates anything.
+pub fn decoded_size_ok(width: usize, height: usize) -> bool {
+    width > 0
+        && height > 0
+        && width <= MAX_DECODED_SIDE
+        && height <= MAX_DECODED_SIDE
+        && width * height <= MAX_DECODED_PIXELS
+}
+
 /// One encoded picture: what the packetiser cuts and the reassembler hands back.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EncodedFrame {
@@ -80,4 +96,21 @@ pub trait VideoDecoder {
     /// Decode one frame. A decoder that misses a reference returns
     /// [`CodecError::MissingReference`] instead of a damaged picture.
     fn decode(&mut self, frame: &EncodedFrame) -> Result<Frame, CodecError>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_stream_cannot_claim_a_picture_larger_than_a_screen() {
+        assert!(decoded_size_ok(1920, 1080));
+        assert!(decoded_size_ok(7680, 4320));
+        assert!(!decoded_size_ok(0, 1080));
+        // Each side within the cap, the product far beyond it (4 GiB of BGRA).
+        assert!(!decoded_size_ok(16_384, 16_384));
+        // A side beyond the cap on its own.
+        assert!(!decoded_size_ok(MAX_DECODED_SIDE + 1, 2));
+        assert!(!decoded_size_ok(usize::MAX, usize::MAX));
+    }
 }

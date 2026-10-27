@@ -19,7 +19,7 @@ use anyplay_net::traffic::Traffic;
 use anyplay_net::tunnel::{Options, RelayAccess, Tunnels};
 use anyplay_share::codec::{Frame, VideoDecoder};
 use anyplay_share::control::Role;
-use anyplay_share::link::{Capabilities, FromWorker, ToWorker};
+use anyplay_share::link::{Capabilities, FromWorker};
 use anyplay_share::testcodec::{TestDecoder, TestEncoder, TestPattern};
 use anyplay_share_worker::host::{self, PatternSource};
 use anyplay_share_worker::viewer::{self, DecoderFactory, FrameSink};
@@ -82,7 +82,7 @@ impl Workers for TestWorkers {
                 "tests stream the pattern"
             );
         }
-        let (to_tx, mut to_rx) = mpsc::unbounded_channel::<ToWorker>();
+        let (to_tx, mut to_rx) = anyplay_net::worker_process::to_worker_channel();
         let (from_tx, from_rx) = mpsc::channel::<FromWorker>(4096);
         let (worker_in_tx, worker_in) = std::sync::mpsc::channel();
         let (worker_out, worker_out_rx) = std::sync::mpsc::channel::<FromWorker>();
