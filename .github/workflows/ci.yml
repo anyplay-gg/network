@@ -64,6 +64,9 @@ jobs:
         env:
           # Apple's software H.264 encoder is in every macOS: the macOS tests must find it.
           ANYPLAY_REQUIRE_VT: ${{ runner.os == 'macOS' && '1' || '0' }}
+          # GitHub's macOS runner allows Screen Recording and has a desktop: the tests capture a
+          # real window (Calculator).
+          ANYPLAY_MAC_CAPTURE_TEST: ${{ runner.os == 'macOS' && '1' || '0' }}
 
   # The net service as released: with the real microphone and speakers (feature `devices`, cpal).
   # On Linux that needs the ALSA headers, so only this job installs them; the jobs above build
