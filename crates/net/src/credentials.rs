@@ -145,6 +145,50 @@ impl Store {
     }
 }
 
+/// One thread applies the saves of a sign-in in the order they were queued, so a sign-out can
+/// never be undone by an earlier save that happens to finish later.
+#[derive(Clone)]
+pub struct SaveQueue {
+    jobs: std::sync::mpsc::Sender<Job>,
+}
+
+enum Job {
+    Save(Option<Saved>),
+    #[cfg(test)]
+    Flush(std::sync::mpsc::Sender<()>),
+}
+
+impl SaveQueue {
+    pub fn new(store: Store) -> Self {
+        let (jobs, rx) = std::sync::mpsc::channel::<Job>();
+        std::thread::spawn(move || {
+            for job in rx {
+                match job {
+                    Job::Save(saved) => store.save(saved.as_ref()),
+                    #[cfg(test)]
+                    Job::Flush(done) => {
+                        let _ = done.send(());
+                    }
+                }
+            }
+        });
+        SaveQueue { jobs }
+    }
+
+    pub fn save(&self, saved: Option<Saved>) {
+        let _ = self.jobs.send(Job::Save(saved));
+    }
+
+    /// Returns once everything queued before this call is written.
+    #[cfg(test)]
+    pub fn flush(&self) {
+        let (done, wait) = std::sync::mpsc::channel();
+        if self.jobs.send(Job::Flush(done)).is_ok() {
+            let _ = wait.recv();
+        }
+    }
+}
+
 fn to_json(saved: &Saved) -> String {
     serde_json::to_string(saved).unwrap_or_default()
 }
@@ -153,6 +197,9 @@ fn to_json(saved: &Saved) -> String {
 /// Windows the file inherits the per-user data folder's access rules.
 pub(crate) fn write_private(path: &std::path::Path, text: &str) -> Result<(), String> {
     use std::io::Write;
+    // Writers share the temporary name per path, so one at a time.
+    static WRITING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _writing = WRITING.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
@@ -191,6 +238,55 @@ mod tests {
         store.save(None);
         assert_eq!(store.load(), None);
         store.save(None);
+    }
+
+    #[test]
+    fn queued_saves_land_in_order_and_a_sign_out_stays() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path(), "https://cloud.example/", true);
+        for round in 0..50 {
+            let queue = SaveQueue::new(store.clone());
+            for n in 0..20 {
+                queue.save(Some(Saved {
+                    device: n,
+                    refresh: format!("r{round}-{n}"),
+                    key: None,
+                }));
+            }
+            queue.save(None);
+            queue.flush();
+            assert_eq!(store.load(), None, "round {round}");
+            queue.save(Some(Saved {
+                device: 1,
+                refresh: "last".into(),
+                key: None,
+            }));
+            queue.flush();
+            assert_eq!(store.load().map(|s| s.refresh), Some("last".to_owned()));
+            queue.save(None);
+            queue.flush();
+        }
+    }
+
+    #[test]
+    fn concurrent_private_writes_never_fail_or_mix() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("f.json");
+        let threads: Vec<_> = (0..8)
+            .map(|t| {
+                let path = path.clone();
+                std::thread::spawn(move || {
+                    for n in 0..30 {
+                        write_private(&path, &format!("{t}-{n}")).unwrap();
+                    }
+                })
+            })
+            .collect();
+        for t in threads {
+            t.join().unwrap();
+        }
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains('-') && text.len() <= 4, "{text}");
     }
 
     #[test]
