@@ -168,6 +168,13 @@ pub fn find_window(target: &WindowTarget) -> Result<Retained<SCWindow>, String> 
     }
 }
 
+/// The reason when the system never answered the start of a stream.
+const NOT_IN_TIME: &str = "the system did not start the capture in time";
+
+/// How often a start the system never answered is tried again. On a loaded machine (a CI
+/// runner right after another capture ended) the first start can be lost; a later one works.
+const START_TRIES: usize = 3;
+
 /// Starts a stream and waits until the system says it runs.
 fn start(stream: &SCStream) -> Result<(), String> {
     connect_to_window_server();
@@ -187,7 +194,7 @@ fn start(stream: &SCStream) -> Result<(), String> {
     match rx.recv_timeout(ANSWER) {
         Ok(None) => Ok(()),
         Ok(Some(why)) => Err(why),
-        Err(_) => Err("the system did not start the capture in time".into()),
+        Err(_) => Err(NOT_IN_TIME.into()),
     }
 }
 
@@ -427,6 +434,16 @@ impl SckSource {
     /// Starts capturing `window`. Fails with a reason that [`is_permission_error`] recognises
     /// when Screen Recording is not allowed.
     pub fn open(window: &SCWindow) -> Result<SckSource, String> {
+        let mut tries = 1;
+        loop {
+            match Self::open_once(window) {
+                Err(why) if why == NOT_IN_TIME && tries < START_TRIES => tries += 1,
+                other => return other,
+            }
+        }
+    }
+
+    fn open_once(window: &SCWindow) -> Result<SckSource, String> {
         // SAFETY: plain construction and configuration of ScreenCaptureKit objects, and calls
         // that retain what they are given.
         unsafe {

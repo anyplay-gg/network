@@ -331,7 +331,7 @@ mod real_window {
             }
         });
         let wait = |event: &str| {
-            let deadline = Instant::now() + Duration::from_secs(40);
+            let deadline = Instant::now() + Duration::from_secs(60);
             loop {
                 let left = deadline.saturating_duration_since(Instant::now());
                 let line = rx.recv_timeout(left).expect("an event in time");
