@@ -38,7 +38,14 @@ struct Stage {
 }
 
 fn ring_name() -> String {
+    // The clock alone repeats on a coarse clock (Windows, macOS) when tests start together.
+    static COUNT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
     let mut random = [3u8; 16];
+    random[12..].copy_from_slice(
+        &COUNT
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            .to_le_bytes(),
+    );
     random[..4].copy_from_slice(&std::process::id().to_le_bytes());
     random[4..12].copy_from_slice(
         &(std::time::SystemTime::now()
