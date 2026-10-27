@@ -14,5 +14,6 @@ path = "src/main.rs"
 
 [dependencies]
 anyplay-bridge-protocol = { path = "../bridge-protocol" }
+rand = "0.10"
 serde_json.workspace = true
 tokio = { version = "1.54", features = ["rt-multi-thread", "macros", "net", "io-util", "sync", "time"] }

@@ -6,17 +6,23 @@
 use std::fmt;
 use std::net::Ipv4Addr;
 
+mod auth;
 mod payload;
 
+pub use auth::{
+    CONTEXT, NONCE_LEN, Nonce, PROOF_LEN, Proof, Role, hmac_sha256, proof, same, sha256, verify,
+};
 pub use payload::{Reader, Writer};
 
-/// The protocol version this crate speaks.
-pub const VERSION: u16 = 0;
+/// The protocol version this crate speaks. Version 1 authenticates with proofs instead of sending
+/// the token (ADR 0039).
+pub const VERSION: u16 = 1;
 
 /// The largest payload a frame may carry.
 pub const MAX_PAYLOAD: usize = 16 * 1024 * 1024;
 
-/// The largest payload the hello frame may carry. A connection that sends more before hello is closed.
+/// The largest payload a frame may carry until the handshake is done (hello, challenge and auth).
+/// A connection that sends more before then is closed.
 pub const MAX_HELLO_PAYLOAD: usize = 1024;
 
 /// The size of the key that opens a game traffic stream.
@@ -32,6 +38,8 @@ impl Kind {
     pub const HELLO: Kind = Kind(0x0001);
     pub const WELCOME: Kind = Kind(0x0002);
     pub const REJECT: Kind = Kind(0x0003);
+    pub const CHALLENGE: Kind = Kind(0x0004);
+    pub const AUTH: Kind = Kind(0x0005);
     pub const UNSUPPORTED: Kind = Kind(0x8000);
     pub const STATE: Kind = Kind(0x0101);
     pub const FEATURE: Kind = Kind(0x0102);
@@ -224,12 +232,14 @@ impl Decoder {
     }
 }
 
-/// Every message of version 0.
+/// Every message of the current version.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Message {
     Hello(Hello),
     Welcome(Welcome),
     Reject(Reject),
+    Challenge(Challenge),
+    Auth(Auth),
     Unsupported,
     State(State),
     Feature { user_id: i32, feature: u32 },
@@ -265,6 +275,8 @@ impl Message {
             Message::Hello(_) => Kind::HELLO,
             Message::Welcome(_) => Kind::WELCOME,
             Message::Reject(_) => Kind::REJECT,
+            Message::Challenge(_) => Kind::CHALLENGE,
+            Message::Auth(_) => Kind::AUTH,
             Message::Unsupported => Kind::UNSUPPORTED,
             Message::State(_) => Kind::STATE,
             Message::Feature { .. } => Kind::FEATURE,
@@ -301,7 +313,7 @@ impl Message {
         match self {
             Message::Hello(m) => {
                 w.u16(m.version);
-                w.raw(&m.token);
+                w.raw(&m.nonce);
             }
             Message::Welcome(m) => {
                 w.u16(m.version);
@@ -310,6 +322,12 @@ impl Message {
                 w.raw(&m.stream_key);
             }
             Message::Reject(m) => w.raw(m.reason.as_bytes()),
+            Message::Challenge(m) => {
+                w.u16(m.version);
+                w.raw(&m.nonce);
+                w.raw(&m.proof);
+            }
+            Message::Auth(m) => w.raw(&m.proof),
             Message::Unsupported => {}
             Message::State(m) => {
                 w.u8(m.signed_in as u8);
@@ -438,7 +456,7 @@ impl Message {
         let message = match kind {
             Kind::HELLO => Message::Hello(Hello {
                 version: r.u16()?,
-                token: r.rest().to_vec(),
+                nonce: r.rest().to_vec(),
             }),
             Kind::WELCOME => {
                 let version = r.u16()?;
@@ -452,6 +470,12 @@ impl Message {
             Kind::REJECT => Message::Reject(Reject {
                 reason: String::from_utf8_lossy(r.rest()).into_owned(),
             }),
+            Kind::CHALLENGE => Message::Challenge(Challenge {
+                version: r.u16()?,
+                nonce: r.array()?,
+                proof: r.array()?,
+            }),
+            Kind::AUTH => Message::Auth(Auth { proof: r.array()? }),
             Kind::UNSUPPORTED => Message::Unsupported,
             Kind::STATE => Message::State(State {
                 signed_in: r.u8()? != 0,
@@ -586,11 +610,31 @@ impl Message {
     }
 }
 
-/// The bridge's first frame: the version it speaks and the secret of this game start.
+/// The bridge's first frame: the version it speaks and its nonce for this connection.
+///
+/// The first [`NONCE_LEN`] bytes of `nonce` are the nonce; a receiver ignores the rest. A bridge of
+/// version 0 sent the token here, which is why the field takes the rest of the payload: a net
+/// service can read the version of any bridge and answer an old one with a clear reject.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Hello {
     pub version: u16,
-    pub token: Vec<u8>,
+    pub nonce: Vec<u8>,
+}
+
+/// The net service's answer to hello: its own nonce, and its proof that it knows the token.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Challenge {
+    pub version: u16,
+    pub nonce: Nonce,
+    /// `proof(token, Role::Service, bridge nonce, service nonce)`.
+    pub proof: Proof,
+}
+
+/// The bridge's proof that it knows the token; the net service answers with welcome or reject.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Auth {
+    /// `proof(token, Role::Bridge, bridge nonce, service nonce)`.
+    pub proof: Proof,
 }
 
 /// The net service's acceptance: the version both sides use from now on, and where game traffic

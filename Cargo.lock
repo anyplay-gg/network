@@ -192,6 +192,7 @@ name = "anyplay-fake-game"
 version = "0.0.0"
 dependencies = [
  "anyplay-bridge-protocol",
+ "rand 0.10.3",
  "serde_json",
  "tokio",
 ]
