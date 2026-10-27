@@ -1,6 +1,6 @@
 # Voice is an engine without a transport
 
-Party voice is the crate `anyplay-voice`: bytes in, bytes out, with the sound hardware behind a trait. It encodes with libopus, suppresses noise with RNNoise, runs its own jitter buffer and mixer, and knows nothing about parties, accounts or tunnels. The net service gives it datagrams from the tunnels and sends the datagrams it returns ([ADR 0010](0010-voice-and-shared-play-go-through-the-tunnels.md)). Push-to-talk is the default, and there is no echo cancellation: a player who opens the microphone without headphones is heard by the others as an echo of their own party. The hardware (cpal) is behind the cargo feature `devices`, so builds and tests need no audio headers.
+Party voice is the crate `anyplay-voice`: bytes in, bytes out, with the sound hardware behind a trait. It encodes with libopus, suppresses noise with RNNoise, runs its own jitter buffer and mixer, and knows nothing about parties, accounts or tunnels. The net service gives it datagrams from the tunnels and sends the datagrams it returns ([ADR 0010](0010-voice-and-shared-play-go-through-the-tunnels.md)). Push-to-talk is the default, and there was no echo cancellation (since [ADR 0040](0040-voice-cancels-echo-with-aec3-in-pure-rust.md) there is): a player who opens the microphone without headphones is heard by the others as an echo of their own party. The hardware (cpal) is behind the cargo feature `devices`, so builds and tests need no audio headers.
 
 ## Considered options
 
