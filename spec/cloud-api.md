@@ -229,7 +229,7 @@ The cloud remembers the people an account shared a party or a session with, so t
 - **Blocks.** A block in either direction leaves the entry out of the answer, and none is recorded while it holds. Removing the block shows the entry again if it has not expired.
 - **Friends.** `friend` is true when the two are friends now, so a client offers "Add friend" only when it is false. Adding, profile and blocking are the calls of [Friends and blocks](#friends-and-blocks) and [Profiles](#profiles-avatars-and-playtime) on the entry's account.
 - **Switch.** `remember` is true for a new account. `PUT /v1/me/played-with/remember` with `{remember_played_with: true | false}` sets it and answers the same object. While it is false the cloud records no new entry for this account, and the list it already holds stays until the player clears it. The other account's entry for this one follows that account's own switch. The setting is a call of its own, like [Appearing offline](#appearing-offline): it is not part of `Privacy`, so a client that edits the six audiences never resets it.
-- **Clearing.** `DELETE /v1/me/played-with` removes every entry of the account. It does not remove the account from the lists of the people it played with.
+- **Clearing.** `DELETE /v1/me/played-with` removes every entry of the account. It does not remove the account from the lists of the people it played with, and people who are together with the account at that moment are not put back: only a pair that comes together after the clearing is remembered again.
 - **Deleting.** An entry is deleted with either of its two accounts. The list and the setting are part of `GET /v1/me/export`.
 
 ## Sessions
