@@ -91,7 +91,7 @@ Only the host: `share_mode {mode}`, or a button in the launcher. The host's net 
 |---|---|
 | The host presses **Stop** in the launcher or in its always-visible indicator | The net service closes the share connection with code 2, tells the bridge `share_close`, tells the cloud `DELETE /v1/share`. |
 | The host holds **select and start together for one second** on their pad | The engine tells the bridge, the bridge tells the net service (`override`). In `hand_over` and `together` the mode returns to `watch` at once. In `watch` the share stops. |
-| The host presses the **stop key** on the keyboard | As the chord. The key is in the engine's input table beside the screenshot key. |
+| The host presses the **stop key** on the keyboard (F8 by default) | The share stops at once, in every mode: the engine tells the bridge `override` with action 2 and the guest pad is neutral in the same step. (The chord first steps back to `watch` and stops only from there.) The key is in the engine's input table beside the screenshot key. |
 | The guest leaves, or closes the viewer | Code 3. The host sees a notice. |
 | The game ends | The net service sees `game_end` and stops the share. |
 | The launcher closes or the net service ends | The connection closes, the cloud ends the share after its grace time. |
@@ -142,7 +142,7 @@ Created by the worker; the engine maps it when the bridge tells it the name. One
 | 40 | 8 | audio write position, in frames, written by the engine |
 | 48 | 16 | reserved, zero |
 
-The width and the height are even, and at most 3840 by 2160, so that every slot starts on a multiple of 8 bytes, where its `seq` is read atomically. The header is 64 bytes. After the header come the slots, each with a 32-byte slot header and `stride × height` bytes, then the audio ring. A slot header holds `seq: u64` (written last, 0 while the engine writes), `present_us: u64` (the engine's monotonic clock when the picture was presented), `kind: u32` (0 for pixels in the slot; 1 reserved for a GPU handle) and `frame: u32` (the game's flip count). The consumer reads the slot with the highest `seq` it has not seen, copies or uses it, and reads `seq` again; if it changed, the slot was overwritten and the consumer drops the frame. The audio ring is a plain single-producer ring of stereo float frames.
+The width and the height are even, and at most 3840 by 2160, so that every slot starts on a multiple of 8 bytes, where its `seq` is read atomically. The header is 64 bytes. After the header come the slots, each with a 32-byte slot header and `stride × height` bytes, then the audio ring. A slot header holds `seq: u64` (written last, 0 while the engine writes), `present_us: u64` (the engine's monotonic clock when the picture was submitted for presentation; informational, the stream does not use it), `kind: u32` (0 for pixels in the slot; 1 reserved for a GPU handle) and `frame: u32` (the engine's count of presented pictures). The consumer reads the slot with the highest `seq` it has not seen, copies or uses it, and reads `seq` again; if it changed, the slot was overwritten and the consumer drops the frame. The audio ring is a plain single-producer ring of stereo float frames.
 
 The name is random for each share (`anyplay-` and 16 hex digits, 24 characters, so that it fits macOS's 31-byte limit for a shared memory name) and the mapping is readable only by the user who runs the game; the engine opens it without a namespace prefix ([bridge protocol](bridge-protocol.md#share-play-0x05xx)). On Windows it is a named file mapping in the local namespace; on Linux a `shm_open` object. Nothing else is shared: pad states do not use the ring.
 
@@ -184,7 +184,7 @@ All numbers are big-endian.
 | 2 | 1 | flags | bit 0 key frame, bit 1 parity packet; bits 2 to 7 must be 0 |
 | 3 | 1 | epoch | counts stream changes (codec, size); a packet from another epoch than the current is dropped |
 | 4 | 4 | frame | counts the frames sent, wrapping |
-| 8 | 4 | timestamp | host microseconds at capture (`present_us` of the ring), wrapping at 2^32 |
+| 8 | 4 | timestamp | host microseconds when the worker takes the picture from the ring (version 0: its system clock, see [measuring the delay](#how-it-is-measured)), wrapping at 2^32 |
 | 12 | 1 | group | which group of the frame |
 | 13 | 1 | groups | number of groups, 1 to 8 |
 | 14 | 2 | index | place in the group: data packets first, then parity |
