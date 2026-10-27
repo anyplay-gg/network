@@ -248,6 +248,11 @@ mod real_window {
                 let _ = Command::new("osascript")
                     .args(["-e", "quit app \"Calculator\""])
                     .status();
+                // The next test starts it again: wait until it is really gone.
+                let deadline = Instant::now() + Duration::from_secs(15);
+                while pid_of_calculator().is_some() && Instant::now() < deadline {
+                    std::thread::sleep(Duration::from_millis(200));
+                }
             }
         }
     }
