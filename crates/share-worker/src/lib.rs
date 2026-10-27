@@ -14,6 +14,7 @@ pub mod annexb;
 pub mod broadcast;
 pub mod capture;
 pub mod clips;
+pub mod gamepad;
 pub mod host;
 pub mod input;
 pub mod limits;

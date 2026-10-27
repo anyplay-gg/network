@@ -274,6 +274,8 @@ The guest's viewer reads the guest's pad (or keyboard, mapped to a pad by the vi
 
 There is no home button, no touch, no motion, no keyboard and no mouse in version 0. The names are neutral; the engine maps them to the buttons its pad layer knows.
 
+The viewer reads the first connected gamepad and the keyboard map together, and only while its window has the focus. Buttons are OR'd; per stick axis the value farther from the middle wins; per trigger the larger wins. Sticks have a round dead zone (0.15) and triggers a small one (0.05). An unplugged pad is neutral, and a viewer with no gamepad backend plays on the keyboard alone. The pad click has no button on most systems' pad lists, so it stays on the keyboard.
+
 ### Pad datagram
 
 | Offset | Size | Field | |

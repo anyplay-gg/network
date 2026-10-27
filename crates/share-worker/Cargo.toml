@@ -89,6 +89,9 @@ objc2-video-toolbox = "0.3"
 # The viewer's window (MIT or Apache-2.0), on Windows and on Linux (X11 and Wayland).
 [target.'cfg(any(windows, target_os = "linux"))'.dependencies]
 minifb = "0.29"
+# The guest's gamepad beside the keyboard (Apache-2.0 or MIT; WGI on Windows, evdev on Linux).
+# Only the pad's buttons, sticks and triggers are read, in `gamepad.rs`.
+gilrs = { version = "0.11", default-features = false, features = ["wgi"] }
 
 [dev-dependencies]
 anyplay-control = { path = "../control" }

@@ -5,6 +5,7 @@ use anyplay_share::codec::Frame;
 use anyplay_share::pad::PadState;
 use minifb::{Key, ScaleMode, Window, WindowOptions};
 
+use crate::gamepad::{GamepadSource, GuestPad};
 use crate::input::{PadKey, pad_from_keys};
 use crate::viewer::FrameSink;
 
@@ -18,7 +19,7 @@ pub struct WindowSink {
     buffer: Vec<u32>,
     size: (usize, usize),
     closed: bool,
-    pad: bool,
+    pad: Option<GuestPad>,
 }
 
 impl WindowSink {
@@ -29,13 +30,20 @@ impl WindowSink {
             buffer: Vec::new(),
             size: (0, 0),
             closed: false,
-            pad: false,
+            pad: None,
         }
     }
 
-    /// The window also reads the guest's pad from the keyboard (share play, not share screen).
+    /// The window also reads the guest's pad (share play, not share screen): the keyboard, and
+    /// the first connected gamepad merged in (`crate::gamepad`).
     pub fn with_pad(mut self) -> WindowSink {
-        self.pad = true;
+        self.pad = Some(GuestPad::system());
+        self
+    }
+
+    /// Like [`WindowSink::with_pad`], with the gamepad from `source`.
+    pub fn with_pad_source(mut self, source: Box<dyn GamepadSource>) -> WindowSink {
+        self.pad = Some(GuestPad::new(source));
         self
     }
 
@@ -117,12 +125,11 @@ impl FrameSink for WindowSink {
     }
 
     fn pad(&mut self) -> Option<PadState> {
-        if !self.pad {
-            return None;
-        }
+        let pad = self.pad.as_mut()?;
         let window = self.window.as_ref().filter(|w| w.is_active())?;
         // Only the keys of the pad are asked about; a key of the window's own (Escape) is not.
-        Some(pad_from_keys(|key| window.is_key_down(minifb_key(key))))
+        let keyboard = pad_from_keys(|key| window.is_key_down(minifb_key(key)));
+        Some(pad.read(keyboard))
     }
 }
 
