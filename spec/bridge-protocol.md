@@ -1,6 +1,6 @@
 # Bridge protocol
 
-The messages between the bridge in an AnyPS5 build and the net service. Version 0, a draft: it changes without notice until version 1.
+The messages between the bridge in an AnyPS5 build and the net service. Version 1, a draft: it changes without notice until the protocol is declared stable. Version 1 replaced the raw token in `hello` with a mutual challenge ([Authentication](#authentication), [ADR 0039](../docs/adr/0039-the-bridge-proves-the-token-instead-of-sending-it.md)); version 0 is no longer spoken.
 
 The Rust reference is [`crates/bridge-protocol`](../crates/bridge-protocol). The bridge side lives in C++ inside AnyPS5 and must match this file, not the Rust code.
 
@@ -8,11 +8,12 @@ The Rust reference is [`crates/bridge-protocol`](../crates/bridge-protocol). The
 
 - The launcher starts the game with two variables:
   - `ANYPS5_NET_ENDPOINT`: `127.0.0.1:<port>` where the net service listens;
-  - `ANYPS5_NET_TOKEN`: a random secret for this one game start, as lowercase hex.
+  - `ANYPS5_NET_TOKEN`: a random secret for this one game start, as lowercase hex. It is the key of the handshake and is never sent over the connection.
 - Without both variables the bridge stays off, and every network library behaves as it does today: offline and signed out.
-- The bridge opens one TCP connection to the endpoint and sends **hello** as its first frame. The payload of the hello frame is at most 1024 bytes, and a larger first frame closes the connection. The net service answers **welcome** or **reject**, then closes the connection after a reject. Nothing else is sent before welcome.
+- The bridge opens one TCP connection to the endpoint and sends **hello** as its first frame. The net service answers **challenge**, the bridge answers **auth**, and the net service answers **welcome** or **reject** and closes the connection after a reject ([Authentication](#authentication)). Nothing else is sent before welcome.
+- Until the handshake is done a frame carries at most 1024 bytes of payload, and a connection that sends a larger frame is closed. The handshake has 5 seconds, from the connection to the auth frame, and a connection that has not finished by then is closed.
 - The net service accepts connections from loopback addresses only, and one connection per token at a time; a new connection with the same token replaces the old one.
-- When the connection breaks, the bridge reports the player as signed out to the game and connects again every 2 seconds with the same token.
+- When the connection breaks, the bridge reports the player as signed out to the game and connects again every 2 seconds with the same token and a new handshake with new nonces.
 
 ## Frames
 
@@ -54,12 +55,54 @@ A payload may be longer than the fields its receiver knows; the receiver ignores
 
 | Kind | Name | Direction | Payload |
 |---|---|---|---|
-| `0x0001` | hello | bridge → service | `version: u16`, then the token as raw bytes (the decoded hex); at most 1024 bytes |
+| `0x0001` | hello | bridge → service | `version: u16`, `nonce: 32 bytes` |
 | `0x0002` | welcome | service → bridge | `version: u16` (the version both sides will use), `udp_port: u16`, `tcp_port: u16`, `stream_key: 16 bytes` |
 | `0x0003` | reject | service → bridge | a UTF-8 reason for the log |
+| `0x0004` | challenge | service → bridge | `version: u16`, `nonce: 32 bytes`, `proof: 32 bytes` |
+| `0x0005` | auth | bridge → service | `proof: 32 bytes` |
 | `0x8000` | unsupported | either way | empty; the reply to a request of unknown kind |
 
 `udp_port` and `tcp_port` are the net service's loopback ports for game traffic (see below); 0 means the net service carries no game traffic.
+
+#### Authentication
+
+The bridge and the net service both know the token of the game start (`ANYPS5_NET_TOKEN`, decoded from hex; 1 to 512 bytes, 32 in practice). Each proves that it knows it with an HMAC over fresh values from both sides, and neither sends it.
+
+1. **hello**: the bridge sends the `version` it speaks (1) and its `nonce`, 32 random bytes from the system's secure random source. The payload may be longer than 34 bytes, within the 1024-byte limit; the receiver ignores the bytes after the nonce.
+2. The net service checks the version and answers **challenge** with its own `nonce` (32 random bytes, fresh for this connection) and its `proof`.
+3. The bridge recomputes the service's proof. If it differs, the bridge closes the connection, logs that the net service did not prove the token, and sends nothing more: it never answers an impostor. Otherwise it sends **auth** with its own `proof`.
+4. The net service recomputes the bridge's proof. It answers **welcome** if the proof matches the token of the running game start, else **reject** and closes the connection.
+
+A **proof** is HMAC-SHA-256 ([RFC 2104](https://www.rfc-editor.org/rfc/rfc2104)) keyed with the token over:
+
+| Part | Size | Content |
+|---|---|---|
+| context | 17 | the ASCII bytes `AnyPlay bridge v1` |
+| role | 1 | `01` for the bridge's proof, `02` for the net service's |
+| bridge nonce | 32 | the `nonce` of hello |
+| service nonce | 32 | the `nonce` of challenge |
+
+The context and the role make a proof of one side worthless as the other's: a reflected proof does not verify. The nonces of both sides make every proof single-use: a recorded challenge or auth fits no other connection, because the other side picks a new nonce. A receiver compares proofs in constant time (the time does not depend on where they differ). A key longer than the 64-byte block of SHA-256 is hashed first, as RFC 2104 says.
+
+What this gives against a process on the same PC that listens in on the loopback port or connects to it: it learns no token from the bytes it sees (the token is not in them, and an HMAC does not reveal its key); it cannot replay a recording; it cannot pose as the net service to a bridge, or as a bridge to the net service, without the token. It does not protect the game traffic that follows, which is plain loopback traffic, nor against a process that can already read the token from the game's environment or memory.
+
+**Rejects.** The reason text is for the log and not for parsing. A net service rejects with: no game is starting, a version it does not speak, a hello with no nonce, a proof that does not match, or a game start that changed during the handshake. It closes without a word on a first frame that is not hello, a second frame that is not auth, a frame over the limit, a payload that does not parse, or the time running out.
+
+**Versions.** The `version` of hello is the version both sides speak, and this is version 1. A net service that gets another version in hello answers with a reject that names both versions and says to update, then closes. A bridge that gets a reject logs the reason and tries again after 2 seconds like after any other failure. So a bridge of version 0 (which sent the token in hello) meets a clear reject from a net service of version 1. A bridge of version 1 meets a net service of version 0 as a reject that says the token does not match (version 0 reads the nonce as the token), and that net service learns only a random nonce. The launcher ships a net service and a bridge that match.
+
+##### Test vectors
+
+Both implementations (`anyplay_bridge_protocol::proof` in the net service and `NetBridgeAuth::MakeProof` in the bridge) check these bytes. In all of them the bridge nonce is `20 21 22 … 3f` and the service nonce is `40 41 42 … 5f` (32 bytes counting up).
+
+| Token | Role | Proof |
+|---|---|---|
+| `00 01 02 … 1f` (32 bytes counting up) | bridge (`01`) | `13d46f7dc5c37ff12cf336554acb4e1981ffbcc22ce374d68289bed0fd8f9651` |
+| `00 01 02 … 1f` | service (`02`) | `f4ec03176babba0072aaf8625da4e41230e772613a0062121d5597db8cffbf69` |
+| `73 65 63 72 65 74 01 fe` (8 bytes) | bridge | `c561da91325fb75af59d36d89ff0057ffa6f832333ef35ce9719a3e991ec2fa3` |
+| `73 65 63 72 65 74 01 fe` | service | `1a6117546f912bebe685c274f3bfc080292dee261310c8941a6bd530567bd792` |
+| `aa` repeated 100 times (longer than the HMAC block) | bridge | `a68cfdba801506b73275bad33fdb8b28a8d36e4e7d5f14ca82178ea2593f122f` |
+
+The hello frame with the bridge nonce above is 46 bytes: `22 00 00 00` (length 34), `01 00` (kind), `00 00` (flags), `00 00 00 00` (request), `01 00` (version 1), then `20 21 … 3f`.
 
 ### Sign-in state (`0x01xx`)
 

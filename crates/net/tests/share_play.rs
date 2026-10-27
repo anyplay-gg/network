@@ -81,19 +81,16 @@ async fn connect_game() -> (
     UnboundedReceiver<BridgeInput>,
 ) {
     let (tx, mut inputs) = mpsc::unbounded_channel();
-    let port = bridge::listen(tx).await.expect("the listener");
+    let tokens = bridge::Tokens::fixed(vec![0x0a, 0x0b, 0x0c]);
+    let port = bridge::listen(tx, tokens).await.expect("the listener");
     let endpoint = format!("127.0.0.1:{port}");
     let connecting = tokio::spawn(async move { Bridge::connect(&endpoint, "0a0b0c").await });
     let BridgeInput::Hello {
-        frames,
-        verdict,
-        token,
-        ..
+        frames, verdict, ..
     } = inputs.recv().await.expect("a hello")
     else {
         panic!("the first input is the hello");
     };
-    assert_eq!(token, [0x0a, 0x0b, 0x0c]);
     let welcome = Message::Welcome(Welcome {
         version: VERSION,
         udp_port: 0,

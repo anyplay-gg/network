@@ -8,9 +8,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyplay_bridge_protocol::{
-    Activate, ActivateResult, Bind, BindResult, Decoder, Frame, Hello, Kind, Message, SessionKind,
-    ShareMode, ShareOpen, SharePad, ShareResult, State, TrafficHeader, Transport, WebReply,
-    WebRequest, Welcome,
+    Activate, ActivateResult, Auth, Bind, BindResult, Decoder, Frame, Hello, Kind, Message, Nonce,
+    Role, SessionKind, ShareMode, ShareOpen, SharePad, ShareResult, State, TrafficHeader,
+    Transport, WebReply, WebRequest, Welcome, proof, verify,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpStream, UdpSocket};
@@ -141,9 +141,10 @@ impl Bridge {
             .map_err(|e| e.to_string())?;
         stream.set_nodelay(true).map_err(|e| e.to_string())?;
         let (mut read, mut write) = stream.into_split();
+        let bridge_nonce: Nonce = rand::random();
         let hello = Frame::event(&Message::Hello(Hello {
             version: anyplay_bridge_protocol::VERSION,
-            token,
+            nonce: bridge_nonce.to_vec(),
         }))
         .map_err(|e| e.to_string())?;
         let mut bytes = Vec::new();
@@ -152,14 +153,37 @@ impl Bridge {
 
         let mut decoder = Decoder::new();
         let mut buf = vec![0u8; 64 * 1024];
+        let mut answered = false;
         let welcome = loop {
             if let Some(frame) = decoder.next_frame().map_err(|e| e.to_string())? {
                 match frame.message().map_err(|e| e.to_string())? {
-                    Some(Message::Welcome(welcome)) => break welcome,
+                    // The net service proves the token first; only then does the bridge answer.
+                    Some(Message::Challenge(challenge)) if !answered => {
+                        if challenge.version != anyplay_bridge_protocol::VERSION
+                            || !verify(
+                                &token,
+                                Role::Service,
+                                &bridge_nonce,
+                                &challenge.nonce,
+                                &challenge.proof,
+                            )
+                        {
+                            return Err("the net service did not prove the token".into());
+                        }
+                        let proof = proof(&token, Role::Bridge, &bridge_nonce, &challenge.nonce);
+                        let auth = Frame::event(&Message::Auth(Auth { proof }))
+                            .map_err(|e| e.to_string())?;
+                        let mut bytes = Vec::new();
+                        auth.encode(&mut bytes).map_err(|e| e.to_string())?;
+                        write.write_all(&bytes).await.map_err(|e| e.to_string())?;
+                        answered = true;
+                        continue;
+                    }
+                    Some(Message::Welcome(welcome)) if answered => break welcome,
                     Some(Message::Reject(reject)) => {
                         return Err(format!("rejected: {}", reject.reason));
                     }
-                    _ => return Err("the first frame was neither welcome nor reject".into()),
+                    _ => return Err("the handshake went wrong: unexpected frame".into()),
                 }
             }
             let n = tokio::time::timeout(Duration::from_secs(5), read.read(&mut buf))

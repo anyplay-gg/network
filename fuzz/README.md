@@ -6,6 +6,7 @@ Coverage-guided fuzzing with [cargo-fuzz](https://github.com/rust-fuzz/cargo-fuz
 |---|---|---|
 | `bridge_message` | one frame payload; the first two bytes pick the kind | read or refused; a message read is written back so that it reads the same, with the same kind |
 | `bridge_stream` | the bytes of a connection, cut into pieces | every frame stays within the size limit and encodes back to itself; its message reads back the same |
+| `bridge_handshake` | the start of a connection, read with the limit that holds until the handshake is done; a token and nonces for the proofs | no frame is bigger than the limit; a proof verifies for its own role and for the exact bytes only, and the constant-time comparison agrees with `==` |
 | `traffic_header` | a game datagram or the start of a game stream | the header is exactly the first eight bytes; the rest is left as it came |
 | `voice_frame` | a voice datagram from another member of a party | read and written back to the same bytes, or refused for exactly the reason its length, version, flags or payload give |
 | `control_line` | one line between the launcher and the net service | text that is not UTF-8 is refused; a command or output read is written back so that it reads the same |
