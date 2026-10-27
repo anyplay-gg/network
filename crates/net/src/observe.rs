@@ -57,7 +57,11 @@ impl Observer {
                 if size.saturating_add(text.len() as u64) > max_file {
                     continue;
                 }
-                let _ = file.write_all(text.as_bytes()).await;
+                // tokio hands the write to a thread; without the flush the next line may measure
+                // the file before this one landed and write past the cap.
+                if file.write_all(text.as_bytes()).await.is_ok() {
+                    let _ = file.flush().await;
+                }
             }
         });
         Self {

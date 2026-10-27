@@ -1,6 +1,6 @@
 # Contributing to the AnyPlay Network
 
-Issues and pull requests from anyone are welcome here. The rules that hold in every AnyPlay repository (how to contribute, the line the project keeps, and no game data) are in the [organisation's CONTRIBUTING.md](https://github.com/anyplaynet/.github/blob/main/CONTRIBUTING.md), and the [Code of Conduct](https://github.com/anyplaynet/.github/blob/main/CODE_OF_CONDUCT.md) applies. This file adds what is specific to this repository.
+Issues and pull requests from anyone are welcome here. This repository and the [launcher](https://github.com/anyplaynet/launcher) are open; the cloud, the website, the AnyPS5 fork and the organisation's `.github` repository take contributions from the team only until 25 April 2027. The rules that hold in every AnyPlay repository (how to contribute, the line the project keeps, and no game data) are in the [organisation's CONTRIBUTING.md](https://github.com/anyplaynet/.github/blob/main/CONTRIBUTING.md), and the [Code of Conduct](https://github.com/anyplaynet/.github/blob/main/CODE_OF_CONDUCT.md) applies. This file adds what is specific to this repository.
 
 ## Before you start
 
@@ -12,7 +12,7 @@ Issues and pull requests from anyone are welcome here. The rules that hold in ev
 
 ## Build and test
 
-You need Rust 1.91 or newer. These are the commands CI runs on Windows and on Linux. A pull request needs all of them green:
+You need Rust 1.91 or newer. These are the commands CI runs on Windows, Linux and macOS. A pull request needs all of them green:
 
 ```sh
 cargo fmt --all -- --check
@@ -52,7 +52,7 @@ Never attach or link game dumps, keys, firmware, saves, platform or publisher to
 
 - One topic per pull request, small commits, English commit messages, and a description that says what changed and why.
 - Fill in the pull request template.
-- A pull request needs one review and green CI. CI also checks the links in the Markdown files, the licences of dependencies and security advisories.
+- A pull request needs one review and green CI. The first run of a first-time contributor waits for a maintainer's approval. CI also checks the links in the Markdown files, the licences of dependencies and security advisories.
 - Dependencies must suit both licences below. `cargo-deny` checks this with `deny.toml`.
 
 ## Licence

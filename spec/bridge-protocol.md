@@ -23,7 +23,7 @@ Every message is one frame. All integers are little-endian.
 |---|---|---|---|
 | 0 | 4 | `length` | Payload length in bytes, at most 16 MiB (16,777,216). |
 | 4 | 2 | `kind` | What the payload is; see below. |
-| 6 | 2 | `flags` | Senders write 0. Receivers ignore it in version 0. |
+| 6 | 2 | `flags` | Senders write 0. Receivers ignore it in version 1. |
 | 8 | 4 | `request` | 0 for an event. A request carries a number unique on this connection, and its reply carries the same number. |
 | 12 | `length` | payload | Depends on `kind`. |
 
@@ -32,7 +32,7 @@ A receiver that reads a `length` above the limit closes the connection. A frame 
 - An **event** has `request` 0 and gets no answer.
 - A **request** has a `request` number other than 0. Its **reply** has the same number and the kind of the request with the top bit set (`kind | 0x8000`).
 - A receiver that does not know the kind of a request answers with **unsupported** (`0x8000`, empty payload) and the request's number.
-- Only the bridge sends requests in version 0. Several may be open at once; replies can come in any order.
+- The bridge sends most requests. The net service sends one, `share open` (`0x0501`, [Share play](#share-play-0x05xx)). Several may be open at once; replies can come in any order.
 
 ## Payloads
 
@@ -112,7 +112,7 @@ The hello frame with the bridge nonce above is 46 bytes: `22 00 00 00` (length 3
 | `0x0102` | feature | bridge → service | `user_id: i32`, `feature: u32` |
 
 - **state** comes right after welcome and again whenever a field changes. The bridge keeps the last one and answers the game's questions about sign-in, identity and NAT from it without waiting.
-  - `signed_in` is 1 while the player is signed in to the network and not banned, else 0. The online-permission check does not follow it yet. [ADR 0021](../docs/adr/0021-the-line-is-drawn-at-the-law.md) makes it follow: signed in and not banned, for the AnyPlay network only.
+  - `signed_in` is 1 while the player is signed in to the network and not banned, else 0. The bridge answers the online-permission check by the same rule, for the AnyPlay network only ([ADR 0021](../docs/adr/0021-the-line-is-drawn-at-the-law.md)).
   - `account_id` and `handle` are 0 and empty while signed out. A handle has at most 16 ASCII characters.
   - `nat_type` is 1, 2 or 3 as the platform counts NAT types, or 0 while unknown. The net service measures it over IPv4 with iroh's net report: 1 when the relays answer its UDP address probes and the public address they see is one of the PC's own; 2 while it is connected to a relay (every peer can reach it through the relay) or when the NAT shows the same public address to every relay; 3 when UDP works but neither holds; 0 when neither a relay nor UDP answers. A net service on relay only is never 1. A change comes as a new `state`.
   - `address` is the player's own virtual address, 0 when it has none. It is the address the player has in the session the launcher shows, else the one the cloud names for the account. It can change when the player enters a session, and `state` is sent again then.
@@ -244,7 +244,7 @@ The first user is Minecraft: Bedrock Edition in its LAN mode. What public source
 
 ### Share play (`0x05xx`)
 
-Version 0, implemented in `crates/bridge-protocol` (the net service's side) and in the AnyPS5 bridge. The frame ring, the pad rules and the host's override are in the [share play spec](share-play.md); this is the wire.
+Part of version 1. The net service's side is in `crates/bridge-protocol`; the bridge's side is open in the AnyPS5 fork (anyplaynet/AnyPS5#29). The frame ring, the pad rules and the host's override are in the [share play spec](share-play.md); this is the wire.
 
 | Kind | Name | Direction | Payload |
 |---|---|---|---|
