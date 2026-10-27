@@ -311,25 +311,51 @@ mod real_window {
         };
         let folder = std::env::temp_dir().join(format!("anyplay-mac-real-{}", std::process::id()));
         let path = folder.join("real.mp4");
-        let mut child = Command::new(WORKER)
-            .args(["--clips", "2", "--pid", &calculator.pid.to_string()])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
-            .spawn()
-            .expect("the worker runs");
-        let mut input = child.stdin.take().unwrap();
-        let output = child.stdout.take().unwrap();
-        let (tx, rx) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            use std::io::BufRead;
-            for line in std::io::BufReader::new(output)
-                .lines()
-                .map_while(Result::ok)
-            {
-                let _ = tx.send(line);
+        // A CI runner now and then lets a freshly started worker's capture fail at its start
+        // ("the system did not start the capture in time", or a declined TCC although the test
+        // process itself was allowed a moment earlier). That is the runner, not the worker:
+        // start a new worker, up to three times. Any other end is a failure at once.
+        let mut attempt = 0;
+        let (mut child, mut input, rx) = loop {
+            attempt += 1;
+            let mut child = Command::new(WORKER)
+                .args(["--clips", "2", "--pid", &calculator.pid.to_string()])
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::inherit())
+                .spawn()
+                .expect("the worker runs");
+            let input = child.stdin.take().unwrap();
+            let output = child.stdout.take().unwrap();
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                use std::io::BufRead;
+                for line in std::io::BufReader::new(output)
+                    .lines()
+                    .map_while(Result::ok)
+                {
+                    let _ = tx.send(line);
+                }
+            });
+            let deadline = Instant::now() + Duration::from_secs(60);
+            let first = loop {
+                let left = deadline.saturating_duration_since(Instant::now());
+                let line = rx.recv_timeout(left).expect("an event in time");
+                let value: serde_json::Value = serde_json::from_str(&line).unwrap();
+                if value["event"] == "ready" || value["event"] == "ended" {
+                    break value;
+                }
+            };
+            if first["event"] == "ready" {
+                break (child, input, rx);
             }
-        });
+            let reason = first["reason"].as_str().unwrap_or_default();
+            assert!(
+                attempt < 3 && (reason == "no_permission" || reason == "no_window"),
+                "{first}"
+            );
+            let _ = child.wait();
+        };
         let wait = |event: &str| {
             let deadline = Instant::now() + Duration::from_secs(60);
             loop {
@@ -342,7 +368,6 @@ mod real_window {
                 assert_ne!(value["event"], "ended", "{value}");
             }
         };
-        wait("ready");
         std::thread::sleep(Duration::from_millis(4500));
         writeln!(
             input,
