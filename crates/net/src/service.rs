@@ -924,6 +924,32 @@ impl Service {
                     |_, cards| cards,
                 );
             }
+            Command::PlayedWith => {
+                let Some(cloud) = self.signed_in_cloud(id) else {
+                    return;
+                };
+                self.request(id, async move { cloud.played_with().await }, |_, l| l);
+            }
+            Command::ClearPlayedWith => {
+                let Some(cloud) = self.signed_in_cloud(id) else {
+                    return;
+                };
+                self.request(
+                    id,
+                    async move { cloud.clear_played_with().await },
+                    |_, ()| Done {},
+                );
+            }
+            Command::SetRememberPlayedWith { on } => {
+                let Some(cloud) = self.signed_in_cloud(id) else {
+                    return;
+                };
+                self.request(
+                    id,
+                    async move { cloud.set_remember_played_with(on).await },
+                    |_, r| r,
+                );
+            }
             Command::PublicProfile => {
                 let Some(cloud) = self.signed_in_cloud(id) else {
                     return;

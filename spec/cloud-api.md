@@ -42,6 +42,9 @@ Account   { id, handle }
 Me        { id, handle, email, created, appear_offline }   appear_offline: bool, false when absent
 AppearOffline { appear_offline }                   the setting alone
 PublicProfile { public_profile }                   bool, false for a new account
+PlayedWith { account, last, title_id, title, friend }   title_id, title: absent after a party; friend: bool
+PlayedWithList { remember, people }                people: [PlayedWith], newest first
+RememberPlayedWith { remember_played_with }        bool, true for a new account
 Tokens    { access, access_expires, refresh, device }
 Device    { name, platform, key }                  platform: "windows" | "linux" | "macos" | "other"; key: the device's public key or absent
 Presence  { online, activity, revision }           activity: Activity or null
@@ -168,10 +171,14 @@ The browser's own session on these pages is a cookie that never reaches the API.
 | `GET /v1/me` | `Me` |
 | `GET /v1/me/appear-offline` | `AppearOffline` |
 | `PUT /v1/me/appear-offline` | `AppearOffline` in and out: see [Appearing offline](#appearing-offline) |
+| `GET /v1/me/played-with` | `PlayedWithList`: see [Played with recently](#played-with-recently) |
+| `DELETE /v1/me/played-with` | 204: empties the list |
+| `GET /v1/me/played-with/remember` | `RememberPlayedWith` |
+| `PUT /v1/me/played-with/remember` | `RememberPlayedWith` in and out |
 | `GET /v1/me/public-profile` | `PublicProfile` |
 | `PUT /v1/me/public-profile` | `PublicProfile` in and out: see [Public profile](#public-profile) |
 | `DELETE /v1/me` | A [proof](#device-keys-and-proofs) from the device's key, then 200 `{deletion: {at}}`. Schedules the deletion of the account for `at` (Unix seconds), 30 days from now, signs out every device and every browser, and refuses the access tokens issued so far; the player can cancel on the [web portal](portal-api.md#deleting-the-account) until `at`. A request that comes again keeps the first `at`. At `at` the cloud deletes the account with its devices, friends, requests, blocks, trophy records, profile, avatar and playtime. Reports the account filed lose their link to it; reports about it, the actions against it and the ban on its e-mail address stay until their retention ends (see Moderation). |
-| `GET /v1/me/export` | Everything the cloud stores about the account, as JSON, trophy records, privacy settings, profile, avatar and playtime included. |
+| `GET /v1/me/export` | Everything the cloud stores about the account, as JSON, trophy records, privacy settings, profile, avatar, playtime and the people played with included. |
 | `GET /v1/accounts/{id}` | `Account` |
 | `GET /v1/accounts?handle=<handle>` | `Account`; the lookup is exact apart from case. There is no search. |
 
@@ -211,6 +218,19 @@ An account can **appear offline**: its friends see `Presence { online: false, ac
 ## Public profile
 
 A player's page at `/u/<handle>` on the account web is off until the player turns it on. `PUT /v1/me/public-profile` with `{public_profile: true | false}` sets it and answers the same object; `GET /v1/me/public-profile` reads it. It is idempotent and a new account has `false`. While it is false, the page and the profile and trophy reads below it answer `not_found` to everyone but the player; friends keep seeing the profile in the apps through `Privacy` as before. When it is true, a stranger still sees only the parts whose `Privacy` is `everyone`. The setting is part of `GET /v1/me/export`.
+
+## Played with recently
+
+The cloud remembers the people an account shared a party or a session with, so the player can add them as a friend, look at their profile or block them from one list ([ADR 0038](../docs/adr/0038-played-with-recently-is-a-private-list-the-cloud-keeps-for-30-days.md)). `GET /v1/me/played-with` answers `{remember, people}`: `people` are `PlayedWith` entries, newest first, at most 50.
+
+- **When a pair is recorded.** Two accounts that were members of the same party, or of the same session, at the same time for at least 120 seconds (`PLAYED_WITH_MIN_SECS`). The cloud checks about once a minute, so the entry appears within a few minutes of the 2 minutes. Each side keeps its own entry for the other. A pair in a session records its `title_id` and `title`; a pair in a party records none. A later meeting replaces the earlier one (`last`, title).
+- **What is kept.** The last 30 days and at most 50 people per account (`PLAYED_WITH_DAYS`, `PLAYED_WITH_MAX`); the oldest entries go first.
+- **Private.** Only the account itself reads its list. The other person is never told that they are on it, and it appears on no profile, card or page.
+- **Blocks.** A block in either direction leaves the entry out of the answer, and none is recorded while it holds. Removing the block shows the entry again if it has not expired.
+- **Friends.** `friend` is true when the two are friends now, so a client offers "Add friend" only when it is false. Adding, profile and blocking are the calls of [Friends and blocks](#friends-and-blocks) and [Profiles](#profiles-avatars-and-playtime) on the entry's account.
+- **Switch.** `remember` is true for a new account. `PUT /v1/me/played-with/remember` with `{remember_played_with: true | false}` sets it and answers the same object. While it is false the cloud records no new entry for this account, and the list it already holds stays until the player clears it. The other account's entry for this one follows that account's own switch. The setting is a call of its own, like [Appearing offline](#appearing-offline): it is not part of `Privacy`, so a client that edits the six audiences never resets it.
+- **Clearing.** `DELETE /v1/me/played-with` removes every entry of the account. It does not remove the account from the lists of the people it played with.
+- **Deleting.** An entry is deleted with either of its two accounts. The list and the setting are part of `GET /v1/me/export`.
 
 ## Sessions
 

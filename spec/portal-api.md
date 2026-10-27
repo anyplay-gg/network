@@ -244,6 +244,10 @@ The player's own parts. Only fields the cloud has exist: the text, the favourite
 | `PUT /me/privacy` | `Privacy` | `Privacy`. The rules are those of `PUT /v1/me/privacy`: a part left out takes the default, `friends`, so a client sends all six. |
 | `GET /me/appear-offline` | | `AppearOffline`: `{appear_offline}`, false by default. `Me.appear_offline` in `GET /account` says the same. |
 | `PUT /me/appear-offline` | `AppearOffline` | `AppearOffline`. While it is true friends see the player as offline everywhere ([Appearing offline](cloud-api.md#appearing-offline)); the player sees themselves as online in the portal and gets an "Appearing offline" hint. Sent on its own: it is not part of `Privacy`, so a client that sets it does not send the six audiences. |
+| `GET /me/played-with` | | `PlayedWithList`: the people the player played with recently ([Played with recently](cloud-api.md#played-with-recently)). |
+| `DELETE /me/played-with` | `{}` | `{ok: true}`. Empties the list. |
+| `GET /me/played-with/remember` | | `RememberPlayedWith`: `{remember_played_with}`, true by default. |
+| `PUT /me/played-with/remember` | `RememberPlayedWith` | `RememberPlayedWith`. While it is false the cloud records no new people. Sent on its own, like `appear-offline`. |
 | `PUT /me/avatar` | the picture | `{avatar}`: the hash. The body is a PNG or JPEG of at most 1 MB with `Content-Type: image/png` or `image/jpeg`; the cloud makes a square of it. The picture is at `GET /v1/avatars/{hash}` (no token; the hash is the right to see it). |
 | `DELETE /me/avatar` | `{}` | `{ok: true}`. |
 | `GET /me/trophies` | | `TrophySummary`. |

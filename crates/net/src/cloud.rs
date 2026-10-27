@@ -6,13 +6,13 @@ use std::time::Duration;
 use anyplay_api::client::{CLIENT_HEADER, ClientId};
 use anyplay_api::{
     AcceptShare, AccountId, AccountLink, AccountTrophies, AddToConversation, Added, ApiError,
-    AppealRequest, AppearOffline, BrowserTokenRequest, Cards, CodeAnswer, CodeRequest,
-    Conversation, Conversations, CreateConversation, CreateSession, CreateShare, Device,
-    DiscordCodeExchange, DiscordRefresh, DiscordTokens, EmailAnswer, EmailRequest, ErrorCode,
-    FriendLists, FriendRequest, FriendRequestAnswer, Info, Invite, Invited, JoinCode, JoinSession,
-    MarkRead, Me, Message, Messages, MoveParty, Party, PartyEndpoint, PartyInvitations,
-    PlaytimeAdded, PlaytimeEntry, PlaytimeUpload, PresenceRequest, Privacy, ProfilePage,
-    PublicProfile, Rarity, ReactionRequest, Reactions, Redeemed, RefreshRequest, Relays, Report,
+    AppealRequest, AppearOffline, BrowserTokenRequest, Cards, CodeAnswer, CodeRequest, Conversation,
+    Conversations, CreateConversation, CreateSession, CreateShare, Device, DiscordCodeExchange,
+    DiscordRefresh, DiscordTokens, EmailAnswer, EmailRequest, ErrorCode, FriendLists, FriendRequest,
+    FriendRequestAnswer, Info, Invite, Invited, JoinCode, JoinSession, MarkRead, Me, Message,
+    Messages, MoveParty, Party, PartyEndpoint, PartyInvitations, PlayedWithList, PlaytimeAdded,
+    PlaytimeEntry, PlaytimeUpload, PresenceRequest, Privacy, ProfilePage, PublicProfile, Rarity,
+    ReactionRequest, Reactions, Redeemed, RefreshRequest, RememberPlayedWith, Relays, Report,
     RunReport, RunSummary, SecretsChanged, SendMessage, Session, Share, ShareInvitations, SignedIn,
     SignupRequest, Statement, Statements, TicketRequest, Tokens, TrophiesAdded, Trophy,
     TrophyCompare, TrophyNumbers, TrophyUpload, UpdateParty, UpdateSession, UpdateShare, path,
@@ -703,6 +703,26 @@ impl Cloud {
     pub async fn set_appear_offline(&self, on: bool) -> Result<AppearOffline, CloudError> {
         let body = AppearOffline { appear_offline: on };
         self.call(Method::PUT, path::APPEAR_OFFLINE, Some(&body))
+            .await
+    }
+
+    pub async fn played_with(&self) -> Result<PlayedWithList, CloudError> {
+        self.call::<(), _>(Method::GET, path::PLAYED_WITH, None)
+            .await
+    }
+
+    pub async fn clear_played_with(&self) -> Result<(), CloudError> {
+        self.empty(Method::DELETE, path::PLAYED_WITH).await
+    }
+
+    pub async fn set_remember_played_with(
+        &self,
+        on: bool,
+    ) -> Result<RememberPlayedWith, CloudError> {
+        let body = RememberPlayedWith {
+            remember_played_with: on,
+        };
+        self.call(Method::PUT, path::PLAYED_WITH_REMEMBER, Some(&body))
             .await
     }
 

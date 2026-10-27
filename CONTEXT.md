@@ -219,6 +219,10 @@ _Avoid_: Timeline, wall
 A group of up to 8 friends that stays together across games, with one chat and one voice channel. A party belongs to no game; a session does.
 _Avoid_: Group, squad, session
 
+**Played with recently**:
+A player's private list of the people they shared a party or a session with for at least two minutes in the last 30 days, at most 50. Only that player sees it; from it they add a friend, look at a profile or block. They can turn the remembering off and clear the list.
+_Avoid_: Recent players, history, met players
+
 **Party leader**:
 The member of a party who invites, removes members and moves the party into a session. The longest-standing member leads when the leader leaves.
 _Avoid_: Host, owner
