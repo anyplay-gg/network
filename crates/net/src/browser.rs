@@ -6,18 +6,21 @@
 //! `state` this sign-in made counts. Other local programs that touch the port get an error page
 //! and change nothing.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyplay_proof::pkce;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::oneshot;
-use tokio::task::JoinHandle;
+use tokio::sync::{Semaphore, mpsc, oneshot};
+use tokio::task::{JoinHandle, JoinSet};
 
 /// How long the player has to finish in the browser.
 pub const TIMEOUT: Duration = Duration::from_secs(10 * 60);
 const PATH: &str = "/callback";
 const MAX_REQUEST: usize = 8 * 1024;
+/// The most connections the sign-in listener accepts and handles at once.
+pub const MAX_CONNECTIONS: usize = 16;
 
 /// What the browser brought back.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -109,24 +112,55 @@ fn encode(text: &str) -> String {
     out
 }
 
-async fn serve(listener: TcpListener, port: u16, state: &str) -> Callback {
-    loop {
-        let Ok((stream, peer)) = listener.accept().await else {
-            // A failing accept repeats at once: do not spin on it.
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-            continue;
-        };
-        if !peer.ip().is_loopback() {
-            continue;
-        }
-        let answer = tokio::time::timeout(Duration::from_secs(5), handle(stream, port, state))
-            .await
-            .ok()
-            .flatten();
-        if let Some(callback) = answer {
-            return callback;
-        }
+struct AbortOnDrop(JoinSet<()>);
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort_all();
     }
+}
+
+async fn serve(listener: TcpListener, port: u16, state: &str) -> Callback {
+    let state: Arc<str> = Arc::from(state);
+    let (done_tx, mut done_rx) = mpsc::channel::<Callback>(1);
+    let sem = Arc::new(Semaphore::new(MAX_CONNECTIONS));
+    let mut tasks = AbortOnDrop(JoinSet::new());
+
+    let callback = loop {
+        tokio::select! {
+            Some(callback) = done_rx.recv() => break callback,
+            _ = tasks.0.join_next(), if !tasks.0.is_empty() => {}
+            accepted = listener.accept() => {
+                let Ok((stream, peer)) = accepted else {
+                    // A failing accept repeats at once: do not spin on it.
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                    continue;
+                };
+                if !peer.ip().is_loopback() {
+                    continue;
+                }
+                let Ok(permit) = sem.clone().try_acquire_owned() else {
+                    // Over the cap: drop the stream.
+                    continue;
+                };
+                let state = state.clone();
+                let done_tx = done_tx.clone();
+                tasks.0.spawn(async move {
+                    let _permit = permit;
+                    let answer = tokio::time::timeout(Duration::from_secs(5), handle(stream, port, &state))
+                        .await
+                        .ok()
+                        .flatten();
+                    if let Some(callback) = answer {
+                        let _ = done_tx.send(callback).await;
+                    }
+                });
+            }
+        }
+    };
+
+    tasks.0.abort_all();
+    callback
 }
 
 /// Reads one request. `Some` when it ended the sign-in.
@@ -435,6 +469,130 @@ mod tests {
         .unwrap();
         assert!(started.url.contains("intent=create"));
         assert_eq!(started.result.await.unwrap(), Callback::TimedOut);
+    }
+
+    #[tokio::test]
+    async fn a_stalled_connection_does_not_block_the_callback() {
+        let started = start_with(
+            "https://cloud.example/",
+            false,
+            "PC",
+            Duration::from_secs(20),
+        )
+        .await
+        .unwrap();
+
+        let redirect = started
+            .url
+            .split("redirect_uri=")
+            .nth(1)
+            .unwrap()
+            .split('&')
+            .next()
+            .unwrap()
+            .replace("%3A", ":")
+            .replace("%2F", "/");
+        let port: u16 = redirect
+            .strip_prefix("http://127.0.0.1:")
+            .unwrap()
+            .split('/')
+            .next()
+            .unwrap()
+            .parse()
+            .unwrap();
+        let state = started
+            .url
+            .split("state=")
+            .nth(1)
+            .unwrap()
+            .split('&')
+            .next()
+            .unwrap()
+            .to_owned();
+
+        // Fill the cap almost completely with stalled connections that send nothing.
+        let mut stalled = Vec::new();
+        for _ in 0..MAX_CONNECTIONS - 1 {
+            stalled.push(TcpStream::connect(("127.0.0.1", port)).await.unwrap());
+        }
+
+        // The callback connects as the last permitted connection in the cap.
+        let mut stream = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        let request = format!(
+            "GET /callback?code={CODE}&state={state} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
+        );
+        stream.write_all(request.as_bytes()).await.unwrap();
+        let mut answer = String::new();
+        stream.read_to_string(&mut answer).await.unwrap();
+        assert!(answer.starts_with("HTTP/1.1 200"), "{answer}");
+
+        // Result arrives immediately despite the stalled connections.
+        assert_eq!(started.result.await.unwrap(), Callback::Code(CODE.into()));
+    }
+
+    #[tokio::test]
+    async fn connections_over_the_cap_are_dropped() {
+        let started = start_with(
+            "https://anyplaynet.com",
+            false,
+            "pc",
+            Duration::from_secs(10),
+        )
+        .await
+        .unwrap();
+        let redirect = started
+            .url
+            .split("redirect_uri=")
+            .nth(1)
+            .unwrap()
+            .split('&')
+            .next()
+            .unwrap()
+            .replace("%3A", ":")
+            .replace("%2F", "/");
+        let port: u16 = redirect
+            .strip_prefix("http://127.0.0.1:")
+            .unwrap()
+            .split('/')
+            .next()
+            .unwrap()
+            .parse()
+            .unwrap();
+
+        // Fill all permits of the cap with stalled connections.
+        let mut stalled = Vec::new();
+        for _ in 0..MAX_CONNECTIONS {
+            stalled.push(TcpStream::connect(("127.0.0.1", port)).await.unwrap());
+        }
+
+        // Connection over the cap is dropped immediately without reading anything.
+        let mut overflow = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        let mut buf = [0u8; 16];
+        let read = overflow.read(&mut buf).await.unwrap();
+        assert_eq!(read, 0, "connection over the cap must be dropped");
+
+        // When one stalled connection drops, its permit is released for a new connection.
+        drop(stalled.pop());
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let state = started
+            .url
+            .split("state=")
+            .nth(1)
+            .unwrap()
+            .split('&')
+            .next()
+            .unwrap()
+            .to_owned();
+        let mut stream = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        let request = format!(
+            "GET /callback?code={CODE}&state={state} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
+        );
+        stream.write_all(request.as_bytes()).await.unwrap();
+        let mut answer = String::new();
+        stream.read_to_string(&mut answer).await.unwrap();
+        assert!(answer.starts_with("HTTP/1.1 200"), "{answer}");
+        assert_eq!(started.result.await.unwrap(), Callback::Code(CODE.into()));
     }
 }
 
