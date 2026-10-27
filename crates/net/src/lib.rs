@@ -16,6 +16,7 @@ pub mod events;
 pub mod observe;
 pub mod screen;
 pub mod service;
+pub mod shareplay;
 pub mod traffic;
 pub mod tunnel;
 mod typing;

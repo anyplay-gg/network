@@ -201,7 +201,23 @@ The first user is Minecraft: Bedrock Edition in its LAN mode. What public source
 
 ### Share play (`0x05xx`)
 
-Drafted in the [share play spec](share-play.md#bridge-protocol-additions): opening and closing the frame ring, the share mode, the guest's pad states, and the host's override. Not implemented.
+Version 0, implemented in `crates/bridge-protocol` (the net service's side) and in the AnyPS5 bridge. The frame ring, the pad rules and the host's override are in the [share play spec](share-play.md); this is the wire.
+
+| Kind | Name | Direction | Payload |
+|---|---|---|---|
+| `0x0501` | share open | service → bridge, request | `ring: str`, `ring_bytes: u32`, `width: u32`, `height: u32`, `max_fps: u32`, `mode: u8` |
+| `0x8501` | share opened | bridge → service | `result: u8` |
+| `0x0502` | share close | service → bridge | empty |
+| `0x0503` | share mode | service → bridge | `mode: u8` |
+| `0x0504` | share pad | service → bridge | `slot: u8`, `sequence: u16`, `buttons: u32`, `lx: u8`, `ly: u8`, `rx: u8`, `ry: u8`, `l2: u8`, `r2: u8` |
+| `0x0505` | override | bridge → service | `action: u8` |
+| `0x0506` | share status | bridge → service | `frames: u32`, `dropped: u32`, `audio_underruns: u32` |
+
+- `mode` is 0 `watch`, 1 `hand_over`, 2 `together`. `slot` is 0 for pad 1 and 1 for pad 2. `result` is 0 (mapped, copying), 1 (the ring cannot be opened), 2 (a share is running already), 3 (the game does not present through the tap). `action` is 1 (the host took control back: the mode is now `watch`) or 2 (the host asked to stop). `buttons` has the bits of [the pad state](share-play.md#pad-state).
+- `ring` is a name made of `anyplay-` and letters, digits, `-` and `_`, 64 characters at most. The bridge opens it as it is, with no namespace prefix (a named file mapping on Windows, `shm_open("/" + name)` elsewhere), and answers 1 to anything else. The ring is made by the share worker and never by the engine; the bridge answers 1 when the mapping is shorter than `ring_bytes` or than the layout its header gives, when the header is wrong, or when its width or height is not the one asked for. Both sizes are even.
+- The bridge takes a `share pad` only after a `share open` answered 0, only while the last mode is `hand_over` (slot 0) or `together` (slot 1), and drops a state that sets a bit above bit 14. Whenever the mode changes, the share closes or the connection to the service breaks, the guest's pad is neutral and disconnected in the same step. The service sends a neutral `share pad` on the old slot before every change of mode and before the close, so a bridge that missed nothing sees the release first.
+- `sequence` counts the guest's states, wrapping; the service has ordered them already and the bridge need not check it.
+- `share status` is sent once a second while the ring is in use. The service sends nothing of this group before the bridge has answered a `share open` with 0, except `share close`.
 
 ## Observation
 

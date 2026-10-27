@@ -4081,7 +4081,17 @@ impl Service {
             | Message::PeerInfoReply(_)
             | Message::Bound { .. }
             | Message::Intent(_)
-            | Message::InvitationDialogReply { .. } => {
+            | Message::InvitationDialogReply { .. }
+            // The share kinds travel from the service to the game. Its host side is
+            // `shareplay::ShareHost`; a game that sends one of them to a service that holds no
+            // share is answered `unsupported` (a request) or ignored (an event).
+            | Message::ShareOpen(_)
+            | Message::ShareOpened { .. }
+            | Message::ShareClose
+            | Message::ShareMode { .. }
+            | Message::SharePad(_)
+            | Message::Override { .. }
+            | Message::ShareStatus(_) => {
                 if request != 0 {
                     self.bridge_reply(connection, request, Message::Unsupported);
                 }

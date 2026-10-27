@@ -1,6 +1,6 @@
 # Share play
 
-How a player streams the game they are running to a friend in their party, who watches, takes over their pad, or plays beside them. Version 0, a draft: it changes without notice until version 1. Nothing here is built yet, except the part that [share screen](screen-share.md) uses: a watch-only stream to the whole party that needs no invitation and no cloud record ([ADR 0023](../docs/adr/0023-share-screen-is-watch-only-and-asks-the-cloud-for-nothing.md)).
+How a player streams the game they are running to a friend in their party, who watches, takes over their pad, or plays beside them. Version 0, a draft: it changes without notice until version 1. Built so far: the part that [share screen](screen-share.md) uses (a watch-only stream to the whole party that needs no invitation and no cloud record, [ADR 0023](../docs/adr/0023-share-screen-is-watch-only-and-asks-the-cloud-for-nothing.md)), and the game's side of share play: the [bridge kinds](bridge-protocol.md#share-play-0x05xx), the [frame ring](#frame-ring), the [pad state](#pad-state) with the host's rules, and the host's [override](#the-hosts-override). Not built: the invitation, the cloud's `Share`, and the share connection that carries the stream and the guest's pad between two PCs.
 
 The decisions are in [ADR 0019](../docs/adr/0019-share-play-streams-through-a-worker.md), the order of work in the [plan](../docs/share-play-plan.md), and the prior art with its sources in the [research notes](../docs/share-play-research.md). The terms are in [CONTEXT.md](../CONTEXT.md). Share play goes through the tunnels like voice ([ADR 0010](../docs/adr/0010-voice-and-shared-play-go-through-the-tunnels.md), [ADR 0017](../docs/adr/0017-voice-has-a-connection-of-its-own.md), [voice spec](voice.md)).
 
@@ -138,13 +138,13 @@ Created by the worker; the engine maps it when the bridge tells it the name. One
 | 24 | 4 | stride in bytes |
 | 28 | 4 | format: 1 BGRA8 |
 | 32 | 4 | maximum frames per second |
-| 36 | 4 | audio ring size in frames, a power of two |
+| 36 | 4 | audio ring size in frames, a power of two (16,384 in version 0) |
 | 40 | 8 | audio write position, in frames, written by the engine |
 | 48 | 16 | reserved, zero |
 
-After the header come the slots, each with a 32-byte slot header and `stride × height` bytes, then the audio ring. A slot header holds `seq: u64` (written last, 0 while the engine writes), `present_us: u64` (the engine's monotonic clock when the picture was presented), `kind: u32` (0 for pixels in the slot; 1 reserved for a GPU handle) and `frame: u32` (the game's flip count). The consumer reads the slot with the highest `seq` it has not seen, copies or uses it, and reads `seq` again; if it changed, the slot was overwritten and the consumer drops the frame. The audio ring is a plain single-producer ring of stereo float frames.
+The width and the height are even, and at most 3840 by 2160, so that every slot starts on a multiple of 8 bytes, where its `seq` is read atomically. The header is 64 bytes. After the header come the slots, each with a 32-byte slot header and `stride × height` bytes, then the audio ring. A slot header holds `seq: u64` (written last, 0 while the engine writes), `present_us: u64` (the engine's monotonic clock when the picture was presented), `kind: u32` (0 for pixels in the slot; 1 reserved for a GPU handle) and `frame: u32` (the game's flip count). The consumer reads the slot with the highest `seq` it has not seen, copies or uses it, and reads `seq` again; if it changed, the slot was overwritten and the consumer drops the frame. The audio ring is a plain single-producer ring of stereo float frames.
 
-The name is random for each share and the mapping is readable only by the user who runs the game. On Windows it is a named file mapping in the local namespace; on Linux a `shm_open` object. Nothing else is shared: pad states do not use the ring.
+The name is random for each share (`anyplay-ring-` and 32 hex digits) and the mapping is readable only by the user who runs the game; the engine opens it without a namespace prefix ([bridge protocol](bridge-protocol.md#share-play-0x05xx)). On Windows it is a named file mapping in the local namespace; on Linux a `shm_open` object. Nothing else is shared: pad states do not use the ring.
 
 ### Codecs
 
@@ -394,9 +394,10 @@ Between the net service and the worker, on `127.0.0.1`, with the framing of the 
 | `0x0014` | datagram out | worker → service | one datagram to send, with its priority |
 | `0x0015` | datagram in | service → worker | one datagram received |
 | `0x0016` | report | worker → service | what the controller needs (guest) |
-| `0x0017` | pad | worker → service | one pad state (guest) |
+| `0x0017` | pad | worker → service | one pad state (guest): 10 bytes, `buttons` as a big-endian `u32`, then `lx`, `ly`, `rx`, `ry`, `l2`, `r2` |
 | `0x0018` | stats | worker → service | encode time, decode time, frames shown, dropped |
 | `0x0019` | stop | either | the end |
+| `0x001C` | ring ready | worker → service | `name`, `bytes`, `width`, `height`, `max_fps`: the worker made the frame ring (host) |
 | `0x001A` | key request | worker → service | the viewer needs a key frame from this frame on (`epoch`, `frame`); the service puts it on the control stream as `key` |
 | `0x001B` | ended | worker → service | the worker is ending, with a reason in words (the picture source ended, the encoder failed, the window was closed) |
 

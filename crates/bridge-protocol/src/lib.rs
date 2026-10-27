@@ -44,6 +44,12 @@ impl Kind {
     pub const UNBIND: Kind = Kind(0x0306);
     pub const INTENT: Kind = Kind(0x0401);
     pub const INVITATION_DIALOG: Kind = Kind(0x0402);
+    pub const SHARE_OPEN: Kind = Kind(0x0501);
+    pub const SHARE_CLOSE: Kind = Kind(0x0502);
+    pub const SHARE_MODE: Kind = Kind(0x0503);
+    pub const SHARE_PAD: Kind = Kind(0x0504);
+    pub const OVERRIDE: Kind = Kind(0x0505);
+    pub const SHARE_STATUS: Kind = Kind(0x0506);
 
     /// The kind of the reply to a request of this kind.
     pub const fn reply(self) -> Kind {
@@ -216,6 +222,13 @@ pub enum Message {
     Intent(Intent),
     InvitationDialog(InvitationDialog),
     InvitationDialogReply { result: DialogResult, sent: u16 },
+    ShareOpen(ShareOpen),
+    ShareOpened { result: ShareResult },
+    ShareClose,
+    ShareMode { mode: ShareMode },
+    SharePad(SharePad),
+    Override { action: OverrideAction },
+    ShareStatus(ShareStatus),
 }
 
 impl Message {
@@ -244,6 +257,13 @@ impl Message {
             Message::Intent(_) => Kind::INTENT,
             Message::InvitationDialog(_) => Kind::INVITATION_DIALOG,
             Message::InvitationDialogReply { .. } => Kind::INVITATION_DIALOG.reply(),
+            Message::ShareOpen(_) => Kind::SHARE_OPEN,
+            Message::ShareOpened { .. } => Kind::SHARE_OPEN.reply(),
+            Message::ShareClose => Kind::SHARE_CLOSE,
+            Message::ShareMode { .. } => Kind::SHARE_MODE,
+            Message::SharePad(_) => Kind::SHARE_PAD,
+            Message::Override { .. } => Kind::OVERRIDE,
+            Message::ShareStatus(_) => Kind::SHARE_STATUS,
         }
     }
 
@@ -351,6 +371,34 @@ impl Message {
             Message::InvitationDialogReply { result, sent } => {
                 w.u8(*result as u8);
                 w.u16(*sent);
+            }
+            Message::ShareOpen(m) => {
+                w.str(&m.ring)?;
+                w.u32(m.ring_bytes);
+                w.u32(m.width);
+                w.u32(m.height);
+                w.u32(m.max_fps);
+                w.u8(m.mode as u8);
+            }
+            Message::ShareOpened { result } => w.u8(*result as u8),
+            Message::ShareClose => {}
+            Message::ShareMode { mode } => w.u8(*mode as u8),
+            Message::SharePad(m) => {
+                w.u8(m.slot);
+                w.u16(m.sequence);
+                w.u32(m.buttons);
+                w.u8(m.lx);
+                w.u8(m.ly);
+                w.u8(m.rx);
+                w.u8(m.ry);
+                w.u8(m.l2);
+                w.u8(m.r2);
+            }
+            Message::Override { action } => w.u8(*action as u8),
+            Message::ShareStatus(m) => {
+                w.u32(m.frames);
+                w.u32(m.dropped);
+                w.u32(m.audio_underruns);
             }
         }
         Ok(w.into_inner())
@@ -470,6 +518,40 @@ impl Message {
                 result: DialogResult::from(r.u8()?),
                 sent: r.u16()?,
             },
+            Kind::SHARE_OPEN => Message::ShareOpen(ShareOpen {
+                ring: r.str()?,
+                ring_bytes: r.u32()?,
+                width: r.u32()?,
+                height: r.u32()?,
+                max_fps: r.u32()?,
+                mode: ShareMode::from(r.u8()?),
+            }),
+            k if k == Kind::SHARE_OPEN.reply() => Message::ShareOpened {
+                result: ShareResult::from(r.u8()?),
+            },
+            Kind::SHARE_CLOSE => Message::ShareClose,
+            Kind::SHARE_MODE => Message::ShareMode {
+                mode: ShareMode::from(r.u8()?),
+            },
+            Kind::SHARE_PAD => Message::SharePad(SharePad {
+                slot: r.u8()?,
+                sequence: r.u16()?,
+                buttons: r.u32()?,
+                lx: r.u8()?,
+                ly: r.u8()?,
+                rx: r.u8()?,
+                ry: r.u8()?,
+                l2: r.u8()?,
+                r2: r.u8()?,
+            }),
+            Kind::OVERRIDE => Message::Override {
+                action: OverrideAction::from(r.u8()?),
+            },
+            Kind::SHARE_STATUS => Message::ShareStatus(ShareStatus {
+                frames: r.u32()?,
+                dropped: r.u32()?,
+                audio_underruns: r.u32()?,
+            }),
             _ => return Ok(None),
         };
         Ok(Some(message))
@@ -615,6 +697,60 @@ pub struct InvitationDialog {
     pub max: u16,
 }
 
+/// The service asks the engine to start copying the game's pictures into a frame ring that the
+/// share worker created (`spec/share-play.md#frame-ring`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ShareOpen {
+    /// The ring's name: a named file mapping on Windows, a `shm_open` object on Linux.
+    pub ring: String,
+    /// The size of the mapping in bytes, so that the engine can refuse one that is too small.
+    pub ring_bytes: u32,
+    pub width: u32,
+    pub height: u32,
+    pub max_fps: u32,
+    pub mode: ShareMode,
+}
+
+/// One pad state of the guest, already checked by the service. `slot` is 0 for pad 1 and 1 for
+/// pad 2; the bits of `buttons` are the names of `spec/share-play.md#pad-state`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SharePad {
+    pub slot: u8,
+    pub sequence: u16,
+    pub buttons: u32,
+    pub lx: u8,
+    pub ly: u8,
+    pub rx: u8,
+    pub ry: u8,
+    pub l2: u8,
+    pub r2: u8,
+}
+
+impl SharePad {
+    /// No buttons, sticks in the middle, triggers up: what the game sees when the guest is gone.
+    pub const fn neutral(slot: u8, sequence: u16) -> SharePad {
+        SharePad {
+            slot,
+            sequence,
+            buttons: 0,
+            lx: 128,
+            ly: 128,
+            rx: 128,
+            ry: 128,
+            l2: 0,
+            r2: 0,
+        }
+    }
+}
+
+/// What the engine reports once a second while the ring is in use.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ShareStatus {
+    pub frames: u32,
+    pub dropped: u32,
+    pub audio_underruns: u32,
+}
+
 macro_rules! byte_enum {
     ($(#[$meta:meta])* $name:ident { $($variant:ident = $value:literal),+ $(,)? }) => {
         $(#[$meta])*
@@ -643,6 +779,18 @@ byte_enum!(PeerState { Connecting = 1, Connected = 2, Disconnected = 3, Failed =
 byte_enum!(Transport { Datagram = 1, Stream = 2 });
 byte_enum!(BindResult { Bound = 0, InUse = 1 });
 byte_enum!(DialogResult { Sent = 0, Cancelled = 1 });
+byte_enum!(
+    /// What the guest may do: watch only, play as the host's pad, or play a second pad.
+    ShareMode { Watch = 0, HandOver = 1, Together = 2 }
+);
+byte_enum!(
+    /// The engine's answer to a share open.
+    ShareResult { Copying = 0, RingUnavailable = 1, Running = 2, NotPresenting = 3 }
+);
+byte_enum!(
+    /// What the host did on their own pad or keyboard: took control back, or asked to stop.
+    OverrideAction { TookControl = 1, Stop = 2 }
+);
 
 /// The header in front of every game datagram and at the start of every game stream.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
