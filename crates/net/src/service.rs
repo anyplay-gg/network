@@ -2071,6 +2071,20 @@ impl Service {
         );
     }
 
+    /// Tells the cloud which kind of path a tunnel settled on, so it can count how often players
+    /// reach each other directly. Fire and forget: whatever the answer is (an old cloud answers
+    /// 404, an offline one nothing), nobody is told and nothing is retried. It carries no account,
+    /// peer or time.
+    fn report_path(&mut self, direct: bool, upgraded: bool) {
+        let Some(cloud) = self.cloud.clone().filter(|_| self.me.is_some()) else {
+            return;
+        };
+        self.spawn(
+            async move { cloud.tunnel_path(direct, upgraded).await },
+            |_service, _result| {},
+        );
+    }
+
     fn push_presence(&mut self) {
         let Some(cloud) = self.cloud.clone().filter(|_| self.me.is_some()) else {
             return;
@@ -3481,10 +3495,9 @@ impl Service {
     fn link_change(&mut self, change: LinkChange) {
         // One line each time a tunnel settles on a path, with the totals so far. It names no one,
         // so an operator can collect these from test machines and work out the direct share.
-        if self
-            .link_totals
-            .record(self.links.get(&change.account).copied(), change.link)
-        {
+        let before = self.links.get(&change.account).copied();
+        if self.link_totals.record(before, change.link) {
+            self.report_path(change.link == Link::Direct, before == Some(Link::Relay));
             let totals = self.link_totals;
             tracing::info!(
                 target: "anyplay::path",

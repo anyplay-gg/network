@@ -275,6 +275,14 @@ An invitation lives 15 minutes, or until its session closes (which a `lan` sessi
 
 The token names the account it was issued to. A relay holds the account to a number of connections at once, refuses a token that is valid for much longer than 24 hours, and limits what each client sends; the numbers are the relay operator's settings, not part of this specification. The cloud limits how often an account may ask for tickets (see Limits), and answers `rate_limited` with `Retry-After` when it is over.
 
+## Tunnel paths
+
+`POST /v1/tunnels/path` with `{kind, upgraded?}` answers 204. `kind` is `direct` or `relay`: the path a tunnel to another player settled on. `upgraded` (default `false`) says the tunnel had been running through a relay and found a direct path; it is only valid with `direct`. Any other field, any other `kind` and `upgraded` with `relay` answer 400. Needs a signed-in device.
+
+The net service sends one report each time a tunnel comes up on, or moves to, a direct or relay path. It is fire and forget: the service never waits for it, never retries it and shows nothing when it fails, and a cloud that does not have the route (404) is simply not told.
+
+The cloud only counts the reports (`anyplay_cloud_tunnel_paths_total{kind}` and `anyplay_cloud_tunnel_upgrades_total`). The body names no account, no peer, no address and no time, and the cloud stores none of it, so the numbers say how often players reach each other directly and nothing about who. The count is per node and restarts at zero with it, like every Prometheus counter.
+
 ## Trophies and privacy
 
 The cloud keeps a **trophy record** per trophy a player earned: the title, the trophy's number in the game, its grade and when ([ADR 0009](../docs/adr/0009-trophy-records-not-trophy-texts.md)). Names, descriptions and pictures are not part of it; each launcher shows them from its own copy of the game. Trophies are private by default: friends see them, nobody else ([ADR 0012](../docs/adr/0012-private-by-default.md)).
@@ -697,6 +705,7 @@ DiscordTokens { access, refresh, expires_in, scope }   expires_in: seconds; scop
 | `auth/code`, `auth/signup`, `auth/browser/token`, and the pages `web/authorize`, `web/code` and the passkey sign-in | 20 per IP address per 15 minutes |
 | `auth/refresh` | 30 per device per hour |
 | `relays/tickets` | 20 per account per hour |
+| `tunnels/path` | 30 per account per hour (shared with the run reports' limit) |
 | `PUT /v1/me/avatar` | 5 per account per hour, besides the limit below |
 | messages | 30 per account per minute |
 | media messages | 20 per account per hour, 1 GiB kept per account, 4 uploads at once per node |

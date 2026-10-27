@@ -550,6 +550,18 @@ impl Cloud {
             .map(drop)
     }
 
+    /// Says which kind of path one tunnel settled on. The cloud only counts it (spec/cloud-api.md,
+    /// "Tunnel paths"): no account, no peer, no time.
+    pub async fn tunnel_path(&self, direct: bool, upgraded: bool) -> Result<(), CloudError> {
+        let body = serde_json::json!({
+            "kind": if direct { "direct" } else { "relay" },
+            "upgraded": upgraded,
+        });
+        self.call::<_, serde_json::Value>(Method::POST, path::TUNNEL_PATH, Some(&body))
+            .await
+            .map(drop)
+    }
+
     pub async fn create_session(&self, body: &CreateSession) -> Result<Session, CloudError> {
         self.call(Method::POST, path::SESSIONS, Some(body)).await
     }
@@ -1368,6 +1380,8 @@ mod tests {
     struct Seen {
         bound: Option<String>,
         calls: Vec<(Option<String>, bool)>,
+        /// The bodies of the tunnel path reports.
+        paths: Vec<serde_json::Value>,
     }
 
     type Shared = Arc<Mutex<Seen>>;
@@ -1412,6 +1426,14 @@ mod tests {
         }))
     }
 
+    async fn tunnel_path_route(
+        State(seen): State<Shared>,
+        axum::Json(body): axum::Json<serde_json::Value>,
+    ) -> axum::http::StatusCode {
+        seen.lock().unwrap().paths.push(body);
+        axum::http::StatusCode::NO_CONTENT
+    }
+
     async fn join_code_route() -> axum::Json<JoinCode> {
         axum::Json(JoinCode {
             code: "k3x9m2pqra".into(),
@@ -1452,6 +1474,7 @@ mod tests {
         let app = axum::Router::new()
             .route(path::AUTH_REFRESH, post(refresh_route))
             .route(path::JOIN_CODES, post(join_code_route))
+            .route(path::TUNNEL_PATH, post(tunnel_path_route))
             .route(path::JOIN_CODE_CURRENT, delete(revoke_route))
             .route(path::JOIN_CODE_REDEEM, post(redeem_route))
             .with_state(seen.clone());
@@ -1534,6 +1557,40 @@ mod tests {
         }
         let error = cloud.redeem_join_code("zzzzzzzzzz").await.unwrap_err();
         assert!(error.is(ErrorCode::NotFound));
+    }
+
+    #[tokio::test]
+    async fn a_tunnel_path_report_carries_the_kind_and_nothing_else() {
+        crate::install_crypto();
+        let (base, seen) = fake_cloud().await;
+        let (sink, _) = recording_sink();
+        let cloud = Cloud::new(&base, sink);
+        cloud.resume(1, "refresh-0".into(), None);
+        cloud.tunnel_path(false, false).await.unwrap();
+        cloud.tunnel_path(true, true).await.unwrap();
+        assert_eq!(
+            seen.lock().unwrap().paths,
+            vec![
+                serde_json::json!({"kind": "relay", "upgraded": false}),
+                serde_json::json!({"kind": "direct", "upgraded": true}),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_cloud_without_the_path_route_answers_with_an_error_the_service_ignores() {
+        crate::install_crypto();
+        // A router that knows only the refresh: the report meets a 404.
+        let app = axum::Router::new()
+            .route(path::AUTH_REFRESH, post(refresh_route))
+            .with_state(Shared::default());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await });
+        let (sink, _) = recording_sink();
+        let cloud = Cloud::new(&base, sink);
+        cloud.resume(1, "refresh-0".into(), None);
+        assert!(cloud.tunnel_path(true, false).await.is_err());
     }
 
     #[tokio::test]

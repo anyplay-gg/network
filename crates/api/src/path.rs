@@ -22,6 +22,8 @@ pub const FRIEND_REQUEST: &str = "/v1/friends/requests/{id}";
 pub const FRIEND_REQUEST_ACCEPT: &str = "/v1/friends/requests/{id}/accept";
 pub const BLOCK: &str = "/v1/blocks/{id}";
 pub const PRESENCE: &str = "/v1/presence";
+/// A net service says which kind of path a tunnel settled on (`spec/cloud-api.md`, "Tunnel paths").
+pub const TUNNEL_PATH: &str = "/v1/tunnels/path";
 pub const SESSIONS: &str = "/v1/sessions";
 pub const SESSION: &str = "/v1/sessions/{id}";
 pub const SESSION_JOIN: &str = "/v1/sessions/{id}/join";
