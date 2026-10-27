@@ -115,6 +115,30 @@ fn an_oversized_length_is_refused_before_the_payload_arrives() {
 }
 
 #[test]
+fn decoder_with_custom_max_payload_refuses_oversized_length() {
+    let mut header = ((MAX_HELLO_PAYLOAD + 1) as u32).to_le_bytes().to_vec();
+    header.extend_from_slice(&[1, 0, 0, 0, 0, 0, 0, 0]);
+    let mut decoder = Decoder::with_max_payload(MAX_HELLO_PAYLOAD);
+    decoder.push(&header);
+    assert_eq!(
+        decoder.next_frame(),
+        Err(Error::TooLarge(MAX_HELLO_PAYLOAD + 1))
+    );
+}
+
+#[test]
+fn decoder_with_custom_max_payload_accepts_exact_boundary() {
+    let mut wire = (MAX_HELLO_PAYLOAD as u32).to_le_bytes().to_vec();
+    wire.extend_from_slice(&[1, 0, 0, 0, 0, 0, 0, 0]);
+    wire.extend(vec![0xAA; MAX_HELLO_PAYLOAD]);
+    let mut decoder = Decoder::with_max_payload(MAX_HELLO_PAYLOAD);
+    decoder.push(&wire);
+    let frame = decoder.next_frame().unwrap().unwrap();
+    assert_eq!(frame.payload.len(), MAX_HELLO_PAYLOAD);
+    assert_eq!(frame.payload, vec![0xAA; MAX_HELLO_PAYLOAD]);
+}
+
+#[test]
 fn an_oversized_payload_is_not_encoded() {
     let frame = Frame {
         kind: Kind(0x0200),

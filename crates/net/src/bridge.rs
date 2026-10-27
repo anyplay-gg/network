@@ -6,7 +6,8 @@
 use std::net::Ipv4Addr;
 use std::time::Duration;
 
-use anyplay_bridge_protocol::{Decoder, Frame, Kind, Message, Reject};
+pub use anyplay_bridge_protocol::MAX_HELLO_PAYLOAD;
+use anyplay_bridge_protocol::{Decoder, Frame, Kind, MAX_PAYLOAD, Message, Reject};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc::{self, UnboundedSender};
@@ -59,7 +60,7 @@ pub async fn listen(out: UnboundedSender<BridgeInput>) -> std::io::Result<u16> {
 async fn serve(connection: u64, stream: TcpStream, out: &UnboundedSender<BridgeInput>) {
     let _ = stream.set_nodelay(true);
     let (mut read, mut write) = stream.into_split();
-    let mut decoder = Decoder::new();
+    let mut decoder = Decoder::with_max_payload(MAX_HELLO_PAYLOAD);
     let mut buf = vec![0u8; 64 * 1024];
 
     let hello = tokio::time::timeout(Duration::from_secs(5), async {
@@ -82,6 +83,8 @@ async fn serve(connection: u64, stream: TcpStream, out: &UnboundedSender<BridgeI
     let Ok(Some(Message::Hello(hello))) = Message::parse(hello.kind, &hello.payload) else {
         return;
     };
+
+    decoder.set_max_payload(MAX_PAYLOAD);
 
     let (frames, mut outgoing) = mpsc::unbounded_channel();
     let (verdict, answer) = oneshot::channel();
@@ -155,5 +158,159 @@ async fn serve(connection: u64, stream: TcpStream, out: &UnboundedSender<BridgeI
     tokio::select! {
         _ = writer => {}
         _ = reader => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use anyplay_bridge_protocol::{Frame, Hello, Message, VERSION};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpStream;
+
+    #[tokio::test]
+    async fn a_hello_within_the_limit_is_accepted() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let port = listen(tx).await.unwrap();
+        let mut stream = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+
+        let hello = Frame::event(&Message::Hello(Hello {
+            version: VERSION,
+            token: vec![1, 2, 3, 4],
+        }))
+        .unwrap();
+        let mut bytes = Vec::new();
+        hello.encode(&mut bytes).unwrap();
+        stream.write_all(&bytes).await.unwrap();
+
+        match rx.recv().await.unwrap() {
+            BridgeInput::Hello {
+                version,
+                token,
+                verdict,
+                ..
+            } => {
+                assert_eq!(version, VERSION);
+                assert_eq!(token, vec![1, 2, 3, 4]);
+                let _ = verdict.send(Ok(()));
+            }
+            other => panic!("expected Hello, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn an_oversized_payload_before_hello_is_refused() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let port = listen(tx).await.unwrap();
+        let mut stream = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+
+        let oversized = Frame {
+            kind: Kind::HELLO,
+            request: 0,
+            payload: vec![0u8; MAX_HELLO_PAYLOAD + 1],
+        };
+        let mut bytes = Vec::new();
+        oversized.encode(&mut bytes).unwrap();
+        stream.write_all(&bytes).await.unwrap();
+
+        let mut answer = [0u8; 1];
+        let read = stream.read(&mut answer).await.unwrap();
+        assert_eq!(read, 0);
+
+        match rx.recv().await.unwrap() {
+            BridgeInput::Closed { .. } => {}
+            other => panic!("expected Closed without Hello, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn an_oversized_declared_length_before_hello_is_refused_at_once() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let port = listen(tx).await.unwrap();
+        let mut stream = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+
+        let declared_len = (MAX_HELLO_PAYLOAD as u32) + 1;
+        let mut header = Vec::new();
+        header.extend_from_slice(&declared_len.to_le_bytes());
+        header.extend_from_slice(&Kind::HELLO.0.to_le_bytes());
+        header.extend_from_slice(&0u16.to_le_bytes());
+        header.extend_from_slice(&0u32.to_le_bytes());
+        stream.write_all(&header).await.unwrap();
+
+        let mut answer = [0u8; 1];
+        let read = stream.read(&mut answer).await.unwrap();
+        assert_eq!(read, 0);
+
+        match rx.recv().await.unwrap() {
+            BridgeInput::Closed { .. } => {}
+            other => panic!("expected Closed without Hello, got {other:?}"),
+        }
+    }
+    #[tokio::test]
+    async fn a_hello_with_exact_max_payload_is_accepted_at_boundary() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let port = listen(tx).await.unwrap();
+        let mut stream = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+
+        // Exactly MAX_HELLO_PAYLOAD bytes: 2 bytes version + 1022 bytes token.
+        let token = vec![0x42u8; MAX_HELLO_PAYLOAD - 2];
+        let hello = Frame::event(&Message::Hello(Hello {
+            version: VERSION,
+            token: token.clone(),
+        }))
+        .unwrap();
+        assert_eq!(hello.payload.len(), MAX_HELLO_PAYLOAD);
+
+        let mut bytes = Vec::new();
+        hello.encode(&mut bytes).unwrap();
+        stream.write_all(&bytes).await.unwrap();
+
+        match rx.recv().await.unwrap() {
+            BridgeInput::Hello {
+                version,
+                token: received_token,
+                verdict,
+                ..
+            } => {
+                assert_eq!(version, VERSION);
+                assert_eq!(received_token, token);
+                let _ = verdict.send(Ok(()));
+            }
+            other => panic!("expected Hello at exact boundary, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_hello_split_over_tiny_writes_is_accepted() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let port = listen(tx).await.unwrap();
+        let mut stream = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+
+        let hello = Frame::event(&Message::Hello(Hello {
+            version: VERSION,
+            token: vec![9, 8, 7, 6, 5],
+        }))
+        .unwrap();
+        let mut bytes = Vec::new();
+        hello.encode(&mut bytes).unwrap();
+
+        for chunk in bytes.chunks(2) {
+            stream.write_all(chunk).await.unwrap();
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+
+        match rx.recv().await.unwrap() {
+            BridgeInput::Hello {
+                version,
+                token,
+                verdict,
+                ..
+            } => {
+                assert_eq!(version, VERSION);
+                assert_eq!(token, vec![9, 8, 7, 6, 5]);
+                let _ = verdict.send(Ok(()));
+            }
+            other => panic!("expected Hello, got {other:?}"),
+        }
     }
 }
