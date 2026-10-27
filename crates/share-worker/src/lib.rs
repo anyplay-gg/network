@@ -136,14 +136,19 @@ pub fn encoder_for(start: &mut Start) -> Result<Box<dyn VideoEncoder>, String> {
                 let setup = limits.clamp(start);
                 VtEncoder::open(setup, kind).map(|e| (e, setup))
             };
-            let (encoder, setup) = attempt(limits::Limits::HARDWARE, Kind::Hardware).or_else(|why| {
-                attempt(limits::Limits::SOFTWARE, Kind::Software)
-                    .map_err(|software| format!("hardware: {why}; software: {software}"))
-            })?;
+            let (encoder, setup) =
+                attempt(limits::Limits::HARDWARE, Kind::Hardware).or_else(|why| {
+                    attempt(limits::Limits::SOFTWARE, Kind::Software)
+                        .map_err(|software| format!("hardware: {why}; software: {software}"))
+                })?;
             eprintln!(
                 "share worker: encoding with {} ({})",
                 encoder.name(),
-                if encoder.is_hardware() { "hardware" } else { "software" }
+                if encoder.is_hardware() {
+                    "hardware"
+                } else {
+                    "software"
+                }
             );
             start.width = setup.width;
             start.height = setup.height;

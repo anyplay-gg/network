@@ -180,15 +180,13 @@ fn sound_source(source: &str, pids: &[u32]) -> Option<Box<dyn SoundSource>> {
             }
         }
         #[cfg(target_os = "macos")]
-        "game" => {
-            match anyplay_share_worker::mac::sck::SckSound::open(pids) {
-                Ok(source) => Some(Box::new(source)),
-                Err(why) => {
-                    eprintln!("share worker: no sound: {why}");
-                    None
-                }
+        "game" => match anyplay_share_worker::mac::sck::SckSound::open(pids) {
+            Ok(source) => Some(Box::new(source)),
+            Err(why) => {
+                eprintln!("share worker: no sound: {why}");
+                None
             }
-        }
+        },
         _ => {
             let _ = pids;
             None

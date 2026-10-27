@@ -43,7 +43,10 @@ impl Seen {
 /// A window of another process is never taken when processes are known.
 pub fn pick(seen: &[Seen], target: &WindowTarget) -> Option<usize> {
     let owned = |w: &Seen| target.pids.is_empty() || target.pids.contains(&w.pid);
-    if let Some(id) = target.window.filter(|&id| id > 0 && id <= i64::from(u32::MAX)) {
+    if let Some(id) = target
+        .window
+        .filter(|&id| id > 0 && id <= i64::from(u32::MAX))
+    {
         let named = seen
             .iter()
             .position(|w| i64::from(w.id) == id && w.big_enough() && owned(w));

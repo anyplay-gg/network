@@ -55,11 +55,7 @@ const USER_DECLINED: isize = -3801;
 fn describe(error: *mut NSError) -> String {
     // SAFETY: the system hands a valid error or null.
     match unsafe { error.as_ref() } {
-        Some(error) => format!(
-            "{} (code {})",
-            error.localizedDescription(),
-            error.code()
-        ),
+        Some(error) => format!("{} (code {})", error.localizedDescription(), error.code()),
         None => "no reason given".into(),
     }
 }
@@ -85,15 +81,17 @@ fn shareable<T: 'static>(
     read: impl Fn(&SCShareableContent) -> T + 'static,
 ) -> Result<T, String> {
     let (tx, rx) = mpsc::channel::<Result<T, String>>();
-    let block = RcBlock::new(move |content: *mut SCShareableContent, error: *mut NSError| {
-        // SAFETY: the system hands a valid object or null.
-        let result = match unsafe { content.as_ref() } {
-            Some(content) => Ok(read(content)),
-            None if is_declined(error) => Err(format!("{DECLINED} ({})", describe(error))),
-            None => Err(format!("the system listed nothing: {}", describe(error))),
-        };
-        let _ = tx.send(result);
-    });
+    let block = RcBlock::new(
+        move |content: *mut SCShareableContent, error: *mut NSError| {
+            // SAFETY: the system hands a valid object or null.
+            let result = match unsafe { content.as_ref() } {
+                Some(content) => Ok(read(content)),
+                None if is_declined(error) => Err(format!("{DECLINED} ({})", describe(error))),
+                None => Err(format!("the system listed nothing: {}", describe(error))),
+            };
+            let _ = tx.send(result);
+        },
+    );
     // SAFETY: the block lives through the call and the system copies it.
     unsafe {
         SCShareableContent::getShareableContentExcludingDesktopWindows_onScreenWindowsOnly_completionHandler(
@@ -237,7 +235,12 @@ define_class!(
 
     unsafe impl SCStreamOutput for Output {
         #[unsafe(method(stream:didOutputSampleBuffer:ofType:))]
-        fn did_output(&self, _stream: &SCStream, buffer: &CMSampleBuffer, kind: SCStreamOutputType) {
+        fn did_output(
+            &self,
+            _stream: &SCStream,
+            buffer: &CMSampleBuffer,
+            kind: SCStreamOutputType,
+        ) {
             if kind == SCStreamOutputType::Screen {
                 self.picture(buffer);
             } else if kind == SCStreamOutputType::Audio {
@@ -285,7 +288,10 @@ impl Output {
             if CVPixelBufferLockBaseAddress(&image, read) != 0 {
                 return;
             }
-            let (width, height) = (CVPixelBufferGetWidth(&image), CVPixelBufferGetHeight(&image));
+            let (width, height) = (
+                CVPixelBufferGetWidth(&image),
+                CVPixelBufferGetHeight(&image),
+            );
             let stride = CVPixelBufferGetBytesPerRow(&image);
             let base = CVPixelBufferGetBaseAddress(&image) as *const u8;
             let packed = if base.is_null() || width == 0 || height == 0 {
@@ -369,10 +375,16 @@ impl Output {
         let interleaved: Vec<f32> = match list.count {
             0 => return,
             1 if list.buffers[0].mNumberChannels >= 2 => floats(&list.buffers[0]),
-            1 => floats(&list.buffers[0]).into_iter().flat_map(|s| [s, s]).collect(),
+            1 => floats(&list.buffers[0])
+                .into_iter()
+                .flat_map(|s| [s, s])
+                .collect(),
             _ => {
                 let (left, right) = (floats(&list.buffers[0]), floats(&list.buffers[1]));
-                left.iter().zip(&right).flat_map(|(l, r)| [*l, *r]).collect()
+                left.iter()
+                    .zip(&right)
+                    .flat_map(|(l, r)| [*l, *r])
+                    .collect()
             }
         };
         let (lock, ready) = &*self.ivars().sound;
@@ -406,10 +418,8 @@ impl SckSource {
         // SAFETY: plain construction and configuration of ScreenCaptureKit objects, and calls
         // that retain what they are given.
         unsafe {
-            let filter = SCContentFilter::initWithDesktopIndependentWindow(
-                SCContentFilter::alloc(),
-                window,
-            );
+            let filter =
+                SCContentFilter::initWithDesktopIndependentWindow(SCContentFilter::alloc(), window);
             let config = SCStreamConfiguration::new();
             // The window's size in pixels, at most 1080p.
             let frame = window.frame();
@@ -442,7 +452,12 @@ impl SckSource {
                     SCStreamOutputType::Screen,
                     Some(&queue),
                 )
-                .map_err(|e| format!("the capture could not take its output: {}", e.localizedDescription()))?;
+                .map_err(|e| {
+                    format!(
+                        "the capture could not take its output: {}",
+                        e.localizedDescription()
+                    )
+                })?;
             start(&stream)?;
             Ok(SckSource {
                 pictures,
@@ -559,7 +574,12 @@ impl SckSound {
                     SCStreamOutputType::Audio,
                     Some(&queue),
                 )
-                .map_err(|e| format!("the sound capture could not take its output: {}", e.localizedDescription()))?;
+                .map_err(|e| {
+                    format!(
+                        "the sound capture could not take its output: {}",
+                        e.localizedDescription()
+                    )
+                })?;
             start(&stream)?;
             Ok(SckSound {
                 sound,

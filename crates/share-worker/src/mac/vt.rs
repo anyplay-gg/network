@@ -23,11 +23,14 @@ use std::time::Duration;
 use anyplay_share::codec::{CodecError, EncodedFrame, Frame, VideoEncoder};
 use anyplay_share::control::CodecCaps;
 use anyplay_share::pixels;
-use objc2_core_foundation::{CFArray, CFBoolean, CFDictionary, CFNumber, CFRetained, CFString, CFType};
+use objc2_core_foundation::{
+    CFArray, CFBoolean, CFDictionary, CFNumber, CFRetained, CFString, CFType,
+};
 use objc2_core_media::{
     CMSampleBuffer, CMTime, CMTimeFlags, CMVideoFormatDescriptionGetH264ParameterSetAtIndex,
-    kCMFormatDescriptionColorPrimaries_ITU_R_709_2, kCMFormatDescriptionTransferFunction_ITU_R_709_2,
-    kCMFormatDescriptionYCbCrMatrix_ITU_R_709_2, kCMVideoCodecType_H264,
+    kCMFormatDescriptionColorPrimaries_ITU_R_709_2,
+    kCMFormatDescriptionTransferFunction_ITU_R_709_2, kCMFormatDescriptionYCbCrMatrix_ITU_R_709_2,
+    kCMVideoCodecType_H264,
 };
 use objc2_core_video::{
     CVPixelBuffer, CVPixelBufferCreate, CVPixelBufferGetBaseAddressOfPlane,
@@ -42,11 +45,11 @@ use objc2_video_toolbox::{
     kVTCompressionPropertyKey_ExpectedFrameRate, kVTCompressionPropertyKey_MaxKeyFrameInterval,
     kVTCompressionPropertyKey_ProfileLevel, kVTCompressionPropertyKey_RealTime,
     kVTCompressionPropertyKey_TransferFunction, kVTCompressionPropertyKey_YCbCrMatrix,
-    kVTEncodeFrameOptionKey_ForceKeyFrame,
+    kVTEncodeFrameOptionKey_ForceKeyFrame, kVTProfileLevel_H264_High_AutoLevel,
+    kVTProfileLevel_H264_Main_AutoLevel,
     kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder,
     kVTVideoEncoderSpecification_EnableLowLatencyRateControl,
     kVTVideoEncoderSpecification_RequireHardwareAcceleratedVideoEncoder,
-    kVTProfileLevel_H264_High_AutoLevel, kVTProfileLevel_H264_Main_AutoLevel,
 };
 
 use crate::annexb::nal_types;
@@ -167,7 +170,10 @@ impl VtEncoder {
                 )),
             }
             if low_latency {
-                pairs.push((kVTVideoEncoderSpecification_EnableLowLatencyRateControl, yes));
+                pairs.push((
+                    kVTVideoEncoderSpecification_EnableLowLatencyRateControl,
+                    yes,
+                ));
             }
         }
         let specification = dictionary(&pairs);
@@ -199,7 +205,11 @@ impl VtEncoder {
             release(refcon);
             return Err(format!(
                 "VideoToolbox has no {} H.264 encoder for this setup (status {status})",
-                if kind == Kind::Hardware { "hardware" } else { "software" }
+                if kind == Kind::Hardware {
+                    "hardware"
+                } else {
+                    "software"
+                }
             ));
         };
         // SAFETY: Create returns a session we own (+1).
@@ -254,7 +264,9 @@ impl VtEncoder {
             // SAFETY: the session is alive and not used after this.
             unsafe { session.invalidate() };
             release(refcon);
-            return Err(format!("VideoToolbox did not prepare the encoder (status {prepared})"));
+            return Err(format!(
+                "VideoToolbox did not prepare the encoder (status {prepared})"
+            ));
         }
         Ok(VtEncoder {
             session,
@@ -293,9 +305,7 @@ impl VtEncoder {
         // IOSurface-backed, so that the media engine reads it without a copy.
         let surface = CFDictionary::<CFString, CFType>::empty();
         // SAFETY: the framework's own constant.
-        let attributes = unsafe {
-            dictionary(&[(kCVPixelBufferIOSurfacePropertiesKey, &surface)])
-        };
+        let attributes = unsafe { dictionary(&[(kCVPixelBufferIOSurfacePropertiesKey, &surface)]) };
         let mut raw: *mut CVPixelBuffer = ptr::null_mut();
         // SAFETY: `raw` is a valid out pointer.
         let status = unsafe {
@@ -327,7 +337,9 @@ impl VtEncoder {
             let chroma_stride = CVPixelBufferGetBytesPerRowOfPlane(&buffer, 1);
             if luma.is_null() || chroma.is_null() || luma_stride < w || chroma_stride < w {
                 CVPixelBufferUnlockBaseAddress(&buffer, CVPixelBufferLockFlags(0));
-                return Err(CodecError::Failed("the picture buffer has no planes".into()));
+                return Err(CodecError::Failed(
+                    "the picture buffer has no planes".into(),
+                ));
             }
             for row in 0..h {
                 ptr::copy_nonoverlapping(
@@ -373,9 +385,14 @@ fn set_rate(session: &VTCompressionSession, kbps: u32) {
     let bits = (kbps.max(100) as i64 * 1000).min(i64::from(i32::MAX)) as i32;
     // SAFETY: the framework's own constants.
     unsafe {
-        set_property(session, kVTCompressionPropertyKey_AverageBitRate, &number(bits));
+        set_property(
+            session,
+            kVTCompressionPropertyKey_AverageBitRate,
+            &number(bits),
+        );
         let bytes_per_second = (i64::from(bits) / 8 * 3 / 2).min(i64::from(i32::MAX)) as i32;
-        let limits = CFArray::<CFNumber>::from_retained_objects(&[number(bytes_per_second), number(1)]);
+        let limits =
+            CFArray::<CFNumber>::from_retained_objects(&[number(bytes_per_second), number(1)]);
         set_property(session, kVTCompressionPropertyKey_DataRateLimits, &limits);
     }
 }
@@ -686,7 +703,10 @@ mod tests {
         }
         assert!(keys.len() > 60, "most pictures come out: {}", keys.len());
         assert!(keys[0]);
-        assert!(keys.iter().filter(|k| **k).count() >= 2, "the second key frame came");
+        assert!(
+            keys.iter().filter(|k| **k).count() >= 2,
+            "the second key frame came"
+        );
         assert!(keys.iter().any(|k| !*k), "and delta frames in between");
     }
 
