@@ -56,6 +56,5 @@ MP4 (`isom`, `iso2`, `avc1`, `mp41`), one H.264 video track, samples timed in 1/
 ## Not in version 0
 
 - Sound: the game's sound by process loopback capture and a second track (see [Not in version 0](screen-share.md#not-in-version-0) of share screen, which needs the same).
-- Linux: the portal's window picker needs the player's confirmation each time, which does not suit a background recorder; the worker answers `ended` with `no_encoder`.
 - Software encoding, 1080p, HDR, a recorder that runs without a game.
 - The engine tap as a source (ADR 0023).
