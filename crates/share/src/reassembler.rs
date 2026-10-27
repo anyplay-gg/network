@@ -12,7 +12,7 @@
 use std::collections::VecDeque;
 
 use crate::codec::EncodedFrame;
-use crate::packetiser::LENGTH_PREFIX;
+use crate::packetiser::{LENGTH_PREFIX, parity_for};
 use crate::rs;
 use crate::wire::{Refusal, VideoDatagram};
 
@@ -20,6 +20,13 @@ use crate::wire::{Refusal, VideoDatagram};
 pub const MAX_FRAMES: usize = 4;
 /// Payload bytes kept in reassembly at once.
 pub const MAX_BYTES: usize = 16 * 1024 * 1024;
+
+/// The most parity, in percent of a group's data packets, a receiver rebuilds from. The rate
+/// controller sends at most 30% (spec, "Loss protection"). Rebuilding costs about the cube of the
+/// missing count in matrix work plus a pass over the group's bytes for each, so a peer that
+/// declares a group with 128 parity packets and sends only those would otherwise make every frame
+/// cost the viewer far more than any real loss can.
+pub const MAX_PARITY_PERCENT: u8 = 30;
 
 const TOMBSTONES: usize = 16;
 const TOMBSTONE_LIFE_US: u64 = 100_000;
@@ -371,6 +378,9 @@ impl Reassembler {
     }
 
     fn insert(&mut self, now_us: u64, dg: &VideoDatagram<'_>) -> Result<Outcome, Refusal> {
+        if usize::from(dg.parity) > parity_for(usize::from(dg.data), MAX_PARITY_PERCENT) {
+            return Err(Refusal::ParityCount(dg.parity));
+        }
         let pos = match self.frames.iter().position(|a| a.frame == dg.frame) {
             Some(p) => p,
             None => {
@@ -669,6 +679,33 @@ mod tests {
         for d in dgs {
             r.on_datagram(now, d).unwrap();
         }
+    }
+
+    #[test]
+    fn a_group_with_more_parity_than_the_sender_ever_makes_is_refused() {
+        let mut r = Reassembler::new(0);
+        let head = VideoDatagram {
+            key: true,
+            is_parity: true,
+            epoch: 0,
+            frame: 0,
+            timestamp: 0,
+            group: 0,
+            groups: 1,
+            index: 127,
+            data: 127,
+            parity: 128,
+            payload: &[7u8; 100],
+        };
+        let dg = head.encode().unwrap();
+        // The datagram is well formed on the wire, yet no frame is started for it.
+        assert_eq!(r.on_datagram(0, &dg), Err(Refusal::ParityCount(128)));
+        assert_eq!(r.in_flight(), (0, 0));
+        // The sender's own maximum still goes through.
+        let mut p = crate::packetiser::Packetiser::new(1000, 0);
+        let f = frame(20_000, true, 3);
+        feed(&mut r, 0, &p.packetise(&f, MAX_PARITY_PERCENT).unwrap());
+        assert!(r.poll_frame(0).is_some());
     }
 
     #[test]

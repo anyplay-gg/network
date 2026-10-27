@@ -13,7 +13,9 @@ use std::mem::ManuallyDrop;
 use std::sync::Once;
 use std::time::{Duration, Instant};
 
-use anyplay_share::codec::{CodecError, EncodedFrame, Frame, VideoDecoder, VideoEncoder};
+use anyplay_share::codec::{
+    CodecError, EncodedFrame, Frame, VideoDecoder, VideoEncoder, decoded_size_ok,
+};
 use anyplay_share::control::CodecCaps;
 use anyplay_share::pixels;
 use windows::Win32::Media::MediaFoundation::{
@@ -827,6 +829,14 @@ impl MfDecoder {
         layout: Layout,
         timestamp_us: u32,
     ) -> Result<Option<Frame>, CodecError> {
+        // The sizes come out of the remote stream: check them before reading or allocating.
+        if !decoded_size_ok(layout.coded_width as usize, layout.coded_height as usize)
+            || !decoded_size_ok(layout.width as usize, layout.height as usize)
+            || layout.width > layout.coded_width
+            || layout.height > layout.coded_height
+        {
+            return Err(CodecError::BadFrame);
+        }
         let data = read_sample(sample).map_err(CodecError::Failed)?;
         // Y at `stride` for `coded_height` rows, then UV; the visible size is cropped from the
         // top left.

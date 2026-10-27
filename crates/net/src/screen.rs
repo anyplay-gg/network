@@ -31,6 +31,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 
 use crate::tunnel::Tunnels;
+use crate::worker_process::ToWorkerTx;
 
 /// The protocol of a screen connection.
 pub const ALPN: &[u8] = b"anyplay/screen/0";
@@ -68,6 +69,51 @@ pub mod code {
     pub const REPLACED: u32 = 4;
     pub const LEFT_PARTY: u32 = 5;
     pub const PROTOCOL: u32 = 6;
+    /// The other side stopped reading the control stream until [`super::MAX_QUEUED_MESSAGES`]
+    /// messages piled up for it.
+    pub const STALLED: u32 = 7;
+}
+
+/// Control messages waiting to be written to one peer. The hub answers and reports at a few
+/// messages a second, so a peer that lets this many pile up has stopped reading its stream:
+/// the connection is closed (code [`code::STALLED`]) rather than losing messages, or growing
+/// the queue without limit.
+pub const MAX_QUEUED_MESSAGES: usize = 256;
+
+/// The hub's end of the queue of control messages to one peer: never blocks, bounded.
+struct PeerTx {
+    tx: mpsc::Sender<Message>,
+    /// Ends the connection; called once when the queue overflows.
+    on_overflow: Box<dyn Fn() + Send + Sync>,
+}
+
+impl PeerTx {
+    fn new(
+        capacity: usize,
+        on_overflow: impl Fn() + Send + Sync + 'static,
+    ) -> (PeerTx, mpsc::Receiver<Message>) {
+        let (tx, rx) = mpsc::channel(capacity);
+        (
+            PeerTx {
+                tx,
+                on_overflow: Box::new(on_overflow),
+            },
+            rx,
+        )
+    }
+
+    /// `true` when the message is queued. On overflow the connection is ended and the message
+    /// is not queued; a closed queue (the connection is already gone) is not an overflow.
+    fn send(&self, message: Message) -> bool {
+        match self.tx.try_send(message) {
+            Ok(()) => true,
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                (self.on_overflow)();
+                false
+            }
+            Err(mpsc::error::TrySendError::Closed(_)) => false,
+        }
+    }
 }
 
 // The share worker, as the hub sees it
@@ -83,7 +129,7 @@ pub struct GameWindow {
 
 /// The two ends of the conversation with one worker. Dropping `to` ends the worker.
 pub struct WorkerPort {
-    pub to: mpsc::UnboundedSender<ToWorker>,
+    pub to: ToWorkerTx,
     pub from: mpsc::Receiver<FromWorker>,
 }
 
@@ -428,7 +474,7 @@ struct Peer {
     account: u64,
     link: Link,
     rtt_ms: Option<u32>,
-    writer: mpsc::UnboundedSender<Message>,
+    writer: PeerTx,
     /// What the other side told in its `hello`.
     hello: Option<wire::Hello>,
     /// `Out`: the member chose to watch. `In`: this player chose to watch.
@@ -452,7 +498,7 @@ struct Hosting {
 
 struct HostWorker {
     generation: u64,
-    to: mpsc::UnboundedSender<ToWorker>,
+    to: ToWorkerTx,
     start: Start,
     stats: WorkerStats,
     _forward: Guard,
@@ -462,7 +508,7 @@ struct HostWorker {
 struct Watching {
     key: PeerKey,
     generation: u64,
-    to: mpsc::UnboundedSender<ToWorker>,
+    to: ToWorkerTx,
     stats: WorkerStats,
     live: bool,
     last_progress: Instant,
@@ -733,7 +779,10 @@ impl Task {
             }
         }
         let stable = connection.stable_id();
-        let (writer, queue) = mpsc::unbounded_channel();
+        let (writer, queue) = PeerTx::new(MAX_QUEUED_MESSAGES, {
+            let connection = connection.clone();
+            move || connection.close(code::STALLED.into(), b"control stream stalled")
+        });
         // Our hello goes first on the stream.
         let caps = self.workers.capabilities().unwrap_or_default();
         let hello = match key.1 {
@@ -1504,7 +1553,7 @@ async fn control_stream(
     key: PeerKey,
     stable: usize,
     connection: Connection,
-    mut queue: mpsc::UnboundedReceiver<Message>,
+    mut queue: mpsc::Receiver<Message>,
     net: mpsc::Sender<Net>,
 ) {
     let opened = match key.1 {
@@ -1586,5 +1635,54 @@ async fn dial(endpoint: Endpoint, id: EndpointId, relay: Option<RelayUrl>, net: 
         }
         tokio::time::sleep(pause).await;
         pause = (pause * 2).min(LONGEST_PAUSE);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use super::*;
+
+    #[test]
+    fn a_peer_that_stops_reading_ends_its_connection_instead_of_growing_the_queue() {
+        let ended = Arc::new(AtomicUsize::new(0));
+        let (tx, mut rx) = PeerTx::new(MAX_QUEUED_MESSAGES, {
+            let ended = ended.clone();
+            move || {
+                ended.fetch_add(1, Ordering::SeqCst);
+            }
+        });
+        for _ in 0..MAX_QUEUED_MESSAGES {
+            assert!(tx.send(Message::Watch {}));
+        }
+        assert_eq!(ended.load(Ordering::SeqCst), 0);
+        // A hostile peer keeps provoking answers while it reads nothing.
+        for _ in 0..100_000 {
+            assert!(!tx.send(Message::Watch {}));
+        }
+        assert!(ended.load(Ordering::SeqCst) >= 1);
+        let mut queued = 0;
+        while rx.try_recv().is_ok() {
+            queued += 1;
+        }
+        assert_eq!(
+            queued, MAX_QUEUED_MESSAGES,
+            "the queue never passed its cap"
+        );
+    }
+
+    #[test]
+    fn a_connection_that_is_already_gone_is_not_an_overflow() {
+        let ended = Arc::new(AtomicUsize::new(0));
+        let (tx, rx) = PeerTx::new(4, {
+            let ended = ended.clone();
+            move || {
+                ended.fetch_add(1, Ordering::SeqCst);
+            }
+        });
+        drop(rx);
+        assert!(!tx.send(Message::Watch {}));
+        assert_eq!(ended.load(Ordering::SeqCst), 0);
     }
 }

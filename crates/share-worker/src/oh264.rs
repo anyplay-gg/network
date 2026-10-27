@@ -20,7 +20,9 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::Instant;
 
-use anyplay_share::codec::{CodecError, EncodedFrame, Frame, VideoDecoder, VideoEncoder};
+use anyplay_share::codec::{
+    CodecError, EncodedFrame, Frame, VideoDecoder, VideoEncoder, decoded_size_ok,
+};
 use anyplay_share::control::CodecCaps;
 use anyplay_share::link::{CodecLibrary, LibraryState};
 use anyplay_share::pixels;
@@ -359,6 +361,9 @@ impl VideoDecoder for OhDecoder {
             Err(_) => return Err(CodecError::MissingReference),
         };
         let (width, height) = picture.dimensions();
+        if !decoded_size_ok(width, height) {
+            return Err(CodecError::BadFrame);
+        }
         let nv12 = i420_to_nv12(
             (picture.y(), picture.u(), picture.v()),
             width,
