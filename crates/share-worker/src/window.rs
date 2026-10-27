@@ -2,8 +2,11 @@
 //! with its shape kept, and nothing else. Closing it (or Escape) leaves the stream.
 
 use anyplay_share::codec::Frame;
+use anyplay_share::pad::PadState;
 use minifb::{Key, ScaleMode, Window, WindowOptions};
 
+use crate::gamepad::{GamepadSource, GuestPad};
+use crate::input::{PadKey, pad_from_keys};
 use crate::viewer::FrameSink;
 
 /// The window opens at the picture's size, but never larger than this, so that a 1080p stream
@@ -16,6 +19,7 @@ pub struct WindowSink {
     buffer: Vec<u32>,
     size: (usize, usize),
     closed: bool,
+    pad: Option<GuestPad>,
 }
 
 impl WindowSink {
@@ -26,7 +30,21 @@ impl WindowSink {
             buffer: Vec::new(),
             size: (0, 0),
             closed: false,
+            pad: None,
         }
+    }
+
+    /// The window also reads the guest's pad (share play, not share screen): the keyboard, and
+    /// the first connected gamepad merged in (`crate::gamepad`).
+    pub fn with_pad(mut self) -> WindowSink {
+        self.pad = Some(GuestPad::system());
+        self
+    }
+
+    /// Like [`WindowSink::with_pad`], with the gamepad from `source`.
+    pub fn with_pad_source(mut self, source: Box<dyn GamepadSource>) -> WindowSink {
+        self.pad = Some(GuestPad::new(source));
+        self
     }
 
     /// The window's own events; with `picture`, the last picture again.
@@ -104,5 +122,43 @@ impl FrameSink for WindowSink {
 
     fn closed(&self) -> bool {
         self.closed
+    }
+
+    fn pad(&mut self) -> Option<PadState> {
+        let pad = self.pad.as_mut()?;
+        let window = self.window.as_ref().filter(|w| w.is_active())?;
+        // Only the keys of the pad are asked about; a key of the window's own (Escape) is not.
+        let keyboard = pad_from_keys(|key| window.is_key_down(minifb_key(key)));
+        Some(pad.read(keyboard))
+    }
+}
+
+fn minifb_key(key: PadKey) -> Key {
+    match key {
+        PadKey::W => Key::W,
+        PadKey::A => Key::A,
+        PadKey::S => Key::S,
+        PadKey::D => Key::D,
+        PadKey::I => Key::I,
+        PadKey::J => Key::J,
+        PadKey::K => Key::K,
+        PadKey::L => Key::L,
+        PadKey::Up => Key::Up,
+        PadKey::Down => Key::Down,
+        PadKey::Left => Key::Left,
+        PadKey::Right => Key::Right,
+        PadKey::Z => Key::Z,
+        PadKey::X => Key::X,
+        PadKey::C => Key::C,
+        PadKey::V => Key::V,
+        PadKey::Q => Key::Q,
+        PadKey::E => Key::E,
+        PadKey::Num1 => Key::Key1,
+        PadKey::Num3 => Key::Key3,
+        PadKey::F => Key::F,
+        PadKey::G => Key::G,
+        PadKey::Enter => Key::Enter,
+        PadKey::Tab => Key::Tab,
+        PadKey::Backspace => Key::Backspace,
     }
 }

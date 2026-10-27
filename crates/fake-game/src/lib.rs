@@ -9,7 +9,8 @@ use std::time::Duration;
 
 use anyplay_bridge_protocol::{
     Activate, ActivateResult, Bind, BindResult, Decoder, Frame, Hello, Kind, Message, SessionKind,
-    State, TrafficHeader, Transport, WebReply, WebRequest, Welcome,
+    ShareMode, ShareOpen, SharePad, ShareResult, State, TrafficHeader, Transport, WebReply,
+    WebRequest, Welcome,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpStream, UdpSocket};
@@ -20,6 +21,92 @@ const PATIENCE: Duration = Duration::from_secs(30);
 
 type Waiters = Arc<Mutex<HashMap<u32, oneshot::Sender<Message>>>>;
 
+/// What the engine's share play does when the net service speaks to it, with the rules the
+/// bridge in AnyPS5 follows (`spec/share-play.md`, Bridge protocol additions): it takes a pad
+/// only in a mode that has a pad, on the slot of that mode, with no reserved button bit, and
+/// the guest's pad is neutral whenever the mode or the share ends.
+#[derive(Clone, Debug, Default)]
+pub struct ShareEngine {
+    /// The answer to the next `share_open`; `None` is "copying".
+    pub refuse_with: Option<ShareResult>,
+    /// The last `share_open` that was answered with "copying".
+    pub opened: Option<ShareOpen>,
+    /// The mode the net service last set; `None` before an open.
+    pub mode: Option<ShareMode>,
+    /// A `share_close` came after the open.
+    pub closed: bool,
+    /// Every pad state the engine took, in order.
+    pub taken: Vec<SharePad>,
+    /// Pad states the engine refused (wrong mode, wrong slot, reserved buttons).
+    pub refused: u32,
+    /// What the game sees on pad 1 and pad 2 from the guest now; `None` when no guest pad is
+    /// connected.
+    pub now: [Option<SharePad>; 2],
+    /// Frames the net service sent that this engine does not know.
+    pub unknown: u32,
+}
+
+impl ShareEngine {
+    fn slot_of(mode: ShareMode) -> Option<u8> {
+        match mode {
+            ShareMode::HandOver => Some(0),
+            ShareMode::Together => Some(1),
+            ShareMode::Watch | ShareMode::Unknown => None,
+        }
+    }
+
+    fn disconnect(&mut self) {
+        self.now = [None, None];
+    }
+
+    fn apply(&mut self, message: &Message) -> Option<ShareResult> {
+        match message {
+            Message::ShareOpen(open) => {
+                if self.opened.is_some() && !self.closed {
+                    return Some(ShareResult::Running);
+                }
+                if let Some(result) = self.refuse_with {
+                    return Some(result);
+                }
+                self.opened = Some(open.clone());
+                self.closed = false;
+                self.mode = Some(open.mode);
+                self.taken.clear();
+                self.refused = 0;
+                self.disconnect();
+                Some(ShareResult::Copying)
+            }
+            Message::ShareClose => {
+                self.closed = true;
+                self.disconnect();
+                None
+            }
+            Message::ShareMode { mode } => {
+                self.mode = Some(*mode);
+                self.disconnect();
+                None
+            }
+            Message::SharePad(pad) => {
+                let allowed = self.opened.is_some()
+                    && !self.closed
+                    && self.mode.and_then(Self::slot_of) == Some(pad.slot)
+                    && pad.buttons & !0x7FFF == 0;
+                if allowed {
+                    self.taken.push(*pad);
+                    self.now[usize::from(pad.slot)] = Some(*pad);
+                } else {
+                    self.refused += 1;
+                }
+                None
+            }
+            _ => {
+                self.unknown += 1;
+                None
+            }
+        }
+    }
+}
+
 /// A connected bridge.
 pub struct Bridge {
     writer: mpsc::UnboundedSender<Frame>,
@@ -28,6 +115,17 @@ pub struct Bridge {
     welcome: Welcome,
     state: watch::Receiver<State>,
     events: tokio::sync::Mutex<mpsc::UnboundedReceiver<Message>>,
+    share: Arc<Mutex<ShareEngine>>,
+    tasks: Vec<tokio::task::JoinHandle<()>>,
+}
+
+impl Drop for Bridge {
+    /// The game exits: both halves of the connection go, and the net service sees it close.
+    fn drop(&mut self) {
+        for task in &self.tasks {
+            task.abort();
+        }
+    }
 }
 
 impl Bridge {
@@ -75,7 +173,7 @@ impl Bridge {
         };
 
         let (writer, mut outgoing) = mpsc::unbounded_channel::<Frame>();
-        tokio::spawn(async move {
+        let writing = tokio::spawn(async move {
             let mut bytes = Vec::new();
             while let Some(frame) = outgoing.recv().await {
                 bytes.clear();
@@ -87,7 +185,9 @@ impl Bridge {
         let waiters: Waiters = Arc::default();
         let (state_tx, state) = watch::channel(State::signed_out());
         let (event_tx, events) = mpsc::unbounded_channel();
-        {
+        let share: Arc<Mutex<ShareEngine>> = Arc::default();
+        let reading = {
+            let share = share.clone();
             let waiters = waiters.clone();
             let writer = writer.clone();
             tokio::spawn(async move {
@@ -118,6 +218,23 @@ impl Bridge {
                             Message::State(new) => {
                                 let _ = state_tx.send(new);
                             }
+                            share_message @ (Message::ShareOpen(_)
+                            | Message::ShareClose
+                            | Message::ShareMode { .. }
+                            | Message::SharePad(_)) => {
+                                let answer = share
+                                    .lock()
+                                    .unwrap_or_else(|e| e.into_inner())
+                                    .apply(&share_message);
+                                if let (Some(result), true) = (answer, frame.request != 0)
+                                    && let Ok(reply) = Frame::numbered(
+                                        &Message::ShareOpened { result },
+                                        frame.request,
+                                    )
+                                {
+                                    let _ = writer.send(reply);
+                                }
+                            }
                             other => {
                                 let _ = event_tx.send(other);
                             }
@@ -131,8 +248,8 @@ impl Bridge {
                         Ok(n) => decoder.push(&buf[..n]),
                     }
                 }
-            });
-        }
+            })
+        };
         Ok(Bridge {
             writer,
             waiters,
@@ -140,7 +257,22 @@ impl Bridge {
             welcome,
             state,
             events: tokio::sync::Mutex::new(events),
+            share,
+            tasks: vec![writing, reading],
         })
+    }
+
+    /// What the engine's share play has seen and done so far.
+    pub fn share_engine(&self) -> ShareEngine {
+        self.share.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    /// Makes the engine answer the next `share_open` with `result` instead of "copying".
+    pub fn refuse_share_open(&self, result: ShareResult) {
+        self.share
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .refuse_with = Some(result);
     }
 
     /// Connects with the variables the launcher gives a game.

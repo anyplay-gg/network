@@ -1,4 +1,4 @@
-//! Hardware H.264 encoders on Linux, loaded from the system while the worker runs (ADR 0036).
+//! Hardware H.264 encoders on Linux, loaded from the system while the worker runs (ADR 0037).
 //!
 //! Two backends sit behind [`anyplay_share::codec::VideoEncoder`]: NVENC for NVIDIA (the driver's
 //! `libnvidia-encode.so.1`, with `libcuda.so.1`) and VA-API for Intel and AMD (`libva.so.2` and

@@ -10,7 +10,8 @@ use std::io::Write;
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -30,6 +31,121 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// How long a worker has to leave after it was told to stop.
 const LEAVE_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Datagrams (a remote peer's video and audio) waiting for the worker. A viewer worker that falls
+/// behind loses the newest ones beyond this: the stream is lossy by design and the reassembler
+/// asks for a key frame, while a longer queue would only show old pictures later.
+pub const MAX_QUEUED_DATAGRAMS: usize = 256;
+/// Control messages (start, rate, key frame) waiting for the worker. They are a few per second;
+/// a worker that has not taken this many is stuck, and it is ended rather than left to lose them.
+pub const MAX_QUEUED_CONTROL: usize = 256;
+
+#[derive(Default)]
+struct Counts {
+    datagrams: AtomicUsize,
+    control: AtomicUsize,
+    dropped: AtomicU64,
+    /// The control queue overflowed: the worker is ended.
+    broken: AtomicBool,
+}
+
+/// Why a message did not reach the worker.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum QueueError {
+    /// The worker is gone (or was ended because it stopped taking control messages).
+    Closed,
+}
+
+/// The service's end of the queue to one worker: never blocks, never grows without limit.
+///
+/// Overflow policy, per kind of message: a [`ToWorker::Datagram`] that finds
+/// [`MAX_QUEUED_DATAGRAMS`] waiting is dropped and counted; any other message that finds
+/// [`MAX_QUEUED_CONTROL`] waiting ends the worker (the queue closes after a stop), so a control
+/// message is never silently lost; [`ToWorker::Stop`] always gets through.
+#[derive(Clone)]
+pub struct ToWorkerTx {
+    tx: mpsc::UnboundedSender<ToWorker>,
+    counts: Arc<Counts>,
+}
+
+/// The worker side of [`ToWorkerTx`].
+pub struct ToWorkerRx {
+    rx: mpsc::UnboundedReceiver<ToWorker>,
+    counts: Arc<Counts>,
+}
+
+/// A queue to one worker.
+pub fn to_worker_channel() -> (ToWorkerTx, ToWorkerRx) {
+    let (tx, rx) = mpsc::unbounded_channel();
+    let counts = Arc::new(Counts::default());
+    (
+        ToWorkerTx {
+            tx,
+            counts: counts.clone(),
+        },
+        ToWorkerRx { rx, counts },
+    )
+}
+
+impl ToWorkerTx {
+    pub fn send(&self, message: ToWorker) -> Result<(), QueueError> {
+        let counts = &self.counts;
+        if counts.broken.load(Ordering::SeqCst) {
+            return Err(QueueError::Closed);
+        }
+        match message {
+            ToWorker::Datagram(_) => {
+                if counts.datagrams.fetch_add(1, Ordering::SeqCst) >= MAX_QUEUED_DATAGRAMS {
+                    counts.datagrams.fetch_sub(1, Ordering::SeqCst);
+                    counts.dropped.fetch_add(1, Ordering::SeqCst);
+                    return Ok(());
+                }
+            }
+            ToWorker::Stop => {}
+            _ => {
+                if counts.control.fetch_add(1, Ordering::SeqCst) >= MAX_QUEUED_CONTROL {
+                    counts.control.fetch_sub(1, Ordering::SeqCst);
+                    counts.broken.store(true, Ordering::SeqCst);
+                    // Wakes the thread that feeds the worker, which then ends it.
+                    let _ = self.tx.send(ToWorker::Stop);
+                    return Err(QueueError::Closed);
+                }
+            }
+        }
+        self.tx.send(message).map_err(|_| QueueError::Closed)
+    }
+
+    /// Datagrams dropped because the worker was behind.
+    pub fn dropped(&self) -> u64 {
+        self.counts.dropped.load(Ordering::SeqCst)
+    }
+}
+
+impl ToWorkerRx {
+    fn taken(&self, message: Option<ToWorker>) -> Option<ToWorker> {
+        let message = message?;
+        match message {
+            ToWorker::Datagram(_) => self.counts.datagrams.fetch_sub(1, Ordering::SeqCst),
+            ToWorker::Stop => 0,
+            _ => self.counts.control.fetch_sub(1, Ordering::SeqCst),
+        };
+        // After an overflow nothing more goes to the worker, only the end.
+        if self.counts.broken.load(Ordering::SeqCst) {
+            return None;
+        }
+        Some(message)
+    }
+
+    pub async fn recv(&mut self) -> Option<ToWorker> {
+        let message = self.rx.recv().await;
+        self.taken(message)
+    }
+
+    pub fn blocking_recv(&mut self) -> Option<ToWorker> {
+        let message = self.rx.blocking_recv();
+        self.taken(message)
+    }
+}
 
 /// Workers that are the program at the path the launcher gave (`screen_worker`).
 #[derive(Default)]
@@ -124,7 +240,7 @@ impl Workers for ProcessWorkers {
             .spawn()
             .map_err(|e| format!("the share worker could not start: {e}"))?;
 
-        let (to_tx, mut to_rx) = mpsc::unbounded_channel::<ToWorker>();
+        let (to_tx, mut to_rx) = to_worker_channel();
         let (from_tx, from_rx) = mpsc::channel::<FromWorker>(1024);
         thread::spawn(move || {
             let stream = match accept(&listener, &token, role) {
@@ -270,4 +386,80 @@ fn accept(listener: &TcpListener, token: &str, role: Role) -> Result<TcpStream, 
     .map_err(|e| e.to_string())?;
     stream.set_read_timeout(None).map_err(|e| e.to_string())?;
     Ok(stream)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_worker_that_stops_reading_cannot_make_the_datagram_queue_grow() {
+        let (tx, mut rx) = to_worker_channel();
+        for n in 0..100_000u32 {
+            tx.send(ToWorker::Datagram(n.to_be_bytes().to_vec()))
+                .unwrap();
+        }
+        assert_eq!(tx.dropped(), (100_000 - MAX_QUEUED_DATAGRAMS) as u64);
+        let mut kept = 0;
+        while kept < MAX_QUEUED_DATAGRAMS {
+            assert!(matches!(rx.blocking_recv(), Some(ToWorker::Datagram(_))));
+            kept += 1;
+        }
+        // Room again once the worker has caught up.
+        tx.send(ToWorker::Datagram(vec![1])).unwrap();
+        assert_eq!(tx.dropped(), (100_000 - MAX_QUEUED_DATAGRAMS) as u64);
+    }
+
+    #[test]
+    fn datagrams_never_push_a_control_message_out() {
+        let (tx, mut rx) = to_worker_channel();
+        for _ in 0..MAX_QUEUED_DATAGRAMS * 2 {
+            tx.send(ToWorker::Datagram(vec![0])).unwrap();
+        }
+        tx.send(ToWorker::KeyFrame).unwrap();
+        tx.send(ToWorker::Stop).unwrap();
+        let mut seen = Vec::new();
+        while let Some(m) = rx.blocking_recv() {
+            let done = m == ToWorker::Stop;
+            seen.push(m);
+            if done {
+                break;
+            }
+        }
+        assert!(seen.contains(&ToWorker::KeyFrame));
+        assert_eq!(seen.last(), Some(&ToWorker::Stop));
+    }
+
+    #[test]
+    fn a_worker_that_takes_no_control_message_is_ended_not_left_to_lose_them() {
+        let (tx, mut rx) = to_worker_channel();
+        for _ in 0..MAX_QUEUED_CONTROL {
+            tx.send(ToWorker::KeyFrame).unwrap();
+        }
+        assert_eq!(tx.send(ToWorker::KeyFrame), Err(QueueError::Closed));
+        // From then on the queue is closed to everything but the end.
+        assert_eq!(
+            tx.send(ToWorker::Datagram(vec![1])),
+            Err(QueueError::Closed)
+        );
+        assert_eq!(rx.blocking_recv(), None);
+    }
+
+    #[test]
+    fn stop_gets_through_a_full_control_queue() {
+        let (tx, mut rx) = to_worker_channel();
+        for _ in 0..MAX_QUEUED_CONTROL {
+            tx.send(ToWorker::KeyFrame).unwrap();
+        }
+        tx.send(ToWorker::Stop).unwrap();
+        let mut keys = 0;
+        loop {
+            match rx.blocking_recv() {
+                Some(ToWorker::KeyFrame) => keys += 1,
+                Some(ToWorker::Stop) => break,
+                other => panic!("unexpected {other:?}"),
+            }
+        }
+        assert_eq!(keys, MAX_QUEUED_CONTROL);
+    }
 }

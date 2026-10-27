@@ -67,7 +67,21 @@ On Windows the streamer's worker takes the picture of one window with Windows Gr
 2. The largest window of one of `pids` that is visible, not a tool window and at least 200 by 150. The worker looks for up to 8 seconds, because a game that has just started has no window yet. `pids` are the game's process and what it started, as the launcher's job object lists them.
 3. Only when the launcher named neither: a window whose title contains the game's title. This is a guess and the launcher always names the game, so it is the fallback for tools and tests.
 
+On macOS (12.3 and later) the worker uses ScreenCaptureKit for one window ([ADR 0036](../docs/adr/0036-macos-captures-with-screencapturekit-and-encodes-with-videotoolbox.md)), found in the same order as on Windows with the window's number from the system's list: `window` is a window number, `pids` the game's processes, at least 200 by 150, ordinary windows only (not menus or overlays). The captured picture is at most 1080p in pixels. The cursor is not drawn.
+
 A window that does not change (or is minimised) gives its last picture again at the stream's rate, so the viewer sees a live stream. The stream's size is the rate ladder's, not the window's: a picture of another size or shape is scaled to fit with black bars, so a resize of the window never restarts the stream. When the window closes the capture ends and so does the stream. The cursor and the capture border are not drawn.
+
+### Screen Recording permission
+
+macOS shows a program nothing of other programs' windows until the player switches Screen Recording on for the app that started the worker (System Settings, Privacy & Security, Screen Recording). The worker has three commands for it and never prompts on its own; each prints one JSON line (the last prints nothing) and exits.
+
+| Command | Output |
+|---|---|
+| `anyplay-share --screen-access` | `{"screen_access":"granted"}`, `"denied"`, or `"not_needed"` on systems without the switch. Does not prompt. |
+| `anyplay-share --request-screen-access` | The same, after asking the system to show its prompt (once per app; later calls only look). |
+| `anyplay-share --open-screen-settings` | Opens the Screen Recording page of System Settings. Exit code 0 when it opened. |
+
+While the permission is off, a stream ends before it starts with a reason that names the switch, and clips and broadcast end with `no_permission`. The launcher explains it in plain words, opens the page, and records again when the player has switched it on; macOS may ask the player to quit and reopen the app first.
 
 ## Starting, watching, stopping
 
@@ -122,7 +136,7 @@ None of it. Share screen adds no request, no state and no event to the [cloud AP
 ## Moderation and privacy
 
 - Party only: no link, no public stream, no spectator from outside the party. A report names the account; the cloud holds no video, so there is nothing for a moderator to view.
-- The picture comes from the game's window only. On Windows it is Windows Graphics Capture of that window; on Linux the portal's window picker, which the player confirms each time (see Capture). The desktop and other windows are not captured.
+- The picture comes from the game's window only. On Windows it is Windows Graphics Capture of that window; on macOS ScreenCaptureKit of that window, after the player has allowed Screen Recording; on Linux the portal's window picker, which the player confirms each time (see Capture). The desktop and other windows are not captured.
 - A viewer's decoder runs in the worker, a process without account or file access of its own, and only after the viewer chose Watch; the parsers and the reassembler are fuzzed ([fuzz](../fuzz/README.md)).
 - Relay-only ("Hide Your IP Address") applies: with either side set, the stream goes through a relay and the launcher says so ("Through a relay: up to 720p60").
 
@@ -135,6 +149,7 @@ Against [ADR 0021](../docs/adr/0021-the-line-is-drawn-at-the-law.md): no platfor
 - Input of any kind from a viewer (that is share play's `hand_over` and `together`, behind `share.enabled`).
 - Viewers outside the party, a public link, recording or clips.
 - Several rates (one per viewer): the stream follows the weakest watcher.
+- A viewer on macOS: a Mac streams but has no decoder or viewer window yet, so it cannot watch. Game sound on a Mac is one stream of the game's applications (ScreenCaptureKit); a game whose processes are no application the system lists has no sound.
 - Game sound on Linux, at either end. On Windows the streamer's worker captures the game's process tree (WASAPI process loopback, Windows 10 build 20348 and later), sends it as Opus in the [audio datagram](share-play.md#audio-datagram) and the viewer's worker plays it; a viewer whose worker plays no sound says "no sound" in its window title. Keeping sound and picture within 40 ms of each other.
 - The engine tap as a source (see ADR 0023), HDR, 4K, more than two channels of sound.
 - A "is streaming" mark in the friends list.

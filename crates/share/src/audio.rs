@@ -18,6 +18,8 @@ pub const FRAME_SAMPLES: usize = 480;
 pub const MIN_DEPTH: usize = 4;
 /// The longest: 120 ms.
 pub const MAX_DEPTH: usize = 12;
+/// Most packets held at once; a sender cannot make the buffer grow past this.
+const MAX_HELD: usize = 512;
 /// Packets the buffer may hold above its depth before it skips ahead to keep the delay.
 const SLACK: usize = 4;
 /// Ticks of concealment after which a stream that stopped is given up; it starts again with
@@ -208,6 +210,9 @@ impl AudioJitter {
         self.packets
             .entry(sequence)
             .or_insert_with(|| datagram.payload.to_vec());
+        while self.packets.len() > MAX_HELD {
+            self.packets.pop_first();
+        }
         Ok(())
     }
 
@@ -337,6 +342,15 @@ mod tests {
             Playout::Packet(p) => Some(u16::from_be_bytes([p[0], p[1]])),
             _ => None,
         }
+    }
+
+    #[test]
+    fn a_sender_cannot_make_the_buffer_grow_without_end() {
+        let mut jitter = AudioJitter::new();
+        for datagram in stream(3, 3000) {
+            let _ = jitter.insert(&datagram);
+        }
+        assert!(jitter.packets.len() <= MAX_HELD);
     }
 
     #[test]

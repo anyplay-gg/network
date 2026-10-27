@@ -7,8 +7,9 @@
 
 use std::io::{self, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, mpsc};
+use std::time::{Duration, Instant};
 
 use rustls::ClientConfig;
 
@@ -19,6 +20,10 @@ use super::tls::{self, TlsCloser};
 const OUT_CHUNK: usize = 4096;
 /// How long the connection and each step of opening the stream may take.
 const OPEN_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long the whole opening may take, from the first connection attempt to the server's
+/// "publish started". The per-read timeout alone does not bound it: a server that answers one byte
+/// or one unrelated message every few seconds would keep the open going forever.
+const OPEN_DEADLINE: Duration = Duration::from_secs(30);
 /// How long a write may stall before the link counts as lost.
 const WRITE_TIMEOUT: Duration = Duration::from_secs(15);
 
@@ -197,6 +202,13 @@ struct Partial {
     payload: Vec<u8>,
 }
 
+/// Largest message a server may send us; its replies and acknowledgements are tiny.
+const MAX_INCOMING_MESSAGE: usize = 1024 * 1024;
+/// Largest chunk size we accept from a server.
+const MAX_INCOMING_CHUNK: usize = 64 * 1024;
+/// Most chunk streams open at once.
+const MAX_CHUNK_STREAMS: usize = 64;
+
 /// Joins chunks back into messages. A "set chunk size" message is applied here and still given
 /// to the caller.
 pub struct ChunkReader<R: Read> {
@@ -251,6 +263,12 @@ impl<R: Read> ChunkReader<R> {
                 }
                 n => u32::from(n),
             };
+            if !self.streams.contains_key(&csid) && self.streams.len() >= MAX_CHUNK_STREAMS {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "the server uses too many chunk streams",
+                ));
+            }
             let mut partial = self.streams.remove(&csid).unwrap_or_default();
             let continuing = !partial.payload.is_empty();
             match format {
@@ -294,13 +312,19 @@ impl<R: Read> ChunkReader<R> {
                     }
                 }
             }
-            if partial.length > 16 * 1024 * 1024 {
+            if partial.length > MAX_INCOMING_MESSAGE {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
                     "the server sent a message that is too large",
                 ));
             }
-            let want = (partial.length - partial.payload.len()).min(self.chunk_size);
+            let Some(left) = partial.length.checked_sub(partial.payload.len()) else {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "the server shrank a message that was already in part",
+                ));
+            };
+            let want = left.min(self.chunk_size);
             let part = self.take(want)?;
             partial.payload.extend_from_slice(&part);
             if partial.payload.len() >= partial.length {
@@ -313,7 +337,8 @@ impl<R: Read> ChunkReader<R> {
                 self.streams.insert(csid, partial);
                 if message.kind == SET_CHUNK_SIZE && message.payload.len() >= 4 {
                     let size = u32::from_be_bytes(message.payload[..4].try_into().unwrap());
-                    self.chunk_size = (size & 0x7FFF_FFFF).clamp(1, 16 * 1024 * 1024) as usize;
+                    self.chunk_size =
+                        (size & 0x7FFF_FFFF).clamp(1, MAX_INCOMING_CHUNK as u32) as usize;
                 }
                 return Ok(message);
             }
@@ -374,6 +399,41 @@ pub struct Publisher {
     secure: Option<TlsCloser>,
 }
 
+/// Shuts a socket down when the deadline passes before the guard is dropped.
+struct Watchdog {
+    expired: Arc<AtomicBool>,
+    /// Dropping it wakes the watchdog thread, which then ends without touching the socket.
+    _done: mpsc::Sender<()>,
+}
+
+impl Watchdog {
+    fn start(socket: TcpStream, within: Duration) -> Watchdog {
+        let expired = Arc::new(AtomicBool::new(false));
+        let (done, wait) = mpsc::channel::<()>();
+        let flag = expired.clone();
+        // If the thread cannot start, the per-read timeouts remain the only bound.
+        let _ = std::thread::Builder::new()
+            .name("broadcast-rtmp-deadline".into())
+            .spawn(move || {
+                if matches!(
+                    wait.recv_timeout(within),
+                    Err(mpsc::RecvTimeoutError::Timeout)
+                ) {
+                    flag.store(true, Ordering::SeqCst);
+                    let _ = socket.shutdown(std::net::Shutdown::Both);
+                }
+            });
+        Watchdog {
+            expired,
+            _done: done,
+        }
+    }
+
+    fn expired(&self) -> bool {
+        self.expired.load(Ordering::SeqCst)
+    }
+}
+
 fn text_of(error: &io::Error) -> String {
     if let Some((_, words)) = tls::explain(error) {
         return words;
@@ -404,6 +464,17 @@ impl Publisher {
         key: &str,
         tls_config: Option<Arc<ClientConfig>>,
     ) -> Result<Publisher, String> {
+        Self::open_within(target, key, tls_config, OPEN_DEADLINE)
+    }
+
+    /// [`Publisher::open_with`] with an explicit overall deadline for the opening.
+    fn open_within(
+        target: &Target,
+        key: &str,
+        tls_config: Option<Arc<ClientConfig>>,
+        deadline: Duration,
+    ) -> Result<Publisher, String> {
+        let started = Instant::now();
         let addresses: Vec<_> = (target.host.as_str(), target.port)
             .to_socket_addrs()
             .map_err(|_| format!("the server {} was not found", target.host))?
@@ -415,7 +486,11 @@ impl Publisher {
         let mut last = None;
         let mut connected = None;
         for address in &addresses {
-            match TcpStream::connect_timeout(address, OPEN_TIMEOUT) {
+            let left = deadline.saturating_sub(started.elapsed());
+            if left.is_zero() {
+                break;
+            }
+            match TcpStream::connect_timeout(address, OPEN_TIMEOUT.min(left)) {
                 Ok(tcp) => {
                     connected = Some(tcp);
                     break;
@@ -424,13 +499,38 @@ impl Publisher {
             }
         }
         let Some(tcp) = connected else {
+            if last.is_none() {
+                return Err(format!("{} took too long to answer", target.host));
+            }
             let why = last.as_ref().map_or_else(String::new, text_of);
             return Err(format!("could not reach {}: {}", target.host, why));
         };
+        let socket = tcp.try_clone().map_err(|e| e.to_string())?;
+        // From here the watchdog ends the connection when the deadline passes, whatever the server
+        // is doing; the blocked read then fails and the open returns.
+        let watchdog = Watchdog::start(
+            tcp.try_clone().map_err(|e| e.to_string())?,
+            deadline.saturating_sub(started.elapsed()),
+        );
+        Self::finish_open(target, key, tls_config, tcp, socket).map_err(|why| {
+            if watchdog.expired() {
+                format!("{} took too long to open the stream", target.host)
+            } else {
+                why
+            }
+        })
+    }
+
+    fn finish_open(
+        target: &Target,
+        key: &str,
+        tls_config: Option<Arc<ClientConfig>>,
+        tcp: TcpStream,
+        socket: TcpStream,
+    ) -> Result<Publisher, String> {
         tcp.set_nodelay(true).ok();
         tcp.set_read_timeout(Some(OPEN_TIMEOUT)).ok();
         tcp.set_write_timeout(Some(WRITE_TIMEOUT)).ok();
-        let socket = tcp.try_clone().map_err(|e| e.to_string())?;
         let (mut input, mut output, secure): (In, Out, Option<TlsCloser>) = if target.secure {
             let config = match tls_config {
                 Some(config) => config,
@@ -700,6 +800,62 @@ fn listen(mut reader: ChunkReader<In>, writer: Shared, lost: Arc<Mutex<Option<St
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A server that accepts, then dribbles one byte at a time forever, must not hold the open
+    /// beyond its deadline (the per-read timeout alone is reset by every byte).
+    #[test]
+    fn a_server_that_dribbles_cannot_hold_the_open_past_its_deadline() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            if let Ok((mut conn, _)) = listener.accept() {
+                let _ = conn.write_all(&[3]);
+                loop {
+                    std::thread::sleep(Duration::from_millis(50));
+                    if conn.write_all(&[0]).is_err() {
+                        break;
+                    }
+                }
+            }
+        });
+        let target = Target::parse(&format!("rtmp://127.0.0.1:{port}/live")).unwrap();
+        let started = Instant::now();
+        let result = Publisher::open_within(&target, "key", None, Duration::from_millis(600));
+        let error = result.err().expect("the open must fail");
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "took {:?}",
+            started.elapsed()
+        );
+        assert!(error.contains("took too long"), "{error}");
+    }
+
+    #[test]
+    fn a_server_cannot_shrink_a_message_under_what_was_read() {
+        let mut bytes = vec![0x03, 0, 0, 0, 0, 0, 200, 9, 0, 0, 0, 0];
+        bytes.extend(vec![0u8; 128]);
+        bytes.extend([0x43, 0, 0, 0, 0, 0, 50, 9]);
+        let mut reader = ChunkReader::new(std::io::Cursor::new(bytes));
+        assert!(reader.read_message().is_err());
+    }
+
+    #[test]
+    fn a_server_cannot_open_endless_chunk_streams() {
+        let mut bytes = Vec::new();
+        for csid in 3..200u8 {
+            bytes.extend([csid, 0, 0, 0, 0, 0, 200, 9, 0, 0, 0, 0]);
+            bytes.extend(vec![0u8; 128]);
+        }
+        let mut reader = ChunkReader::new(std::io::Cursor::new(bytes));
+        let mut failed = false;
+        for _ in 0..200 {
+            if reader.read_message().is_err() {
+                failed = true;
+                break;
+            }
+        }
+        assert!(failed);
+    }
 
     #[test]
     fn addresses_are_split_into_server_port_and_application() {

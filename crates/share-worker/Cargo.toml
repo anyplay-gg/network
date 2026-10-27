@@ -39,6 +39,7 @@ windows = { version = "0.62", features = [
     "Win32_Media_MediaFoundation",
     "Win32_Media_Multimedia",
     "Win32_Security",
+    "Win32_System_Memory",
     "Win32_System_Com",
     "Win32_System_Com_StructuredStorage",
     "Win32_System_Ole",
@@ -66,9 +67,33 @@ openh264 = { version = "0.9", default-features = false, features = ["libloading"
 libloading = "0.8"
 openh264-sys2 = { version = "0.9", default-features = false, features = ["libloading"] }
 
+# The frame ring is shared memory by name: shm_open and mmap on Linux and the other Unixes
+# (MIT or Apache-2.0); on Windows a named file mapping, from the `windows` crate above.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+# macOS: ScreenCaptureKit for the game's window and sound, VideoToolbox for the system's H.264
+# encoder, and the permission check, all through the objc2 bindings (Zlib OR Apache-2.0 OR MIT,
+# the family cpal already uses). Nothing of a codec is carried (docs/adr/0036).
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6"
+dispatch2 = "0.3"
+objc2 = "0.6"
+objc2-core-audio-types = "0.3"
+objc2-core-foundation = "0.3"
+objc2-core-graphics = "0.3"
+objc2-core-media = "0.3"
+objc2-core-video = "0.3"
+objc2-foundation = "0.3"
+objc2-screen-capture-kit = "0.3"
+objc2-video-toolbox = "0.3"
+
 # The viewer's window (MIT or Apache-2.0), on Windows and on Linux (X11 and Wayland).
 [target.'cfg(any(windows, target_os = "linux"))'.dependencies]
 minifb = "0.29"
+# The guest's gamepad beside the keyboard (Apache-2.0 or MIT; WGI on Windows, evdev on Linux).
+# Only the pad's buttons, sticks and triggers are read, in `gamepad.rs`.
+gilrs = { version = "0.11", default-features = false, features = ["wgi"] }
 
 [dev-dependencies]
 anyplay-control = { path = "../control" }

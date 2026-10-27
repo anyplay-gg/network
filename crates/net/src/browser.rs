@@ -40,6 +40,14 @@ pub struct Started {
     pub task: JoinHandle<()>,
 }
 
+/// Whether `url` is a page a browser may be sent to: http or https, nothing else (no `file:`, no
+/// custom protocol).
+pub fn is_web_url(url: &str) -> bool {
+    let lower = url.trim().to_ascii_lowercase();
+    (lower.starts_with("https://") || lower.starts_with("http://"))
+        && !lower.contains(char::is_whitespace)
+}
+
 /// Opens the listener and builds the URL. `web` is the origin of the account web; `create`
 /// starts at "Create account" instead of "Sign in".
 pub async fn start(web: &str, create: bool, device_name: &str) -> std::io::Result<Started> {
@@ -52,6 +60,12 @@ pub async fn start_with(
     device_name: &str,
     timeout: Duration,
 ) -> std::io::Result<Started> {
+    if !is_web_url(web) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "the account web must be an http or https address",
+        ));
+    }
     let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
     let port = listener.local_addr()?.port();
     let verifier = pkce::new_verifier();
@@ -98,6 +112,8 @@ fn encode(text: &str) -> String {
 async fn serve(listener: TcpListener, port: u16, state: &str) -> Callback {
     loop {
         let Ok((stream, peer)) = listener.accept().await else {
+            // A failing accept repeats at once: do not spin on it.
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
             continue;
         };
         if !peer.ip().is_loopback() {
@@ -419,5 +435,21 @@ mod tests {
         .unwrap();
         assert!(started.url.contains("intent=create"));
         assert_eq!(started.result.await.unwrap(), Callback::TimedOut);
+    }
+}
+
+#[cfg(test)]
+mod scheme_tests {
+    use super::is_web_url;
+
+    #[test]
+    fn only_http_and_https_are_pages() {
+        assert!(is_web_url("https://anyplaynet.com/sign-in"));
+        assert!(is_web_url("http://127.0.0.1:8080/"));
+        assert!(!is_web_url("file:///C:/Windows/System32/calc.exe"));
+        assert!(!is_web_url("javascript:alert(1)"));
+        assert!(!is_web_url("ms-settings:network"));
+        assert!(!is_web_url("https://a.example/ b"));
+        assert!(!is_web_url(""));
     }
 }

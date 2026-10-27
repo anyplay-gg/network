@@ -11,6 +11,7 @@ Coverage-guided fuzzing with [cargo-fuzz](https://github.com/rust-fuzz/cargo-fuz
 | `control_line` | one line between the launcher and the net service | text that is not UTF-8 is refused; a command or output read is written back so that it reads the same |
 | `share_video_datagram` | a video datagram of share play from another member | read and written back to the same bytes, or refused for exactly the reason its length, version, type, flags or group layout give |
 | `share_audio_datagram` | an audio datagram of share play | read and written back to the same bytes, or refused for exactly its reason |
+| `share_pad_datagram` | a pad datagram of share play from the guest, and a run of them through the host's gate | read and written back to the same bytes, or refused; no state with a reserved button bit gets through, none in `watch`, and no more than 30 in a burst and 300 a second |
 | `share_reassembler` | arbitrary datagrams with time passing; or a packetised frame with up to its parity of packets dropped | never more than 4 frames and 16 MiB in reassembly; a recoverable frame comes back byte for byte |
 | `share_control_line` | one line of share play's control stream | over 4 KiB, a second line or non-UTF-8 is refused; a message read is written back so that it reads the same |
 

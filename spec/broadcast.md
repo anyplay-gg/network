@@ -44,7 +44,7 @@ The first line on standard input must be
 | `connecting` | | The server is being reached. |
 | `live` | `width`, `height`, `fps`, `kbps` | The server accepted the stream. |
 | `stats` | `seconds`, `kbps`, `dropped` | Every 2 seconds while live. |
-| `ended` | `reason` | `no_encoder`, `no_window`, `window_closed`, `connect_failed: WORDS` (the address is wrong, the server was not found or did not answer, or refused the key; for a failed secure connection the words start with a tag: `tls_untrusted:` the certificate is not one this PC trusts or is for another server name, `tls_expired:` it is not valid at this PC's date and time, `tls_failed:` anything else), `disconnected: WORDS`, `encoder_failed: ...`, `quit`. |
+| `ended` | `reason` | `no_encoder`, `no_window`, `no_permission` (macOS, see [the permission](screen-share.md#screen-recording-permission)), `window_closed`, `connect_failed: WORDS` (the address is wrong, the server was not found or did not answer, or refused the key; for a failed secure connection the words start with a tag: `tls_untrusted:` the certificate is not one this PC trusts or is for another server name, `tls_expired:` it is not valid at this PC's date and time, `tls_failed:` anything else), `disconnected: WORDS`, `encoder_failed: ...`, `quit`. |
 
 ## Not yet
 

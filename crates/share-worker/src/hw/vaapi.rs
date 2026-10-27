@@ -1,4 +1,4 @@
-//! H.264 on the GPU through VA-API: Intel (iHD, i965) and AMD (Mesa's radeonsi), ADR 0036.
+//! H.264 on the GPU through VA-API: Intel (iHD, i965) and AMD (Mesa's radeonsi), ADR 0037.
 //!
 //! `libva.so.2` and `libva-drm.so.2` are opened with `dlopen` while the worker runs, never
 //! linked; the driver behind them (`*_drv_video.so`) is libva's business. Nothing here is a

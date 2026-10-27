@@ -51,6 +51,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [dev-dependencies]
+anyplay-fake-game = { path = "../fake-game" }
 anyplay-share-worker = { path = "../share-worker" }
 axum = { version = "0.8", features = ["ws"] }
 iroh-relay = { version = "1.4.1", features = ["server"] }

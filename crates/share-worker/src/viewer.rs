@@ -6,10 +6,12 @@ use std::time::{Duration, Instant};
 use anyplay_share::codec::{CodecError, Frame, VideoDecoder};
 use anyplay_share::control::{Key, Report};
 use anyplay_share::link::{FromWorker, ToWorker, WorkerStats};
+use anyplay_share::pad::PadState;
 use anyplay_share::reassembler::Reassembler;
 use anyplay_share::wire::TYPE_AUDIO;
 
 use crate::Port;
+use crate::input::PadPacer;
 use crate::sound::{SoundOut, SoundReceiver};
 
 /// Where pictures go: a window, or a counter in tests.
@@ -23,6 +25,12 @@ pub trait FrameSink {
     /// The viewer closed the window: the worker ends.
     fn closed(&self) -> bool {
         false
+    }
+    /// The guest's pad right now, when this sink reads one (share play, in a window that has
+    /// the focus). Share screen is watch only: its sinks answer `None` and no state ever
+    /// leaves the worker.
+    fn pad(&mut self) -> Option<PadState> {
+        None
     }
 }
 
@@ -80,12 +88,18 @@ pub fn run_with_sound(
     let mut stats = WorkerStats::default();
     let mut last_report = Instant::now();
     let mut last_stats = Instant::now();
+    let mut pacer = PadPacer::new();
     loop {
         if sink.closed() {
             let _ = to_service.send(FromWorker::Ended("the window was closed".into()));
             return;
         }
         sink.idle();
+        if let Some(state) = sink.pad().and_then(|s| pacer.due(now_us(&clock), s))
+            && to_service.send(FromWorker::Pad(state)).is_err()
+        {
+            return;
+        }
         match from_service.recv_timeout(SLICE) {
             Ok(ToWorker::Start(start)) => {
                 epoch = start.epoch;

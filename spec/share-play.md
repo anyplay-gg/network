@@ -1,6 +1,6 @@
 # Share play
 
-How a player streams the game they are running to a friend in their party, who watches, takes over their pad, or plays beside them. Version 0, a draft: it changes without notice until version 1. Nothing here is built yet, except the part that [share screen](screen-share.md) uses: a watch-only stream to the whole party that needs no invitation and no cloud record ([ADR 0023](../docs/adr/0023-share-screen-is-watch-only-and-asks-the-cloud-for-nothing.md)).
+How a player streams the game they are running to a friend in their party, who watches, takes over their pad, or plays beside them. Version 0, a draft: it changes without notice until version 1. Built so far: the part that [share screen](screen-share.md) uses (a watch-only stream to the whole party that needs no invitation and no cloud record, [ADR 0023](../docs/adr/0023-share-screen-is-watch-only-and-asks-the-cloud-for-nothing.md)), and the game's side of share play: the [bridge kinds](bridge-protocol.md#share-play-0x05xx), the [frame ring](#frame-ring), the [pad state](#pad-state) with the host's rules, and the host's [override](#the-hosts-override). Not built: the invitation, the cloud's `Share`, and the share connection that carries the stream and the guest's pad between two PCs.
 
 The decisions are in [ADR 0019](../docs/adr/0019-share-play-streams-through-a-worker.md), the order of work in the [plan](../docs/share-play-plan.md), and the prior art with its sources in the [research notes](../docs/share-play-research.md). The terms are in [CONTEXT.md](../CONTEXT.md). Share play goes through the tunnels like voice ([ADR 0010](../docs/adr/0010-voice-and-shared-play-go-through-the-tunnels.md), [ADR 0017](../docs/adr/0017-voice-has-a-connection-of-its-own.md), [voice spec](voice.md)).
 
@@ -138,13 +138,13 @@ Created by the worker; the engine maps it when the bridge tells it the name. One
 | 24 | 4 | stride in bytes |
 | 28 | 4 | format: 1 BGRA8 |
 | 32 | 4 | maximum frames per second |
-| 36 | 4 | audio ring size in frames, a power of two |
+| 36 | 4 | audio ring size in frames, a power of two (16,384 in version 0) |
 | 40 | 8 | audio write position, in frames, written by the engine |
 | 48 | 16 | reserved, zero |
 
-After the header come the slots, each with a 32-byte slot header and `stride × height` bytes, then the audio ring. A slot header holds `seq: u64` (written last, 0 while the engine writes), `present_us: u64` (the engine's monotonic clock when the picture was presented), `kind: u32` (0 for pixels in the slot; 1 reserved for a GPU handle) and `frame: u32` (the game's flip count). The consumer reads the slot with the highest `seq` it has not seen, copies or uses it, and reads `seq` again; if it changed, the slot was overwritten and the consumer drops the frame. The audio ring is a plain single-producer ring of stereo float frames.
+The width and the height are even, and at most 3840 by 2160, so that every slot starts on a multiple of 8 bytes, where its `seq` is read atomically. The header is 64 bytes. After the header come the slots, each with a 32-byte slot header and `stride × height` bytes, then the audio ring. A slot header holds `seq: u64` (written last, 0 while the engine writes), `present_us: u64` (the engine's monotonic clock when the picture was presented), `kind: u32` (0 for pixels in the slot; 1 reserved for a GPU handle) and `frame: u32` (the game's flip count). The consumer reads the slot with the highest `seq` it has not seen, copies or uses it, and reads `seq` again; if it changed, the slot was overwritten and the consumer drops the frame. The audio ring is a plain single-producer ring of stereo float frames.
 
-The name is random for each share and the mapping is readable only by the user who runs the game. On Windows it is a named file mapping in the local namespace; on Linux a `shm_open` object. Nothing else is shared: pad states do not use the ring.
+The name is random for each share (`anyplay-` and 16 hex digits, 24 characters, so that it fits macOS's 31-byte limit for a shared memory name) and the mapping is readable only by the user who runs the game; the engine opens it without a namespace prefix ([bridge protocol](bridge-protocol.md#share-play-0x05xx)). On Windows it is a named file mapping in the local namespace; on Linux a `shm_open` object. Nothing else is shared: pad states do not use the ring.
 
 ### Codecs
 
@@ -156,7 +156,8 @@ The name is random for each share and the mapping is readable only by the user w
 
 - **Picking.** Both workers announce `{codec, hardware, max_width, max_height, max_fps}` for encoding and decoding. The host's net service picks AV1 if the host has a hardware AV1 encoder and the guest has any AV1 decoder; else H.264 with the host's best encoder. A software encoder is used only for H.264, at most 720p30, so that the game keeps its CPU. With no encoder at all, `share_start` fails with `no_encoder` before any invitation goes out.
 - **On Windows the codecs are the system's** ([ADR 0027](../docs/adr/0027-video-is-h264-from-the-system.md)): H.264 only, encoded by the first hardware encoder Media Foundation lists (NVENC, AMF and Quick Sync register themselves there), else the system's software encoder (held to 720p30; hardware to 1080p60), and decoded by the system's decoder. The worker contains no codec code. The encoder runs in low-latency mode with constant bit rate, High profile (Main or Baseline where refused), no B-frames, one IDR at the start and on request and a safety IDR every 600 frames, SDR BT.709 limited range; the SPS and PPS travel in front of every IDR. The bit rate follows the rate controller while the encoder runs.
-- **On Linux, for now, H.264 in software** (ADR 0027): Cisco's OpenH264 binary, which the worker loads at run time from `ANYPLAY_OPENH264` or beside itself, and only a build whose SHA-256 is known, checking and loading the one file it opened; `ANYPLAY_OPENH264=off` turns it off (the player's switch); it is held to 720p30 like any software encoder and runs with the same settings (constant bit rate, Baseline profile, no B-frames, IDR at the start, on request and every 600 frames, BT.709 limited range), and decodes as well. Without the library the worker reports no codec, so `can_share` and `can_watch` stay false, and says why in `libraries`: `openh264` is `ready`, `off`, `missing`, `refused` (a file that is not a known build, with its SHA-256) or `failed` (a file that could not be read, or a known build that would not load). With a GPU the worker encodes in hardware first (ADR 0036): NVENC through `libnvidia-encode.so.1` or VA-API through `libva.so.2`, opened at run time, probed at start, 1080p60, announced as `hardware`; `ANYPLAY_HWENC` is `auto`, `off`, `nvenc` or `vaapi`. A GPU that refuses at stream start falls back to OpenH264. Clips use only hardware encoders, so they work on Linux where one of the two does.
+- **On macOS the codec is the system's** ([ADR 0036](../docs/adr/0036-macos-captures-with-screencapturekit-and-encodes-with-videotoolbox.md)): H.264 only, encoded by VideoToolbox (the media engine up to 1080p60, Apple's software encoder at 720p30 where there is none), with the settings of the Windows encoder and the SPS and PPS in front of every IDR. The Mac announces no decoder yet.
+- **On Linux, for now, H.264 in software** (ADR 0027): Cisco's OpenH264 binary, which the worker loads at run time from `ANYPLAY_OPENH264` or beside itself, and only a build whose SHA-256 is known, checking and loading the one file it opened; `ANYPLAY_OPENH264=off` turns it off (the player's switch); it is held to 720p30 like any software encoder and runs with the same settings (constant bit rate, Baseline profile, no B-frames, IDR at the start, on request and every 600 frames, BT.709 limited range), and decodes as well. Without the library the worker reports no codec, so `can_share` and `can_watch` stay false, and says why in `libraries`: `openh264` is `ready`, `off`, `missing`, `refused` (a file that is not a known build, with its SHA-256) or `failed` (a file that could not be read, or a known build that would not load). With a GPU the worker encodes in hardware first (ADR 0037): NVENC through `libnvidia-encode.so.1` or VA-API through `libva.so.2`, opened at run time, probed at start, 1080p60, announced as `hardware`; `ANYPLAY_HWENC` is `auto`, `off`, `nvenc` or `vaapi`. A GPU that refuses at stream start falls back to OpenH264. Clips use only hardware encoders, so they work on Linux where one of the two does.
 - **Hardware encoders elsewhere** are reached through the vendor runtimes that the driver installs: NVENC (`nvEncodeAPI`), AMF (`amfrt`), Intel Video Processing Library (Quick Sync), VA-API on Linux. The worker loads them at run time; it ships none of them. Their headers and dispatchers are MIT licensed. The first implementation reaches all four through the LGPL build of FFmpeg's libavcodec (shared libraries, no GPL or nonfree parts) behind the `VideoEncoder` seam; direct vendor calls can replace it where measurements say so.
 - **Software H.264** is OpenH264, loaded from Cisco's own binary, downloaded to the player's PC by the launcher on first use and switchable by the player, as Cisco's licence terms ask. The worker never contains OpenH264 itself. x264 is GPL and is not used.
 - **Decoding** prefers the platform's decoder: DXVA/Media Foundation on Windows, VA-API or Vulkan Video on Linux, dav1d for AV1 in software, OpenH264 for H.264 in software. Some Linux distributions ship their Mesa drivers without H.264 and HEVC hardware decoding for patent reasons; there the viewer falls back to OpenH264 or tells the guest.
@@ -191,7 +192,7 @@ All numbers are big-endian.
 | 18 | 2 | parity | parity packets in the group, 0 to 254, with `data + parity ≤ 255` |
 | 20 | 1 to … | payload | bytes of the encoded frame, or parity over them |
 
-The bytes of the encoded frame are preceded by their length as 4 bytes (big-endian), at the start of the first data packet of the first group, so that a receiver knows the exact size even when the short last packet is lost. A receiver refuses, without a reply, a datagram that is shorter than 21 bytes, has another version, a flag bit set that must be 0, `index ≥ data + parity`, `groups` 0 or above 8, or a payload of another length than its group's other packets (the last data packet of a group may be shorter; parity packets have the length of the longest data packet). It keeps at most 4 frames in reassembly and 16 MiB in total; older ones are dropped.
+The bytes of the encoded frame are preceded by their length as 4 bytes (big-endian), at the start of the first data packet of the first group, so that a receiver knows the exact size even when the short last packet is lost. A receiver refuses, without a reply, a datagram that is shorter than 21 bytes, has another version, a flag bit set that must be 0, `index ≥ data + parity`, `groups` 0 or above 8, `parity` above 30% of `data` (rounded up; the most a sender makes), or a payload of another length than its group's other packets (the last data packet of a group may be shorter; parity packets have the length of the longest data packet). It keeps at most 4 frames in reassembly and 16 MiB in total; older ones are dropped.
 
 ### Audio datagram
 
@@ -272,6 +273,8 @@ The guest's viewer reads the guest's pad (or keyboard, mapped to a pad by the vi
 | `l2`, `r2` | 1 each | 0 to 255 |
 
 There is no home button, no touch, no motion, no keyboard and no mouse in version 0. The names are neutral; the engine maps them to the buttons its pad layer knows.
+
+The viewer reads the first connected gamepad and the keyboard map together, and only while its window has the focus. Buttons are OR'd; per stick axis the value farther from the middle wins; per trigger the larger wins. Sticks have a round dead zone (0.15) and triggers a small one (0.05). An unplugged pad is neutral, and a viewer with no gamepad backend plays on the keyboard alone. The pad click has no button on most systems' pad lists, so it stays on the keyboard.
 
 ### Pad datagram
 
@@ -394,9 +397,10 @@ Between the net service and the worker, on `127.0.0.1`, with the framing of the 
 | `0x0014` | datagram out | worker → service | one datagram to send, with its priority |
 | `0x0015` | datagram in | service → worker | one datagram received |
 | `0x0016` | report | worker → service | what the controller needs (guest) |
-| `0x0017` | pad | worker → service | one pad state (guest) |
+| `0x0017` | pad | worker → service | one pad state (guest): 10 bytes, `buttons` as a big-endian `u32`, then `lx`, `ly`, `rx`, `ry`, `l2`, `r2` |
 | `0x0018` | stats | worker → service | encode time, decode time, frames shown, dropped |
 | `0x0019` | stop | either | the end |
+| `0x001C` | ring ready | worker → service | `name`, `bytes`, `width`, `height`, `max_fps`: the worker made the frame ring (host) |
 | `0x001A` | key request | worker → service | the viewer needs a key frame from this frame on (`epoch`, `frame`); the service puts it on the control stream as `key` |
 | `0x001B` | ended | worker → service | the worker is ending, with a reason in words (the picture source ended, the encoder failed, the window was closed) |
 
@@ -517,7 +521,7 @@ Two more points that are not on the list. The hardware encoders give no patent l
 - Recording, screenshots or clips by the viewer.
 - Reference-frame invalidation, gradual intra refresh, a GPU-side ring.
 - An overlay drawn by the engine.
-- macOS: the net service and launcher run on Windows and Linux.
+- macOS as a viewer, and share play's input and hand-over on macOS. A Mac can stream its game's window (share screen, clips, broadcast: [ADR 0036](../docs/adr/0036-macos-captures-with-screencapturekit-and-encodes-with-videotoolbox.md)); it cannot yet watch.
 
 ## Open questions
 

@@ -151,7 +151,7 @@ fn to_json(saved: &Saved) -> String {
 
 /// Writes `text` to `path` through a temporary file, readable only by the owner on Unix. On
 /// Windows the file inherits the per-user data folder's access rules.
-fn write_private(path: &std::path::Path, text: &str) -> Result<(), String> {
+pub(crate) fn write_private(path: &std::path::Path, text: &str) -> Result<(), String> {
     use std::io::Write;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;

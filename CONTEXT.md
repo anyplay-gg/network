@@ -287,6 +287,14 @@ _Avoid_: Stream tunnel, call
 The helper program on a player's PC that, for a host, turns the game's pictures and sound into the stream and, for a guest, shows it and reads the guest's pad. It is downloaded by the launcher the first time it is needed.
 _Avoid_: Encoder, plugin, viewer (that is only the guest's side)
 
+**Frame ring**:
+The block of shared memory on the host's PC that the share worker makes and the game's engine fills with the pictures it presents and the sound it plays. One writer, one reader, no locks; the engine never waits for the worker. It is named at random for each share and only the user who runs the game can open it.
+_Avoid_: Capture buffer, shared texture
+
+**Pad state**:
+One complete reading of the guest pad: fifteen buttons, two sticks and two triggers, and nothing else. The guest's viewer sends them, the host's net service checks and rate-limits them, and the engine plays them as a pad.
+_Avoid_: Input event, key press
+
 **Clip**:
 The last seconds of a player's running game, kept in memory by the share worker while Clips is on and saved as an MP4 file when the player asks. It stays on their PC. Not a share screen (that goes to the party) and not a recording (which would run from a start to a stop).
 _Avoid_: Recording, capture, replay

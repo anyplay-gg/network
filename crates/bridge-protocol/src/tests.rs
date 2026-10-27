@@ -254,7 +254,174 @@ fn samples() -> Vec<Message> {
             result: DialogResult::Sent,
             sent: 2,
         },
+        Message::ShareOpen(ShareOpen {
+            ring: "anyplay-ring-9f3a".into(),
+            ring_bytes: 1_920 * 1_080 * 4 * 3 + 1_000,
+            width: 1_920,
+            height: 1_080,
+            max_fps: 60,
+            mode: ShareMode::Together,
+        }),
+        Message::ShareOpened {
+            result: ShareResult::NotPresenting,
+        },
+        Message::ShareClose,
+        Message::ShareMode {
+            mode: ShareMode::HandOver,
+        },
+        Message::SharePad(SharePad {
+            slot: 1,
+            sequence: 65_535,
+            buttons: 0x0000_7FFF,
+            lx: 0,
+            ly: 255,
+            rx: 128,
+            ry: 1,
+            l2: 200,
+            r2: 7,
+        }),
+        Message::Override {
+            action: OverrideAction::Stop,
+        },
+        Message::ShareStatus(ShareStatus {
+            frames: 3_600,
+            dropped: 12,
+            audio_underruns: 1,
+        }),
     ]
+}
+
+#[test]
+fn share_play_kinds_are_the_ones_in_the_spec() {
+    let kinds: Vec<u16> = [
+        Kind::SHARE_OPEN,
+        Kind::SHARE_OPEN.reply(),
+        Kind::SHARE_CLOSE,
+        Kind::SHARE_MODE,
+        Kind::SHARE_PAD,
+        Kind::OVERRIDE,
+        Kind::SHARE_STATUS,
+    ]
+    .iter()
+    .map(|k| k.0)
+    .collect();
+    assert_eq!(
+        kinds,
+        [0x0501, 0x8501, 0x0502, 0x0503, 0x0504, 0x0505, 0x0506]
+    );
+}
+
+#[test]
+fn share_play_payloads_have_the_layout_of_the_spec() {
+    let open = Message::ShareOpen(ShareOpen {
+        ring: "r1".into(),
+        ring_bytes: 0x0102_0304,
+        width: 1_280,
+        height: 720,
+        max_fps: 60,
+        mode: ShareMode::HandOver,
+    });
+    assert_eq!(
+        open.payload().unwrap(),
+        [
+            2, 0, b'r', b'1', // ring: str
+            4, 3, 2, 1, // ring_bytes
+            0, 5, 0, 0, // width
+            0xD0, 2, 0, 0, // height
+            60, 0, 0, 0, // max_fps
+            1, // mode
+        ]
+    );
+    assert_eq!(
+        Message::ShareOpened {
+            result: ShareResult::Running
+        }
+        .payload()
+        .unwrap(),
+        [2]
+    );
+    assert!(Message::ShareClose.payload().unwrap().is_empty());
+    assert_eq!(
+        Message::ShareMode {
+            mode: ShareMode::Together
+        }
+        .payload()
+        .unwrap(),
+        [2]
+    );
+    let pad = Message::SharePad(SharePad {
+        slot: 1,
+        sequence: 0x0201,
+        buttons: 0x0000_4010,
+        lx: 1,
+        ly: 2,
+        rx: 3,
+        ry: 4,
+        l2: 5,
+        r2: 6,
+    });
+    assert_eq!(
+        pad.payload().unwrap(),
+        [1, 1, 2, 0x10, 0x40, 0, 0, 1, 2, 3, 4, 5, 6]
+    );
+    assert_eq!(
+        Message::Override {
+            action: OverrideAction::TookControl
+        }
+        .payload()
+        .unwrap(),
+        [1]
+    );
+    assert_eq!(
+        Message::ShareStatus(ShareStatus {
+            frames: 1,
+            dropped: 2,
+            audio_underruns: 3
+        })
+        .payload()
+        .unwrap(),
+        [1, 0, 0, 0, 2, 0, 0, 0, 3, 0, 0, 0]
+    );
+}
+
+#[test]
+fn a_neutral_pad_is_nothing_pressed_and_sticks_in_the_middle() {
+    assert_eq!(
+        SharePad::neutral(1, 9),
+        SharePad {
+            slot: 1,
+            sequence: 9,
+            buttons: 0,
+            lx: 128,
+            ly: 128,
+            rx: 128,
+            ry: 128,
+            l2: 0,
+            r2: 0,
+        }
+    );
+}
+
+#[test]
+fn unknown_share_values_are_tolerated() {
+    assert_eq!(
+        Message::parse(Kind::SHARE_MODE, &[9]),
+        Ok(Some(Message::ShareMode {
+            mode: ShareMode::Unknown
+        }))
+    );
+    assert_eq!(
+        Message::parse(Kind::SHARE_OPEN.reply(), &[77]),
+        Ok(Some(Message::ShareOpened {
+            result: ShareResult::Unknown
+        }))
+    );
+    assert_eq!(
+        Message::parse(Kind::OVERRIDE, &[0]),
+        Ok(Some(Message::Override {
+            action: OverrideAction::Unknown
+        }))
+    );
 }
 
 #[test]

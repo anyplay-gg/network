@@ -10,6 +10,7 @@ use std::io::{self, Read, Write};
 use serde::{Deserialize, Serialize};
 
 use crate::control::{CodecCaps, Key, Report};
+use crate::pad::PadState;
 
 /// The version of the share link a worker and a net service speak.
 pub const LINK_VERSION: u32 = 0;
@@ -109,9 +110,24 @@ pub enum FromWorker {
     Report(Report),
     /// An IDR is needed from the streamer (viewer's worker).
     Key(Key),
+    /// One pad state of the guest (viewer's worker); the net service sends it on.
+    Pad(PadState),
+    /// The frame ring exists and can be handed to the game (streamer's worker). The worker
+    /// makes it when it starts with the ring as its source and says so before anything else.
+    RingReady(RingReady),
     Stats(WorkerStats),
     /// The worker ended (crashed, was closed, lost its source).
     Ended(String),
+}
+
+/// The ring exists: the net service sends the game `share_open` with these numbers.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RingReady {
+    pub name: String,
+    pub bytes: u32,
+    pub width: u32,
+    pub height: u32,
+    pub max_fps: u32,
 }
 
 /// How a worker is doing, about twice a second.
@@ -149,10 +165,12 @@ pub const KIND_KEY: u16 = 0x0013;
 pub const KIND_DATAGRAM_OUT: u16 = 0x0014;
 pub const KIND_DATAGRAM_IN: u16 = 0x0015;
 pub const KIND_REPORT: u16 = 0x0016;
+pub const KIND_PAD: u16 = 0x0017;
 pub const KIND_STATS: u16 = 0x0018;
 pub const KIND_STOP: u16 = 0x0019;
 pub const KIND_KEY_REQUEST: u16 = 0x001A;
 pub const KIND_ENDED: u16 = 0x001B;
+pub const KIND_RING_READY: u16 = 0x001C;
 
 /// One frame of the link: `length: u32`, `kind: u16`, `flags: u16`, `request: u32`, payload;
 /// little-endian, as in the bridge protocol.
@@ -275,6 +293,8 @@ impl FromWorker {
             FromWorker::Datagram(bytes) => Frame::new(KIND_DATAGRAM_OUT, bytes.clone()),
             FromWorker::Report(report) => Frame::json(KIND_REPORT, report),
             FromWorker::Key(key) => Frame::json(KIND_KEY_REQUEST, key),
+            FromWorker::Pad(state) => Frame::new(KIND_PAD, state.to_bytes().to_vec()),
+            FromWorker::RingReady(ready) => Frame::json(KIND_RING_READY, ready),
             FromWorker::Stats(stats) => Frame::json(KIND_STATS, stats),
             FromWorker::Ended(reason) => Frame::new(KIND_ENDED, reason.as_bytes().to_vec()),
         }
@@ -289,6 +309,12 @@ impl FromWorker {
             KIND_KEY_REQUEST => serde_json::from_slice(&frame.payload)
                 .ok()
                 .map(FromWorker::Key),
+            KIND_PAD => PadState::from_bytes(&frame.payload)
+                .filter(PadState::is_valid)
+                .map(FromWorker::Pad),
+            KIND_RING_READY => serde_json::from_slice(&frame.payload)
+                .ok()
+                .map(FromWorker::RingReady),
             KIND_STATS => serde_json::from_slice(&frame.payload)
                 .ok()
                 .map(FromWorker::Stats),
@@ -318,6 +344,18 @@ mod tests {
     }
 
     #[test]
+    fn a_pad_state_with_a_reserved_bit_is_not_read_from_the_link() {
+        let bad = PadState {
+            buttons: 1 << 20,
+            ..PadState::NEUTRAL
+        };
+        let frame = Frame::new(KIND_PAD, bad.to_bytes().to_vec());
+        assert_eq!(FromWorker::from_frame(&frame), None);
+        let short = Frame::new(KIND_PAD, vec![0; 9]);
+        assert_eq!(FromWorker::from_frame(&short), None);
+    }
+
+    #[test]
     fn messages_survive_the_wire() {
         let to = [
             ToWorker::Start(start()),
@@ -337,6 +375,22 @@ mod tests {
         let from = [
             FromWorker::Datagram(vec![9; 1200]),
             FromWorker::Key(Key { epoch: 1, frame: 7 }),
+            FromWorker::Pad(PadState {
+                buttons: 0x4011,
+                lx: 0,
+                ly: 255,
+                rx: 128,
+                ry: 3,
+                l2: 9,
+                r2: 200,
+            }),
+            FromWorker::RingReady(RingReady {
+                name: "anyplay-ring-0123456789abcdef".into(),
+                bytes: 12_345_678,
+                width: 1280,
+                height: 720,
+                max_fps: 60,
+            }),
             FromWorker::Stats(WorkerStats {
                 frames: 5,
                 fps: 60,
