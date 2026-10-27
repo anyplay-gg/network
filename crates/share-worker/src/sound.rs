@@ -148,7 +148,13 @@ impl SoundReceiver {
     /// The next 10 ms: decoded, rebuilt, concealed or silent.
     pub fn next_packet(&mut self) -> Vec<f32> {
         let mut out = vec![0.0; PACKET_SAMPLES];
-        let decoded = match self.jitter.pop() {
+        let playout = self.jitter.pop();
+        for dropped in self.jitter.take_dropped() {
+            // Unheard: only so that the decoder carries on from where the sound now is.
+            let _ = self.decoder.decode_float(&dropped, &mut out, false);
+        }
+        out.fill(0.0);
+        let decoded = match playout {
             Playout::Silence => return out,
             Playout::Packet(payload) => self.decoder.decode_float(&payload, &mut out, false),
             Playout::Recover(next) => self.decoder.decode_float(&next, &mut out, true),
@@ -330,6 +336,7 @@ pub fn capture(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use anyplay_share::audio::MIN_DEPTH;
 
     /// Peak level of a stretch of samples.
     fn peak(samples: &[f32]) -> f32 {
@@ -391,6 +398,34 @@ mod tests {
         }
         assert!(peak(&output[10]) > 0.1, "the lost 10 ms are silent");
         assert_eq!(receiver.stats().lost, 1);
+    }
+
+    #[test]
+    fn packets_dropped_after_a_burst_do_not_make_a_click() {
+        let mut sender = SoundSender::new(0).unwrap();
+        let datagrams = sender.push(&tone(48_000)).unwrap();
+        // Playing, then a stall and a burst: the oldest packets are dropped to catch up. Where
+        // the tone is cut depends on the burst; at none of them may it play louder than 0.25.
+        for burst in MIN_DEPTH + 5..30 {
+            let mut receiver = SoundReceiver::new().unwrap();
+            for datagram in &datagrams[..MIN_DEPTH] {
+                receiver.insert(datagram);
+            }
+            for _ in 0..MIN_DEPTH {
+                receiver.next_packet();
+            }
+            for datagram in &datagrams[MIN_DEPTH..MIN_DEPTH + burst] {
+                receiver.insert(datagram);
+            }
+            let after: Vec<f32> = (0..MIN_DEPTH)
+                .flat_map(|_| receiver.next_packet())
+                .collect();
+            assert!(
+                receiver.stats().skipped > 0,
+                "burst {burst}: nothing dropped"
+            );
+            assert!(peak(&after) < 0.27, "burst {burst}: peak {}", peak(&after));
+        }
     }
 
     #[test]
