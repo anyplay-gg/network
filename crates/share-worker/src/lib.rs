@@ -5,7 +5,8 @@
 //! (`anyplay_share::link`), on a loopback socket for the real program ([`socket`]) or on
 //! channels in tests. Everything with a seam is a trait: [`host::FrameSource`] (where pictures
 //! come from: window capture, or the test pattern), `VideoEncoder` and `VideoDecoder` (H.264
-//! from the system on Windows, [`mf`]; OpenH264 from Cisco's binary on Linux, `oh264`; the test
+//! from the system on Windows, [`mf`]; on Linux a GPU's encoder from the system, [`hw`], else
+//! OpenH264 from Cisco's binary, `oh264`; the test
 //! codec for tests) and [`viewer::FrameSink`]
 //! (where pictures go: a window, or a counter in tests).
 
@@ -14,6 +15,7 @@ pub mod broadcast;
 pub mod capture;
 pub mod clips;
 pub mod host;
+pub mod hw;
 pub mod limits;
 #[cfg(windows)]
 pub mod loopback;
@@ -67,7 +69,20 @@ pub fn capabilities() -> Capabilities {
     let ((mut encode, mut decode), libraries) = (mf::capabilities(), Vec::new());
     #[cfg(target_os = "linux")]
     let (mut encode, mut decode, libraries) = {
-        let (encode, decode, openh264) = oh264::capabilities();
+        let (mut encode, decode, openh264) = oh264::capabilities();
+        // A hardware encoder first: the net service prefers the first codec both sides have.
+        if hw::available().is_some() {
+            encode.insert(
+                0,
+                CodecCaps {
+                    codec: oh264::CODEC_NAME.into(),
+                    hardware: true,
+                    max_width: limits::Limits::HARDWARE.width,
+                    max_height: limits::Limits::HARDWARE.height,
+                    max_fps: limits::Limits::HARDWARE.fps,
+                },
+            );
+        }
         (encode, decode, vec![openh264])
     };
     #[cfg(not(any(windows, target_os = "linux")))]
@@ -111,13 +126,18 @@ pub fn encoder_for(start: &mut Start) -> Result<Box<dyn VideoEncoder>, String> {
         }
         #[cfg(target_os = "linux")]
         "h264" => {
-            let setup = limits::Limits::SOFTWARE.clamp(start);
-            let encoder = oh264::OhEncoder::open(setup)?;
-            eprintln!("share worker: encoding with OpenH264 (software)");
-            start.width = setup.width;
-            start.height = setup.height;
-            start.fps = setup.fps;
-            Ok(Box::new(encoder))
+            // The probe ran when the capabilities were made; a PC without a hardware encoder
+            // does not try again for every stream.
+            let backends = if hw::available().is_some() {
+                hw::backends()
+            } else {
+                Vec::new()
+            };
+            let (encoder, name) = hw::open_h264(start, &backends, |setup| {
+                oh264::OhEncoder::open(setup).map(|e| Box::new(e) as Box<dyn VideoEncoder>)
+            })?;
+            eprintln!("share worker: encoding with {name}");
+            Ok(encoder)
         }
         other => Err(format!("this PC cannot encode {other}")),
     }
@@ -160,11 +180,31 @@ pub fn clips_encoder(setup: &mut clips::recorder::Setup) -> Result<Box<dyn Video
         setup.fps = lowered.fps;
         Ok(Box::new(encoder))
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
     {
-        // Linux has only OpenH264 in software, which clips never use.
+        // Hardware only (VA-API, NVENC): OpenH264 would take the game's processor.
+        let start = Start {
+            epoch: 0,
+            codec: "h264".into(),
+            width: setup.width,
+            height: setup.height,
+            fps: setup.fps,
+            kbps: setup.kbps,
+            parity_percent: 0,
+            max_payload: 0,
+        };
+        let lowered = limits::Limits::HARDWARE.clamp(&start);
+        let (encoder, name) = hw::open_first(&hw::backends(), lowered)?;
+        eprintln!("share worker: clips encode with {name} (hardware)");
+        setup.width = lowered.width;
+        setup.height = lowered.height;
+        setup.fps = lowered.fps;
+        Ok(encoder)
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
+    {
         let _ = setup;
-        Err("clips need a hardware encoder, which this system does not have yet".into())
+        Err("clips need a hardware encoder, which this system does not have".into())
     }
 }
 
