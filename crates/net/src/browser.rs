@@ -112,6 +112,8 @@ fn encode(text: &str) -> String {
 async fn serve(listener: TcpListener, port: u16, state: &str) -> Callback {
     loop {
         let Ok((stream, peer)) = listener.accept().await else {
+            // A failing accept repeats at once: do not spin on it.
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
             continue;
         };
         if !peer.ip().is_loopback() {

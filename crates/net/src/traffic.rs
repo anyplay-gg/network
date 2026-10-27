@@ -240,6 +240,10 @@ impl Traffic {
                 Err(error) => {
                     // Windows reports an earlier send to a closed port on the next receive.
                     tracing::debug!("loopback receive: {error}");
+                    if error.kind() != std::io::ErrorKind::ConnectionReset {
+                        // Any other failure repeats at once: do not spin on it.
+                        tokio::time::sleep(Duration::from_millis(50)).await;
+                    }
                     continue;
                 }
             };
@@ -337,6 +341,8 @@ impl Traffic {
     async fn carry_streams(self, listener: TcpListener) {
         loop {
             let Ok((stream, from)) = listener.accept().await else {
+                // A failing accept (out of file handles, say) repeats at once: do not spin on it.
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
                 continue;
             };
             if !is_loopback(from) {
