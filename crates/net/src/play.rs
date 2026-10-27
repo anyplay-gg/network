@@ -15,15 +15,17 @@
 //! ([`Hub::bind`], [`Hub::unbind`]) and reports what happened on this PC as [`Output`]s, which
 //! the service turns into cloud requests, bridge frames and launcher events.
 
+use std::collections::VecDeque;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyplay_api::{ShareMode, SharePath};
 use anyplay_bridge_protocol as game;
-use anyplay_control::{Link, ShareStats};
+use anyplay_control::{DelayMs, Link, ShareStats};
 use anyplay_share::control::{self as wire, Role};
+use anyplay_share::delay::{ClockPicker, Delay, DelayWindow};
 use anyplay_share::link::{FromWorker, RingReady, Start, ToWorker, WorkerStats};
-use anyplay_share::pad::{PadSender, TYPE_PAD};
+use anyplay_share::pad::{PadDatagram, PadSender, TYPE_PAD};
 use anyplay_share::rate::{LADDER, PathKind, RateConfig, RateController, RateInput, Target};
 use bytes::Bytes;
 use futures_util::StreamExt;
@@ -70,6 +72,12 @@ const CLOSE_GRACE: Duration = Duration::from_millis(200);
 /// Control messages the guest may send per second.
 const MESSAGES_PER_SECOND: u32 = 50;
 const DEFAULT_PAYLOAD: usize = 1180;
+/// The host acknowledges the newest pad state it applied this often.
+const ACK_EVERY: Duration = Duration::from_millis(250);
+/// The pad datagrams the guest remembers the send time of: more than a second at the top rate.
+const PAD_SENT_KEPT: usize = 512;
+/// A new clock offset goes to the viewer when it moved by at least this many microseconds.
+const CLOCK_STEP_US: u64 = 200;
 
 /// The one share this PC takes part in, as the cloud named it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -143,6 +151,10 @@ enum Ctl {
     End { code: u32, reason: String },
     Mode(ShareMode),
     Request(ShareMode),
+    Quality {
+        max_kbps: Option<u32>,
+        max_height: Option<u32>,
+    },
     Bridge(game::Frame),
     BridgeLost,
     Refresh,
@@ -190,6 +202,7 @@ impl Hub {
             generation: 0,
             clock: Instant::now(),
             connections: 0,
+            quality: (0, 0),
         };
         tokio::spawn(task.run(ctl, net));
         Hub {
@@ -231,6 +244,16 @@ impl Hub {
     /// The guest asks the host for a mode.
     pub fn request(&self, mode: ShareMode) {
         let _ = self.ctl.send(Ctl::Request(mode));
+    }
+
+    /// The host limits the picture (`share_quality`): the most kbit/s and the tallest picture.
+    /// A field left out keeps its value and 0 lifts the limit. It holds for the running share and
+    /// the next ones.
+    pub fn quality(&self, max_kbps: Option<u32>, max_height: Option<u32>) {
+        let _ = self.ctl.send(Ctl::Quality {
+            max_kbps,
+            max_height,
+        });
     }
 
     /// A share frame from the game's bridge (host).
@@ -332,8 +355,21 @@ struct Active {
     rate: Option<RateController>,
     loss_percent: u8,
     path_told: Option<Link>,
+    /// The newest pad datagram the game got, and when, until it is acknowledged.
+    pad_ack: Option<(u16, Instant)>,
+    last_ack: Instant,
     // The guest's side
     pad: PadSender,
+    /// When each of the newest pad datagrams was sent.
+    pad_sent: VecDeque<(u16, Instant)>,
+    /// The ways of the pad datagrams, from their acknowledgements.
+    input: DelayWindow,
+    /// The clock offsets the pings gave, and the one the viewer's worker has.
+    clock: ClockPicker,
+    clock_sent: Option<i64>,
+    // Both sides: the figures, from the guest's viewer and pad.
+    stream_delay: Option<Delay>,
+    input_delay: Option<Delay>,
 }
 
 struct Task {
@@ -350,6 +386,8 @@ struct Task {
     clock: Instant,
     /// Counts the connections attached.
     connections: usize,
+    /// The player's limits: kbit/s and picture height, 0 for none.
+    quality: (u32, u32),
 }
 
 fn bridge_mode(mode: ShareMode) -> game::ShareMode {
@@ -382,6 +420,32 @@ fn path_kind(link: Link) -> PathKind {
         // Until the path is known, assume the narrower one.
         Link::Relay | Link::Connecting => PathKind::Relay,
     }
+}
+
+/// The system clock in microseconds since 1970: the clock of the pings, so that the figure for a
+/// picture's age can be put together from the host's stamp, the guest's clock and the offset
+/// between them.
+fn wall_us() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_micros() as u64)
+}
+
+fn delay_ms(delay: Option<Delay>) -> Option<DelayMs> {
+    delay.map(|d| DelayMs {
+        p50: d.p50,
+        p95: d.p95,
+    })
+}
+
+/// Puts the player's limits on a controller: `(max_kbps, max_height)`, 0 for none.
+fn apply_quality(rate: &mut RateController, quality: (u32, u32)) {
+    let kbps = match quality.0 {
+        0 => RateConfig::default().player_max_kbps,
+        kbps => kbps.clamp(PAUSED_KBPS, 100_000),
+    };
+    rate.set_player_max(kbps);
+    rate.set_max_height(quality.1);
 }
 
 /// The lowest rate the encoder is given while the ladder pauses the video: the picture does
@@ -463,6 +527,10 @@ impl Task {
             Ctl::End { code, reason } => self.finish(code, &reason, true),
             Ctl::Mode(mode) => self.set_mode(mode),
             Ctl::Request(mode) => self.request(mode),
+            Ctl::Quality {
+                max_kbps,
+                max_height,
+            } => self.set_quality(max_kbps, max_height),
             Ctl::Bridge(frame) => self.game_frame(&frame),
             Ctl::BridgeLost => self.bridge_lost(),
             Ctl::Refresh => self.last_view = None,
@@ -500,7 +568,15 @@ impl Task {
             rate: None,
             loss_percent: 0,
             path_told: None,
+            pad_ack: None,
+            last_ack: now,
             pad: PadSender::new(),
+            pad_sent: VecDeque::new(),
+            input: DelayWindow::new(),
+            clock: ClockPicker::new(),
+            clock_sent: None,
+            stream_delay: None,
+            input_delay: None,
         });
         self.sync_dialer();
     }
@@ -544,6 +620,17 @@ impl Task {
         active.mode = mode;
         self.apply(steps);
         self.send_config();
+    }
+
+    fn set_quality(&mut self, max_kbps: Option<u32>, max_height: Option<u32>) {
+        self.quality = (
+            max_kbps.unwrap_or(self.quality.0),
+            max_height.unwrap_or(self.quality.1),
+        );
+        let quality = self.quality;
+        if let Some(rate) = self.active.as_mut().and_then(|a| a.rate.as_mut()) {
+            apply_quality(rate, quality);
+        }
     }
 
     fn request(&mut self, mode: ShareMode) {
@@ -797,6 +884,12 @@ impl Task {
                     return;
                 };
                 let steps = host.on_pad_datagram(now_us, bytes);
+                // A state the game got is acknowledged, so that the guest can time its way.
+                if steps.iter().any(|step| matches!(step, Step::Bridge(_)))
+                    && let Ok(datagram) = PadDatagram::parse(bytes)
+                {
+                    active.pad_ack = Some((datagram.sequence, Instant::now()));
+                }
                 self.apply(steps);
             }
             Role::Guest => {
@@ -847,15 +940,18 @@ impl Task {
                 }
             }
             wire::Message::Ping(ping) => {
+                let wall = wall_us();
                 let _ = peer.writer.send(wire::Message::Pong(wire::Pong {
                     t0: ping.t0,
-                    t1: now_us,
-                    t2: now_us,
+                    t1: wall,
+                    t2: wall,
                 }));
             }
             wire::Message::Pong(pong) => {
-                let (rtt, _) = wire::clock_estimate(pong.t0, pong.t1, pong.t2, now_us);
+                let (rtt, offset) = wire::clock_estimate(pong.t0, pong.t1, pong.t2, wall_us());
                 peer.rtt_ms = Some((rtt.max(0) / 1000) as u32);
+                active.clock.push(now_us, rtt, offset);
+                self.push_clock();
             }
             wire::Message::Stop(stop) => {
                 // The other side is ending it. This PC closes too and tells the cloud.
@@ -885,6 +981,21 @@ impl Task {
             }
             // The guest's side
             wire::Message::Config(config) if role == Role::Guest => self.guest_config(config),
+            wire::Message::PadAck(ack) if role == Role::Guest => {
+                let sent = active
+                    .pad_sent
+                    .iter()
+                    .rev()
+                    .find(|(sequence, _)| *sequence == ack.sequence)
+                    .map(|(_, at)| *at);
+                if let Some(sent) = sent {
+                    let round = now.duration_since(sent).as_micros() as u64;
+                    let way = round.saturating_sub(u64::from(ack.held_us)) / 2;
+                    active
+                        .input
+                        .push(now_us, way.min(u64::from(u32::MAX)) as u32);
+                }
+            }
             _ => {}
         }
     }
@@ -896,6 +1007,7 @@ impl Task {
     fn host_begin(&mut self) {
         let now_us = self.now_us();
         let payload = self.max_payload();
+        let quality = self.quality;
         let Some(active) = &mut self.active else {
             return;
         };
@@ -919,7 +1031,8 @@ impl Task {
             return;
         };
         let link = active.peer.as_ref().map_or(Link::Connecting, |p| p.link);
-        let rate = RateController::new(RateConfig::default(), path_kind(link), now_us);
+        let mut rate = RateController::new(RateConfig::default(), path_kind(link), now_us);
+        apply_quality(&mut rate, quality);
         let target = rate.target();
         let random: [u8; 16] = rand::random();
         let launch = PlayLaunch {
@@ -1104,6 +1217,8 @@ impl Task {
         active.loss_percent = (u64::from(report.lost) * 100)
             .checked_div(total)
             .map_or(0, |percent| percent.min(100)) as u8;
+        active.stream_delay = report.stream_delay;
+        active.input_delay = report.input_delay;
         let (Some(rate), Some(worker)) = (&mut active.rate, &mut active.worker) else {
             return;
         };
@@ -1228,9 +1343,38 @@ impl Task {
                 frame: 0,
             }));
         }
+        // The new viewer has not heard of the clock yet.
+        active.clock_sent = None;
+        self.push_clock();
+    }
+
+    /// Gives the guest's viewer the host's clock offset when it changed.
+    fn push_clock(&mut self) {
+        let now_us = self.now_us();
+        let Some(active) = &mut self.active else {
+            return;
+        };
+        if active.bind.role != Role::Guest {
+            return;
+        }
+        let Some(best) = active.clock.best(now_us) else {
+            return;
+        };
+        if active
+            .clock_sent
+            .is_some_and(|sent| sent.abs_diff(best) < CLOCK_STEP_US)
+        {
+            return;
+        }
+        if let Some(worker) = &active.worker
+            && worker.to.send(ToWorker::Clock { offset_us: best }).is_ok()
+        {
+            active.clock_sent = Some(best);
+        }
     }
 
     fn on_worker(&mut self, generation: u64, message: FromWorker) {
+        let now_us = self.now_us();
         let Some(active) = &mut self.active else {
             return;
         };
@@ -1272,7 +1416,11 @@ impl Task {
                 self.finish(code, reason, true);
             }
             // The guest's side
-            (Role::Guest, FromWorker::Report(report)) => {
+            (Role::Guest, FromWorker::Report(mut report)) => {
+                // The viewer knows the age of the pictures and this PC knows the pad's way.
+                active.stream_delay = report.stream_delay;
+                active.input_delay = active.input.figures(now_us);
+                report.input_delay = active.input_delay;
                 if let Some(peer) = &active.peer {
                     let _ = peer.writer.send(wire::Message::Report(report));
                 }
@@ -1289,6 +1437,12 @@ impl Task {
                     && let Some(peer) = &active.peer
                 {
                     let datagram = active.pad.next(state);
+                    active
+                        .pad_sent
+                        .push_back((active.pad.sequence(), Instant::now()));
+                    if active.pad_sent.len() > PAD_SENT_KEPT {
+                        active.pad_sent.pop_front();
+                    }
                     let _ = peer.connection.send_datagram(Bytes::from(datagram));
                 }
             }
@@ -1319,7 +1473,6 @@ impl Task {
     fn tick(&mut self) {
         let now = Instant::now();
         let now_us = self.now_us();
-        let clock = self.clock;
         let Some(active) = &mut self.active else {
             return;
         };
@@ -1327,8 +1480,19 @@ impl Task {
             && now.duration_since(peer.last_ping) >= PING_EVERY
         {
             peer.last_ping = now;
-            let t0 = clock.elapsed().as_micros() as u64;
+            let t0 = wall_us();
             let _ = peer.writer.send(wire::Message::Ping(wire::Ping { t0 }));
+        }
+        if let (Some(peer), Some((sequence, at))) = (&active.peer, active.pad_ack)
+            && now.duration_since(active.last_ack) >= ACK_EVERY
+        {
+            active.last_ack = now;
+            active.pad_ack = None;
+            let held = now.duration_since(at).as_micros();
+            let _ = peer.writer.send(wire::Message::PadAck(wire::PadAck {
+                sequence,
+                held_us: held.min(u128::from(u32::MAX)) as u32,
+            }));
         }
         // Silence from the guest becomes a neutral pad in the game.
         if let Some(host) = &mut active.host {
@@ -1373,6 +1537,8 @@ impl Task {
                 kbps: stats.kbps,
                 rtt_ms: active.peer.as_ref().and_then(|p| p.rtt_ms),
                 loss_percent: active.loss_percent,
+                stream_delay_ms: delay_ms(active.stream_delay),
+                input_delay_ms: delay_ms(active.input_delay),
             },
             requested: active.requested,
         })

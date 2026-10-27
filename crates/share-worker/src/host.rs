@@ -99,7 +99,7 @@ impl State {
                 self.rate = Some(kbps);
             }
             ToWorker::KeyFrame => self.key_wanted = true,
-            ToWorker::Datagram(_) => {}
+            ToWorker::Datagram(_) | ToWorker::Clock { .. } => {}
             ToWorker::Stop => return false,
         }
         true

@@ -1340,6 +1340,10 @@ impl Service {
             } => self.share_answer(id, invitation, accept),
             Command::ShareMode { mode } => self.share_mode(id, mode),
             Command::ShareRequest { mode } => self.share_request(id, mode),
+            Command::ShareQuality {
+                max_kbps,
+                max_height,
+            } => self.share_quality(id, max_kbps, max_height),
             Command::ShareStop => self.share_stop(id),
             // Voice
             Command::Voice { on } => {

@@ -98,6 +98,12 @@ pub enum ToWorker {
     KeyFrame,
     /// A datagram received from the other side (viewer's worker).
     Datagram(Vec<u8>),
+    /// The streamer's clock minus this PC's, in microseconds, both the system clocks since
+    /// 1970 (viewer's worker): what it needs to tell how old a picture is. Sent again
+    /// when the estimate changes.
+    Clock {
+        offset_us: i64,
+    },
     Stop,
 }
 
@@ -171,6 +177,7 @@ pub const KIND_STOP: u16 = 0x0019;
 pub const KIND_KEY_REQUEST: u16 = 0x001A;
 pub const KIND_ENDED: u16 = 0x001B;
 pub const KIND_RING_READY: u16 = 0x001C;
+pub const KIND_CLOCK: u16 = 0x001D;
 
 /// One frame of the link: `length: u32`, `kind: u16`, `flags: u16`, `request: u32`, payload;
 /// little-endian, as in the bridge protocol.
@@ -265,6 +272,9 @@ impl ToWorker {
             }
             ToWorker::KeyFrame => Frame::new(KIND_KEY, Vec::new()),
             ToWorker::Datagram(bytes) => Frame::new(KIND_DATAGRAM_IN, bytes.clone()),
+            ToWorker::Clock { offset_us } => {
+                Frame::new(KIND_CLOCK, offset_us.to_le_bytes().to_vec())
+            }
             ToWorker::Stop => Frame::new(KIND_STOP, Vec::new()),
         }
     }
@@ -281,6 +291,9 @@ impl ToWorker {
             }),
             KIND_KEY => Some(ToWorker::KeyFrame),
             KIND_DATAGRAM_IN => Some(ToWorker::Datagram(frame.payload.clone())),
+            KIND_CLOCK if frame.payload.len() == 8 => Some(ToWorker::Clock {
+                offset_us: i64::from_le_bytes(frame.payload[..8].try_into().ok()?),
+            }),
             KIND_STOP => Some(ToWorker::Stop),
             _ => None,
         }
@@ -365,6 +378,9 @@ mod tests {
             },
             ToWorker::KeyFrame,
             ToWorker::Datagram(vec![1, 2, 3]),
+            ToWorker::Clock {
+                offset_us: -7_000_000,
+            },
             ToWorker::Stop,
         ];
         for message in to {

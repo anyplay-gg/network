@@ -8,6 +8,8 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+use crate::delay::Delay;
+
 /// The longest line, terminator included.
 pub const MAX_LINE: usize = 4096;
 /// The protocol version in `hello`.
@@ -80,6 +82,24 @@ pub struct Report {
     pub queue_ms: u32,
     pub decoded_fps: u32,
     pub shown_fps: u32,
+    /// How old the pictures are when the viewer shows them, over the last 10 seconds; none
+    /// while the viewer cannot tell.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stream_delay: Option<Delay>,
+    /// How long the guest's pad states take to reach the host's engine, over the last 10
+    /// seconds (half of the pad round trip); put in by the guest's net service.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_delay: Option<Delay>,
+}
+
+/// Host to guest, about four times a second while pad states arrive: the newest pad state the
+/// host applied, so that the guest can time the way of its input.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PadAck {
+    /// The sequence number of the pad datagram.
+    pub sequence: u16,
+    /// How long ago the host received it, in microseconds.
+    pub held_us: u32,
 }
 
 /// A key frame is needed from `frame` on.
@@ -120,6 +140,7 @@ pub enum Message {
     Key(Key),
     Ping(Ping),
     Pong(Pong),
+    PadAck(PadAck),
     Stop(Stop),
     /// Viewer to host: begin sending to me.
     Watch {},
@@ -127,8 +148,9 @@ pub enum Message {
     Unwatch {},
 }
 
-const KNOWN: [&str; 10] = [
-    "hello", "config", "request", "report", "key", "ping", "pong", "stop", "watch", "unwatch",
+const KNOWN: [&str; 11] = [
+    "hello", "config", "request", "report", "key", "ping", "pong", "pad_ack", "stop", "watch",
+    "unwatch",
 ];
 
 /// Why a line is not a message.
@@ -256,6 +278,12 @@ mod tests {
                 queue_ms: 4,
                 decoded_fps: 60,
                 shown_fps: 59,
+                stream_delay: Some(Delay { p50: 40, p95: 61 }),
+                input_delay: None,
+            }),
+            Message::PadAck(PadAck {
+                sequence: 65_535,
+                held_us: 1_200,
             }),
             Message::Key(Key { epoch: 1, frame: 7 }),
             Message::Ping(Ping { t0: 5 }),

@@ -348,6 +348,15 @@ pub enum Command {
     ShareRequest {
         mode: anyplay_api::ShareMode,
     },
+    /// The host limits the picture of the running share (and of the next ones): the most
+    /// kbit/s and the tallest picture in pixels. A field left out keeps its value, 0 lifts the
+    /// limit.
+    ShareQuality {
+        #[serde(default)]
+        max_kbps: Option<u32>,
+        #[serde(default)]
+        max_height: Option<u32>,
+    },
     /// Ends the share: the host stops it, the guest leaves it, or an invitation is declined.
     ShareStop,
     Conversations,
@@ -983,6 +992,20 @@ pub struct ShareStats {
     pub kbps: u32,
     pub rtt_ms: Option<u32>,
     pub loss_percent: u8,
+    /// How old the pictures are when the guest shows them, over the last 10 seconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stream_delay_ms: Option<DelayMs>,
+    /// How long the guest's pad states take to reach the host's engine, over the last 10
+    /// seconds: half of the round trip of a pad state and its acknowledgement.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_delay_ms: Option<DelayMs>,
+}
+
+/// Median and 95th percentile of a delay in milliseconds.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DelayMs {
+    pub p50: u32,
+    pub p95: u32,
 }
 
 /// The share the player is in, as the launcher shows it.
@@ -1952,6 +1975,26 @@ mod tests {
             parse_command(r#"{"id":5,"do":"share_stop"}"#),
             Ok((5, Command::ShareStop))
         );
+        assert_eq!(
+            parse_command(r#"{"id":6,"do":"share_quality","max_kbps":6000,"max_height":720}"#),
+            Ok((
+                6,
+                Command::ShareQuality {
+                    max_kbps: Some(6000),
+                    max_height: Some(720)
+                }
+            ))
+        );
+        assert_eq!(
+            parse_command(r#"{"id":7,"do":"share_quality","max_height":0}"#),
+            Ok((
+                7,
+                Command::ShareQuality {
+                    max_kbps: None,
+                    max_height: Some(0)
+                }
+            ))
+        );
     }
 
     #[test]
@@ -1977,6 +2020,8 @@ mod tests {
                     kbps: 4000,
                     rtt_ms: Some(20),
                     loss_percent: 0,
+                    stream_delay_ms: Some(DelayMs { p50: 42, p95: 58 }),
+                    input_delay_ms: None,
                 },
                 requested: None,
             }),

@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 
 use anyplay_share::codec::{CodecError, Frame, VideoDecoder};
 use anyplay_share::control::{Key, Report};
+use anyplay_share::delay::{DelayWindow, frame_age_us};
 use anyplay_share::link::{FromWorker, ToWorker, WorkerStats};
 use anyplay_share::pad::PadState;
 use anyplay_share::reassembler::Reassembler;
@@ -89,6 +90,9 @@ pub fn run_with_sound(
     let mut last_report = Instant::now();
     let mut last_stats = Instant::now();
     let mut pacer = PadPacer::new();
+    // How far the streamer's system clock is ahead of ours, once the net service has measured it.
+    let mut clock_offset: Option<i64> = None;
+    let mut delays = DelayWindow::new();
     loop {
         if sink.closed() {
             let _ = to_service.send(FromWorker::Ended("the window was closed".into()));
@@ -128,6 +132,7 @@ pub fn run_with_sound(
                 sink.close();
                 return;
             }
+            Ok(ToWorker::Clock { offset_us }) => clock_offset = Some(offset_us),
             Ok(ToWorker::Rate { .. }) | Ok(ToWorker::KeyFrame) => {}
             Err(RecvTimeoutError::Timeout) => {}
         }
@@ -143,6 +148,10 @@ pub fn run_with_sound(
             match decoder.decode(&done.encoded) {
                 Ok(picture) => {
                     sink.show(&picture);
+                    if let Some(offset) = clock_offset {
+                        let age = frame_age_us(crate::wall_us(), offset, done.encoded.timestamp_us);
+                        delays.push(now_us(&clock), age);
+                    }
                     shown += 1;
                     shown_window += 1;
                     stats.width = picture.width;
@@ -182,6 +191,8 @@ pub fn run_with_sound(
                 queue_ms: 0,
                 decoded_fps: decoded_window * 10,
                 shown_fps: shown_window * 10,
+                stream_delay: delays.figures(now_us(&clock)),
+                input_delay: None,
             };
             decoded_window = 0;
             shown_window = 0;

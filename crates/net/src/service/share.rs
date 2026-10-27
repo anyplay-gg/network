@@ -722,6 +722,26 @@ impl Service {
         }
     }
 
+    /// The host limits the picture of the share: the hub keeps the limits for the running share
+    /// and the next ones, and the rate ladder stays under them.
+    pub(super) fn share_quality(
+        &mut self,
+        id: u64,
+        max_kbps: Option<u32>,
+        max_height: Option<u32>,
+    ) {
+        match &self.share.hub {
+            Some(hub) => {
+                hub.quality(max_kbps, max_height);
+                self.ok(id, Done {});
+            }
+            None => self.fail(
+                id,
+                Failure::new(Failure::OFFLINE, "The network is not ready yet."),
+            ),
+        }
+    }
+
     pub(super) fn share_stop(&mut self, id: u64) {
         if self.share.share.is_some() {
             let host = self
