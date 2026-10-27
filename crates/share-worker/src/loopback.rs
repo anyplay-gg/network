@@ -164,7 +164,9 @@ fn activate(pid: u32) -> Result<IAudioClient, String> {
             },
         },
     };
-    let blob = PROPVARIANT {
+    // `PROPVARIANT` frees what it holds when dropped (`PropVariantClear`), but this blob points at
+    // `params` on the stack: it must never be dropped, or the heap is corrupted.
+    let blob = ManuallyDrop::new(PROPVARIANT {
         Anonymous: PROPVARIANT_0 {
             Anonymous: ManuallyDrop::new(PROPVARIANT_0_0 {
                 vt: VT_BLOB,
@@ -179,7 +181,7 @@ fn activate(pid: u32) -> Result<IAudioClient, String> {
                 },
             }),
         },
-    };
+    });
     let (done_tx, done) = mpsc::channel();
     let handler: IActivateAudioInterfaceCompletionHandler =
         Activated(Mutex::new(Some(done_tx))).into();
@@ -189,7 +191,7 @@ fn activate(pid: u32) -> Result<IAudioClient, String> {
         ActivateAudioInterfaceAsync(
             VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK,
             &IAudioClient::IID,
-            Some(&raw const blob),
+            Some(&raw const *blob),
             &handler,
         )
     }
