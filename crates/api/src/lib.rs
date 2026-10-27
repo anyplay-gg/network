@@ -358,7 +358,7 @@ pub struct TitleBoards {
 }
 
 /// Who may see the account's scores on boards: the body of `PUT /v1/me/score-privacy` and its
-/// answer. A part of the profile's privacy in kind, a call of its own in form (ADR 0040).
+/// answer. A part of the profile's privacy in kind, a call of its own in form (ADR 0041).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ScorePrivacy {
     pub scores: Audience,

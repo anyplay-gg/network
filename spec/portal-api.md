@@ -446,7 +446,7 @@ BoardPage { titleId, board, order, status, view, total, start, entries, me }
   me       the viewer's own line {rank, handle, score, achieved}, absent without a session or an entry
 ```
 
-Entries name a player by handle only, as the public profile does; the page links the handle to `/u/{handle}`, which answers `not_found` for a player who has no public page. The portal shows a board as `Board {board}` and a score as a plain number: the cloud holds no names, units or art of a game ([ADR 0040](../docs/adr/0040-leaderboards-are-boards-of-best-scores-named-by-the-game.md)).
+Entries name a player by handle only, as the public profile does; the page links the handle to `/u/{handle}`, which answers `not_found` for a player who has no public page. The portal shows a board as `Board {board}` and a score as a plain number: the cloud holds no names, units or art of a game ([ADR 0041](../docs/adr/0041-leaderboards-are-boards-of-best-scores-named-by-the-game.md)).
 
 ## Serving the portal
 

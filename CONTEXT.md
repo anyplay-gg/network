@@ -210,7 +210,7 @@ The ranking of one title's scores for one thing a game ranks, named by the title
 _Avoid_: Leaderboard (alone, when one board is meant), table, chart
 
 **Score entry**:
-One account's best score on one board and when it was reached. Only the best is kept; a better score replaces it. Seen by its owner, by friends unless the owner chose nobody, and by others only if the owner chose everyone ([ADR 0040](docs/adr/0040-leaderboards-are-boards-of-best-scores-named-by-the-game.md)).
+One account's best score on one board and when it was reached. Only the best is kept; a better score replaces it. Seen by its owner, by friends unless the owner chose nobody, and by others only if the owner chose everyone ([ADR 0041](docs/adr/0041-leaderboards-are-boards-of-best-scores-named-by-the-game.md)).
 _Avoid_: Record (a trophy record is meant by that), result
 
 **Board rank**:

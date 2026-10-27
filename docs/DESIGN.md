@@ -95,7 +95,7 @@ A link such as `anyps5://v1/join/…` never starts a game by itself; it opens th
 
 ## Leaderboards
 
-A game that ranks its players records a score for a board and reads a range of it. The network answers both for AnyPlay accounts, from the cloud, for every title the same way ([ADR 0040](adr/0040-leaderboards-are-boards-of-best-scores-named-by-the-game.md)).
+A game that ranks its players records a score for a board and reads a range of it. The network answers both for AnyPlay accounts, from the cloud, for every title the same way ([ADR 0041](adr/0041-leaderboards-are-boards-of-best-scores-named-by-the-game.md)).
 
 **Domain.**
 

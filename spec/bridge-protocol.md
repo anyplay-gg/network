@@ -264,7 +264,7 @@ Version 0, implemented in `crates/bridge-protocol` (the net service's side) and 
 
 ### Leaderboards (`0x06xx`)
 
-Added in version 1 without changing it: four new kinds, so a net service that does not know them answers a request with **unsupported** and a bridge that does not know them never sends them. Decision: [ADR 0040](../docs/adr/0040-leaderboards-are-boards-of-best-scores-named-by-the-game.md); the cloud side: [Leaderboards](cloud-api.md#leaderboards).
+Added in version 1 without changing it: four new kinds, so a net service that does not know them answers a request with **unsupported** and a bridge that does not know them never sends them. Decision: [ADR 0041](../docs/adr/0041-leaderboards-are-boards-of-best-scores-named-by-the-game.md); the cloud side: [Leaderboards](cloud-api.md#leaderboards).
 
 | Kind | Name | Direction | Payload |
 |---|---|---|---|

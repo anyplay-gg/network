@@ -301,7 +301,7 @@ The cloud keeps a **trophy record** per trophy a player earned: the title, the t
 
 ## Leaderboards
 
-The cloud keeps boards of best scores, one per title and board ID, for every game the same way ([ADR 0040](../docs/adr/0040-leaderboards-are-boards-of-best-scores-named-by-the-game.md)). A game's own names and art for a board never reach the cloud. Off by default: with `leaderboards_enabled` unset every route below answers `forbidden` (a read on the portal answers `not_found`).
+The cloud keeps boards of best scores, one per title and board ID, for every game the same way ([ADR 0041](../docs/adr/0041-leaderboards-are-boards-of-best-scores-named-by-the-game.md)). A game's own names and art for a board never reach the cloud. Off by default: with `leaderboards_enabled` unset every route below answers `forbidden` (a read on the portal answers `not_found`).
 
 - A **board** is `title_id` plus a `board` ID (`is_board_id`: 1 to 64 characters from `A-Z a-z 0-9 _ -`). It is made by the first accepted score, with `order: "high"`, `status: "open"` and the bounds `0` to `9007199254740991` (`SCORE_MIN_DEFAULT`, `SCORE_MAX_DEFAULT`). A moderator sets the real order, the bounds and the status ([below](#boards-moderation)). A title has at most 64 boards, an account may make at most 16 and keeps a score on at most 1,000.
 - An **entry** is an account's best score on a board and the time it was reached (`achieved`). A score is an integer; there is no history. A better score replaces the entry by the board's order (higher for `high`, lower for `low`); an equal or worse score changes nothing.
