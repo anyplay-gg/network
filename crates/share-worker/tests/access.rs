@@ -178,7 +178,7 @@ mod real_window {
     use std::time::{Duration, Instant};
 
     use anyplay_share_worker::capture::{self, WindowTarget};
-    use anyplay_share_worker::mac::sck::SckSound;
+    use anyplay_share_worker::mac::sck::{self, SckSound};
     use anyplay_share_worker::sound::SoundSource;
 
     use super::{WORKER, screen_access};
@@ -228,8 +228,21 @@ mod real_window {
             let deadline = Instant::now() + Duration::from_secs(20);
             while Instant::now() < deadline {
                 if let Some(pid) = pid_of_calculator() {
-                    // The window needs a moment to be drawn.
-                    std::thread::sleep(Duration::from_secs(3));
+                    // The window is drawn some time after the process exists: on a cold start of
+                    // a loaded runner longer than the few seconds the worker looks for it. Wait
+                    // until the system lists it (each try looks for a few seconds itself).
+                    let target = WindowTarget {
+                        window: None,
+                        pids: vec![pid],
+                        title_contains: String::new(),
+                    };
+                    let listed_by = Instant::now() + Duration::from_secs(60);
+                    while sck::find_window(&target).is_err() {
+                        assert!(
+                            Instant::now() < listed_by,
+                            "Calculator has no window after 60 s"
+                        );
+                    }
                     return Some(Calculator {
                         pid,
                         started_here,
