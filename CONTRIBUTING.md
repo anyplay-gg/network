@@ -21,7 +21,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
-On Linux the share worker needs PipeWire and udev headers, `pkg-config` and `clang` (`libpipewire-0.3-dev libudev-dev libasound2-dev clang pkg-config`); the voice devices feature needs the ALSA headers (`libasound2-dev`). The fuzz targets in [fuzz/](fuzz/README.md) need `cargo-fuzz` and a nightly toolchain, and run every night in CI.
+On Linux the share worker needs PipeWire and udev headers, `pkg-config` and `clang` (`libpipewire-0.3-dev libudev-dev clang pkg-config`); the voice devices feature needs the ALSA headers (`libasound2-dev`). The fuzz targets in [fuzz/](fuzz/README.md) need `cargo-fuzz` and a nightly toolchain, and run every night in CI.
 
 Tests are hermetic: they start their own servers on loopback and need no internet, no game and no cloud. A test finishes in seconds and checks behaviour, not only that something exists.
 
