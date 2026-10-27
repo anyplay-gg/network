@@ -615,3 +615,38 @@ impl Drop for SckSound {
         stop(&self.stream);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Without the permission (a CI runner has none) the system either refuses to list or lists
+    /// no window of the game; the search ends with a reason and never hangs. With it, a process
+    /// that does not exist has no window either.
+    #[test]
+    fn a_process_without_a_window_is_not_found_and_the_search_ends() {
+        let target = WindowTarget {
+            window: None,
+            pids: vec![u32::MAX - 5],
+            title_contains: String::new(),
+        };
+        let started = Instant::now();
+        let error = match find_window(&target) {
+            Ok(_) => panic!("a window for a process that does not exist"),
+            Err(error) => error,
+        };
+        assert!(
+            is_permission_error(&error)
+                || error.contains("not found")
+                || error.contains("listed nothing"),
+            "{error}"
+        );
+        assert!(started.elapsed() < Duration::from_secs(60));
+    }
+
+    #[test]
+    fn the_permission_error_is_recognised_by_its_words() {
+        assert!(is_permission_error(&format!("{DECLINED} (code -3801)")));
+        assert!(!is_permission_error("the game's window was not found"));
+    }
+}

@@ -658,6 +658,12 @@ mod tests {
         match VtEncoder::open_best(setup()) {
             Ok(encoder) => Some(encoder),
             Err(why) => {
+                // Apple's software encoder is part of every macOS: on a CI runner a failure to
+                // open it is a bug to see, not a machine to skip.
+                assert!(
+                    !std::env::var("ANYPLAY_REQUIRE_VT").is_ok_and(|v| v == "1"),
+                    "no encoder: {why}"
+                );
                 eprintln!("skipped: {why}");
                 None
             }
