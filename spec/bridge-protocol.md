@@ -10,7 +10,7 @@ The Rust reference is [`crates/bridge-protocol`](../crates/bridge-protocol). The
   - `ANYPS5_NET_ENDPOINT`: `127.0.0.1:<port>` where the net service listens;
   - `ANYPS5_NET_TOKEN`: a random secret for this one game start, as lowercase hex.
 - Without both variables the bridge stays off, and every network library behaves as it does today: offline and signed out.
-- The bridge opens one TCP connection to the endpoint and sends **hello** as its first frame. The net service answers **welcome** or **reject**, then closes the connection after a reject. Nothing else is sent before welcome.
+- The bridge opens one TCP connection to the endpoint and sends **hello** as its first frame. The payload of the hello frame is at most 1024 bytes, and a larger first frame closes the connection. The net service answers **welcome** or **reject**, then closes the connection after a reject. Nothing else is sent before welcome.
 - The net service accepts connections from loopback addresses only, and one connection per token at a time; a new connection with the same token replaces the old one.
 - When the connection breaks, the bridge reports the player as signed out to the game and connects again every 2 seconds with the same token.
 
@@ -54,7 +54,7 @@ A payload may be longer than the fields its receiver knows; the receiver ignores
 
 | Kind | Name | Direction | Payload |
 |---|---|---|---|
-| `0x0001` | hello | bridge → service | `version: u16`, then the token as raw bytes (the decoded hex) |
+| `0x0001` | hello | bridge → service | `version: u16`, then the token as raw bytes (the decoded hex); at most 1024 bytes |
 | `0x0002` | welcome | service → bridge | `version: u16` (the version both sides will use), `udp_port: u16`, `tcp_port: u16`, `stream_key: 16 bytes` |
 | `0x0003` | reject | service → bridge | a UTF-8 reason for the log |
 | `0x8000` | unsupported | either way | empty; the reply to a request of unknown kind |
