@@ -3308,7 +3308,7 @@ impl Service {
     /// session's members, and no one when the player is in none.
     fn sync_audience(&self) {
         let me = self.me.as_ref().map(|m| m.id);
-        let audience = self
+        let audience: std::collections::HashSet<std::net::Ipv4Addr> = self
             .current_session()
             .and_then(|id| self.sessions.get(&id))
             .map(|session| {
