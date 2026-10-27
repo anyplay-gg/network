@@ -186,6 +186,53 @@ pub struct PublicProfile {
     pub public_profile: bool,
 }
 
+/// How long two accounts must share a party or a session before the cloud remembers the pair
+/// ("Played with recently").
+pub const PLAYED_WITH_MIN_SECS: u64 = 120;
+/// How long a pair is remembered after the last time, in days.
+pub const PLAYED_WITH_DAYS: u64 = 30;
+/// The most people one account remembers.
+pub const PLAYED_WITH_MAX: usize = 50;
+
+/// A person the account played with recently, in `GET /v1/me/played-with`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlayedWith {
+    pub account: Account,
+    /// When they last shared a party or a session for long enough, in Unix seconds.
+    pub last: u64,
+    /// The title of that session. Absent after a party, or when the cloud does not know it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// The two are friends already.
+    #[serde(default)]
+    pub friend: bool,
+}
+
+/// The answer of `GET /v1/me/played-with`: the people, newest first, and whether the cloud
+/// is recording at all.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlayedWithList {
+    pub remember: bool,
+    pub people: Vec<PlayedWith>,
+}
+
+/// Whether the cloud remembers the people the account plays with: the body of
+/// `PUT /v1/me/played-with/remember` and its answer. On for every account (ADR 0038).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RememberPlayedWith {
+    pub remember_played_with: bool,
+}
+
+impl Default for RememberPlayedWith {
+    fn default() -> Self {
+        Self {
+            remember_played_with: true,
+        }
+    }
+}
+
 /// The tokens of one signed-in device.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Tokens {
@@ -2997,6 +3044,26 @@ mod tests {
             .unwrap(),
             r#"{"public_profile":true}"#
         );
+    }
+
+    #[test]
+    fn played_with_is_remembered_unless_the_player_turns_it_off() {
+        assert!(RememberPlayedWith::default().remember_played_with);
+        assert_eq!(
+            serde_json::to_string(&RememberPlayedWith {
+                remember_played_with: false
+            })
+            .unwrap(),
+            r#"{"remember_played_with":false}"#
+        );
+        let list: PlayedWithList = serde_json::from_str(
+            r#"{"remember":true,"people":[{"account":{"id":4,"handle":"Lumen"},"last":9}]}"#,
+        )
+        .unwrap();
+        let one = &list.people[0];
+        assert!(one.title.is_none() && one.title_id.is_none() && !one.friend);
+        let text = serde_json::to_string(one).unwrap();
+        assert!(!text.contains("title"), "{text}");
     }
 
     #[test]

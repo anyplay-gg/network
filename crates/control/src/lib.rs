@@ -190,6 +190,14 @@ pub enum Command {
     SetPublicProfile {
         on: bool,
     },
+    /// The people the player played with recently: `{remember, people}`.
+    PlayedWith,
+    /// Empties that list.
+    ClearPlayedWith,
+    /// `{on}`: whether the cloud remembers the people the player plays with.
+    SetRememberPlayedWith {
+        on: bool,
+    },
     Profile {
         account: AccountId,
     },
@@ -1515,6 +1523,18 @@ mod tests {
         assert_eq!(
             parse_command(r#"{"id":8,"do":"set_public_profile","on":true}"#),
             Ok((8, Command::SetPublicProfile { on: true }))
+        );
+        assert_eq!(
+            parse_command(r#"{"id":9,"do":"played_with"}"#),
+            Ok((9, Command::PlayedWith))
+        );
+        assert_eq!(
+            parse_command(r#"{"id":10,"do":"clear_played_with"}"#),
+            Ok((10, Command::ClearPlayedWith))
+        );
+        assert_eq!(
+            parse_command(r#"{"id":11,"do":"set_remember_played_with","on":false}"#),
+            Ok((11, Command::SetRememberPlayedWith { on: false }))
         );
         assert_eq!(
             parse_command(r#"{"id":3,"do":"feed","before":90,"limit":20}"#),
