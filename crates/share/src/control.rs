@@ -197,9 +197,12 @@ pub fn encode_line(message: &Message) -> Result<Vec<u8>, ControlError> {
 /// pinger's clock on receipt. The offset is the answerer's clock minus the pinger's, with an
 /// error of at most half the round trip when the path is not symmetric.
 pub fn clock_estimate(t0: u64, t1: u64, t2: u64, t3: u64) -> (i64, i64) {
-    let rtt = (t3 as i64 - t0 as i64) - (t2 as i64 - t1 as i64);
-    let offset = ((t1 as i64 - t0 as i64) + (t2 as i64 - t3 as i64)) / 2;
-    (rtt, offset)
+    // The times come from the other side: do the sums where they cannot overflow.
+    let gap = |a: u64, b: u64| i128::from(a) - i128::from(b);
+    let clamp = |v: i128| v.clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64;
+    let rtt = gap(t3, t0) - gap(t2, t1);
+    let offset = (gap(t1, t0) + gap(t2, t3)) / 2;
+    (clamp(rtt), clamp(offset))
 }
 
 #[cfg(test)]
@@ -356,6 +359,12 @@ mod tests {
             reason: "x".repeat(MAX_LINE),
         });
         assert_eq!(encode_line(&m), Err(ControlError::TooLong));
+    }
+
+    #[test]
+    fn clock_estimate_survives_extreme_peer_times() {
+        let _ = clock_estimate(0, u64::MAX, 0, u64::MAX);
+        let _ = clock_estimate(u64::MAX, 0, u64::MAX, 0);
     }
 
     #[test]
