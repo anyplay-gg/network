@@ -35,7 +35,10 @@ const OVERSIZE_MAX_AGE: Duration = Duration::from_millis(500);
 /// How long to wait for the tunnel header when a stream is opened.
 pub const STREAM_HEADER_TIMEOUT: Duration = Duration::from_secs(5);
 /// How long a stream may stay idle with no data in either direction before it is closed.
-pub const STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
+/// Games can stay quiet in menus, lobbies, or during turn-based play for several minutes
+/// without exchanging packets; 5 minutes gives ample headroom while still bounding leaked
+/// streams from unclean peer drops.
+pub const STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// How long the receiving side waits for the rest of an oversized datagram before it gives up.
 pub const OVERSIZE_READ_TIMEOUT: Duration = Duration::from_secs(1);
@@ -419,7 +422,7 @@ impl Traffic {
         }
         let mut head = [0u8; TUNNEL_HEADER];
         let read_head = tokio::time::timeout(header_timeout, recv.read_exact(&mut head)).await;
-        if read_head.is_err() || read_head.unwrap().is_err() {
+        if !matches!(read_head, Ok(Ok(_))) {
             let _ = send.reset(0u8.into());
             let _ = recv.stop(0u8.into());
             return;
@@ -589,6 +592,7 @@ async fn pipe(
                     if send.write_all(&buf[..n]).await.is_err() {
                         break;
                     }
+                    act_out.store(true, Ordering::Relaxed);
                 }
             }
         }
@@ -604,6 +608,7 @@ async fn pipe(
                     if write.write_all(&buf[..n]).await.is_err() {
                         break;
                     }
+                    act_in.store(true, Ordering::Relaxed);
                 }
                 _ => {
                     let _ = write.shutdown().await;
@@ -984,5 +989,83 @@ mod tests {
         );
 
         delivery.await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn slow_live_stream_survives_idle_timeout() {
+        let (client, server, _endpoints) = connected().await;
+        let traffic = Traffic::start().await.unwrap();
+        let peer_addr = Ipv4Addr::new(10, 77, 0, 2);
+        traffic.set_inbound(HashSet::from([peer_addr]));
+
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        assert_eq!(
+            traffic.bind(8000, Transport::Stream, port),
+            BindResult::Bound
+        );
+
+        let (mut client_send, _client_recv) = client.open_bi().await.unwrap();
+        client_send
+            .write_all(&tunnel_header(8000, 5000))
+            .await
+            .unwrap();
+
+        let (server_send, server_recv) = server.accept_bi().await.unwrap();
+
+        let idle_timeout = Duration::from_millis(60);
+        let delivery = tokio::spawn(async move {
+            traffic
+                .deliver_stream_with(
+                    peer_addr,
+                    server_send,
+                    server_recv,
+                    Duration::from_secs(5),
+                    idle_timeout,
+                )
+                .await;
+        });
+
+        let (mut game_stream, _) = listener.accept().await.unwrap();
+        let mut key_buf = [0u8; 16 + TrafficHeader::LEN];
+        game_stream.read_exact(&mut key_buf).await.unwrap();
+
+        // Send a byte every ~idle/3 across 2 full idle timeout intervals
+        let step = Duration::from_millis(20);
+        let mut received = Vec::new();
+        for i in 0..6u8 {
+            tokio::time::sleep(step).await;
+            client_send.write_all(&[i]).await.unwrap();
+            let mut byte = [0u8; 1];
+            game_stream.read_exact(&mut byte).await.unwrap();
+            received.push(byte[0]);
+        }
+
+        assert_eq!(received, vec![0, 1, 2, 3, 4, 5]);
+
+        drop(client_send);
+        delivery.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn silent_bridge_stream_header_times_out() {
+        let traffic = Traffic::start().await.unwrap();
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        let client = TcpStream::connect((Ipv4Addr::LOCALHOST, port))
+            .await
+            .unwrap();
+        let (server, _) = listener.accept().await.unwrap();
+
+        let res = traffic
+            .open_stream_with(
+                server,
+                Duration::from_millis(50),
+                Duration::from_millis(100),
+            )
+            .await;
+        assert_eq!(res.unwrap_err(), "no header in time");
+        drop(client);
     }
 }
