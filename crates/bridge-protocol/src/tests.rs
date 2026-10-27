@@ -41,7 +41,7 @@ fn header_layout_matches_the_spec() {
 fn a_frame_survives_the_round_trip() {
     let frame = Frame::event(&Message::Hello(Hello {
         version: VERSION,
-        token: b"secret".to_vec(),
+        nonce: vec![7; NONCE_LEN],
     }))
     .unwrap();
     let mut decoder = Decoder::new();
@@ -170,11 +170,19 @@ fn samples() -> Vec<Message> {
     ];
     vec![
         Message::Hello(Hello {
-            version: 0,
-            token: vec![1, 2, 3],
+            version: 1,
+            nonce: vec![1; NONCE_LEN],
+        }),
+        Message::Challenge(Challenge {
+            version: 1,
+            nonce: [2; NONCE_LEN],
+            proof: [3; PROOF_LEN],
+        }),
+        Message::Auth(Auth {
+            proof: [4; PROOF_LEN],
         }),
         Message::Welcome(Welcome {
-            version: 0,
+            version: 1,
             udp_port: 50_001,
             tcp_port: 50_002,
             stream_key: [7; STREAM_KEY_LEN],
@@ -741,4 +749,75 @@ fn random_bytes_on_the_connection_are_framed_or_refused() {
         frames > 5_000 && read > 1_000,
         "{frames} frames, {read} read"
     );
+}
+
+#[test]
+fn handshake_kinds_and_layouts_are_the_ones_in_the_spec() {
+    assert_eq!(VERSION, 1);
+    assert_eq!([Kind::CHALLENGE.0, Kind::AUTH.0], [0x0004, 0x0005]);
+
+    // The hello frame of the specification's test vectors.
+    let nonce: Vec<u8> = (0x20..0x40).collect();
+    let hello = Frame::event(&Message::Hello(Hello {
+        version: VERSION,
+        nonce: nonce.clone(),
+    }))
+    .unwrap();
+    let mut expected = vec![34, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0];
+    expected.extend_from_slice(&nonce);
+    assert_eq!(bytes(&hello), expected);
+
+    let challenge = Message::Challenge(Challenge {
+        version: 1,
+        nonce: [2; NONCE_LEN],
+        proof: [3; PROOF_LEN],
+    });
+    let mut payload = vec![1, 0];
+    payload.extend_from_slice(&[2; NONCE_LEN]);
+    payload.extend_from_slice(&[3; PROOF_LEN]);
+    assert_eq!(challenge.payload().unwrap(), payload);
+    assert_eq!(payload.len(), 66);
+
+    let auth = Message::Auth(Auth {
+        proof: [4; PROOF_LEN],
+    });
+    assert_eq!(auth.payload().unwrap(), vec![4; PROOF_LEN]);
+}
+
+#[test]
+fn a_short_challenge_or_auth_is_truncated() {
+    assert_eq!(
+        Message::parse(Kind::CHALLENGE, &[1, 0, 0]),
+        Err(Error::Truncated)
+    );
+    assert_eq!(
+        Message::parse(Kind::AUTH, &[0; PROOF_LEN - 1]),
+        Err(Error::Truncated)
+    );
+    // Bytes after the fields are ignored, as for every message.
+    let mut longer = vec![9; PROOF_LEN + 5];
+    longer[PROOF_LEN..].fill(0);
+    assert_eq!(
+        Message::parse(Kind::AUTH, &longer),
+        Ok(Some(Message::Auth(Auth {
+            proof: [9; PROOF_LEN]
+        })))
+    );
+}
+
+#[test]
+fn the_handshake_is_read_with_the_small_limit_until_it_is_done() {
+    let mut header = ((MAX_HELLO_PAYLOAD + 1) as u32).to_le_bytes().to_vec();
+    header.extend_from_slice(&[5, 0, 0, 0, 0, 0, 0, 0]);
+    let mut decoder = Decoder::with_max_payload(MAX_HELLO_PAYLOAD);
+    decoder.push(&header);
+    assert_eq!(
+        decoder.next_frame(),
+        Err(Error::TooLarge(MAX_HELLO_PAYLOAD + 1))
+    );
+    // The same header is fine once the limit is raised.
+    let mut decoder = Decoder::with_max_payload(MAX_HELLO_PAYLOAD);
+    decoder.set_max_payload(MAX_PAYLOAD);
+    decoder.push(&header);
+    assert_eq!(decoder.next_frame(), Ok(None));
 }

@@ -22,6 +22,10 @@ _Avoid_: Daemon, client, agent
 The part of an AnyPS5 build that hands a game's network library calls to the net service. It forwards; it does not translate.
 _Avoid_: Shim, hook, plugin
 
+**Game token**:
+The random secret the launcher gives one game start. The bridge and the net service each prove that they know it with an HMAC over fresh nonces, and never send it ([ADR 0039](docs/adr/0039-the-bridge-proves-the-token-instead-of-sending-it.md)). Not an account token or a platform token.
+_Avoid_: Bridge password, session key
+
 **Tunnel**:
 The encrypted connection between the net services of two players, either direct or through a relay.
 _Avoid_: VPN, link, socket

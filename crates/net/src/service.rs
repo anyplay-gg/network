@@ -222,6 +222,8 @@ pub struct Service {
     game: Option<GameRun>,
     bridge: Option<BridgeLink>,
     bridge_port: u16,
+    /// The token of the running game, which the bridge listener checks bridges against.
+    bridge_tokens: crate::bridge::Tokens,
     dialogs: HashMap<u64, Dialog>,
     next_dialog: u64,
     traffic: Traffic,
@@ -278,7 +280,8 @@ impl Service {
     async fn new(config: Config) -> std::io::Result<(Self, UnboundedReceiver<Input>)> {
         let (tx, rx) = mpsc::unbounded_channel();
         let (bridge_tx, mut bridge_rx) = mpsc::unbounded_channel();
-        let bridge_port = crate::bridge::listen(bridge_tx).await?;
+        let bridge_tokens = crate::bridge::Tokens::default();
+        let bridge_port = crate::bridge::listen(bridge_tx, bridge_tokens.clone()).await?;
         {
             let tx = tx.clone();
             tokio::spawn(async move {
@@ -347,6 +350,7 @@ impl Service {
             game: None,
             bridge: None,
             bridge_port,
+            bridge_tokens,
             dialogs: HashMap::new(),
             next_dialog: 1,
             traffic,
@@ -3597,6 +3601,7 @@ impl Service {
             version: version.clone(),
             session: None,
         });
+        self.bridge_tokens.set(Some(token.to_vec()));
         self.game = Some(GameRun {
             title_id,
             title,
@@ -3833,6 +3838,7 @@ impl Service {
         let Some(game) = self.game.take() else {
             return;
         };
+        self.bridge_tokens.set(None);
         self.share_game_ended();
         if let Some(hub) = &self.screen.hub {
             hub.stop_sharing("game_ended");
@@ -3864,24 +3870,14 @@ impl Service {
         match input {
             BridgeInput::Hello {
                 connection,
-                version,
-                token,
                 frames,
                 verdict,
             } => {
-                let Some(game) = &self.game else {
+                // The listener has checked the bridge's proof of the token; the game may have
+                // ended since.
+                if self.game.is_none() {
                     let _ = verdict.send(Err("no game is starting".into()));
                     return false;
-                };
-                if !crate::traffic::same(&token, &game.token) {
-                    let _ = verdict.send(Err("the token does not match this game start".into()));
-                    return false;
-                }
-                if version != bridge::VERSION {
-                    tracing::info!(
-                        "bridge speaks version {version}, answering with {}",
-                        bridge::VERSION
-                    );
                 }
                 let welcome = Message::Welcome(Welcome {
                     version: bridge::VERSION,
