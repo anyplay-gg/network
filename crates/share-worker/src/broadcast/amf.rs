@@ -227,8 +227,7 @@ mod hostile_tests {
 
     #[test]
     fn deeply_nested_objects_are_refused_not_recursed() {
-        let body: Vec<u8> = std::iter::repeat([0x03u8, 0, 0].into_iter())
-            .take(100_000)
+        let body: Vec<u8> = std::iter::repeat_n([0x03u8, 0, 0].into_iter(), 100_000)
             .flatten()
             .collect();
         let mut at = 0;
