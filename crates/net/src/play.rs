@@ -35,6 +35,7 @@ use tokio::task::JoinHandle;
 use crate::screen::{PlayLaunch, RingLaunch, Sink, Workers};
 use crate::shareplay::{Event as HostEvent, ShareHost, Step};
 use crate::tunnel::Tunnels;
+use crate::worker_process::ToWorkerTx;
 
 /// The protocol of a share connection.
 pub const ALPN: &[u8] = b"anyplay/share/0";
@@ -307,7 +308,7 @@ struct Peer {
 
 struct Worker {
     generation: u64,
-    to: mpsc::UnboundedSender<ToWorker>,
+    to: ToWorkerTx,
     /// The setup the worker runs with.
     start: Option<Start>,
     stats: WorkerStats,
