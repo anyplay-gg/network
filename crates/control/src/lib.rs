@@ -326,6 +326,30 @@ pub enum Command {
     ScreenWorker {
         path: String,
     },
+    // Share play
+    /// The host invites a member of their party to share play: the guest sees the game, hears
+    /// it, and depending on `mode` plays. Needs a running game and a worker that can encode.
+    ShareStart {
+        account: AccountId,
+        mode: anyplay_api::ShareMode,
+    },
+    /// The guest answers an invitation (`share_invitation`): accepting opens the viewer.
+    ShareAnswer {
+        /// The invitation's id (named `invitation` on the wire: `id` is the command's number).
+        #[serde(rename = "invitation")]
+        id: String,
+        accept: bool,
+    },
+    /// The host changes the mode of the running share.
+    ShareMode {
+        mode: anyplay_api::ShareMode,
+    },
+    /// The guest asks the host for another mode; nothing changes until the host agrees.
+    ShareRequest {
+        mode: anyplay_api::ShareMode,
+    },
+    /// Ends the share: the host stops it, the guest leaves it, or an invitation is declined.
+    ShareStop,
     Conversations,
     /// Opens the conversation with one account, or a group with several.
     OpenConversation {
@@ -655,6 +679,8 @@ impl Failure {
     pub const NO_ENCODER: &'static str = "no_encoder";
     pub const NO_DECODER: &'static str = "no_decoder";
     pub const BUSY: &'static str = "busy";
+    /// The cloud has share play switched off.
+    pub const NOT_ALLOWED: &'static str = "not_allowed";
 
     pub fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
         Self {
@@ -926,6 +952,59 @@ pub struct ScreenWatching {
     pub shown_fps: u32,
 }
 
+/// Which side of a share the player is on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ShareRole {
+    Host,
+    Guest,
+}
+
+/// How far a share has come.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SharePhase {
+    /// The host invited the guest and waits for the answer.
+    Invited,
+    /// Accepted; the connection, the worker or the game's picture is not there yet.
+    Connecting,
+    /// Pictures flow.
+    Live,
+    /// Connected, but nothing has arrived for 5 seconds.
+    Stalled,
+}
+
+/// The numbers of a share about twice a second: zero or null where not known yet.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShareStats {
+    pub width: u32,
+    pub height: u32,
+    pub fps: u32,
+    pub kbps: u32,
+    pub rtt_ms: Option<u32>,
+    pub loss_percent: u8,
+}
+
+/// The share the player is in, as the launcher shows it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShareView {
+    pub id: String,
+    pub role: ShareRole,
+    /// The other side: the guest for the host, the host for the guest.
+    pub peer: Account,
+    pub title: String,
+    pub mode: anyplay_api::ShareMode,
+    pub phase: SharePhase,
+    /// The connection to the peer and the path it takes; null before there is one.
+    pub link: Option<Link>,
+    pub codec: Option<String>,
+    #[serde(flatten)]
+    pub stats: ShareStats,
+    /// The guest asked for this mode and the host has not answered (host only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requested: Option<anyplay_api::ShareMode>,
+}
+
 /// The answer to `screen_worker`: what the worker found it can do.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ScreenWorkerReady {
@@ -1182,6 +1261,27 @@ pub enum Event {
         hosting: Option<ScreenHosting>,
         offers: Vec<ScreenOffer>,
         watching: Option<ScreenWatching>,
+    },
+    /// Share play: the share the player is in (null when none) and whether they could start
+    /// one now. Sent when something changes, and while a share runs its numbers at most twice
+    /// a second.
+    Share {
+        /// Signed in, in a party with someone else, a game runs, the worker can capture and
+        /// encode, and the cloud offers share play.
+        can_start: bool,
+        share: Option<ShareView>,
+    },
+    /// A party member invited the player to share play. Answer with `share_answer`.
+    ShareInvitation {
+        invitation: anyplay_api::ShareInvitation,
+    },
+    /// An invitation expired, was answered or its share ended.
+    ShareInvitationGone {
+        id: String,
+    },
+    /// The guest asks the host for another mode (host only). Answer with `share_mode` or ignore.
+    ShareRequest {
+        mode: anyplay_api::ShareMode,
     },
     /// Every conversation and request with its newest number, after sign-in and after every
     /// reconnect. Compare each `last` with the number you hold and fetch the messages after it.
@@ -1805,6 +1905,93 @@ mod tests {
         assert!(text.contains("\"width\":1280,\"height\":720,\"fps\":60,\"kbps\":4000"));
         assert_eq!(text.matches('\n').count(), 1);
         assert_eq!(parse_output(&text), Some(output));
+    }
+
+    #[test]
+    fn share_play_commands_parse_with_the_modes_the_spec_names() {
+        use anyplay_api::ShareMode;
+        assert_eq!(
+            parse_command(r#"{"id":1,"do":"share_start","account":7,"mode":"hand_over"}"#),
+            Ok((
+                1,
+                Command::ShareStart {
+                    account: AccountId(7),
+                    mode: ShareMode::HandOver
+                }
+            ))
+        );
+        assert_eq!(
+            parse_command(r#"{"id":2,"do":"share_answer","invitation":"i1","accept":true}"#),
+            Ok((
+                2,
+                Command::ShareAnswer {
+                    id: "i1".into(),
+                    accept: true
+                }
+            ))
+        );
+        assert_eq!(
+            parse_command(r#"{"id":3,"do":"share_mode","mode":"together"}"#),
+            Ok((
+                3,
+                Command::ShareMode {
+                    mode: ShareMode::Together
+                }
+            ))
+        );
+        assert_eq!(
+            parse_command(r#"{"id":4,"do":"share_request","mode":"watch"}"#),
+            Ok((
+                4,
+                Command::ShareRequest {
+                    mode: ShareMode::Watch
+                }
+            ))
+        );
+        assert_eq!(
+            parse_command(r#"{"id":5,"do":"share_stop"}"#),
+            Ok((5, Command::ShareStop))
+        );
+    }
+
+    #[test]
+    fn the_share_event_is_one_line_and_not_taken_for_an_answer() {
+        let event = Event::Share {
+            can_start: true,
+            share: Some(ShareView {
+                id: "s1".into(),
+                role: ShareRole::Host,
+                peer: Account {
+                    id: AccountId(7),
+                    handle: "ann".into(),
+                },
+                title: "Astro".into(),
+                mode: anyplay_api::ShareMode::HandOver,
+                phase: SharePhase::Live,
+                link: Some(Link::Direct),
+                codec: Some("h264".into()),
+                stats: ShareStats {
+                    width: 1280,
+                    height: 720,
+                    fps: 60,
+                    kbps: 4000,
+                    rtt_ms: Some(20),
+                    loss_percent: 0,
+                },
+                requested: None,
+            }),
+        };
+        let output = Output::Event(event);
+        let text = output_line(&output);
+        assert!(text.starts_with("{\"event\":\"share\",\"can_start\":true,"));
+        assert!(text.contains("\"mode\":\"hand_over\""));
+        assert_eq!(text.matches('\n').count(), 1);
+        assert_eq!(parse_output(&text), Some(output));
+        let none = Output::Event(Event::Share {
+            can_start: false,
+            share: None,
+        });
+        assert_eq!(parse_output(&output_line(&none)), Some(none));
     }
 
     #[test]

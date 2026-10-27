@@ -5,17 +5,17 @@ use std::time::Duration;
 
 use anyplay_api::client::{CLIENT_HEADER, ClientId};
 use anyplay_api::{
-    AccountId, AccountLink, AccountTrophies, AddToConversation, Added, ApiError, AppealRequest,
-    AppearOffline, BrowserTokenRequest, Cards, CodeAnswer, CodeRequest, Conversation,
-    Conversations, CreateConversation, CreateSession, Device, DiscordCodeExchange, DiscordRefresh,
-    DiscordTokens, EmailAnswer, EmailRequest, ErrorCode, FriendLists, FriendRequest,
-    FriendRequestAnswer, Info, Invite, Invited, JoinCode, JoinSession, MarkRead, Me, Message,
-    Messages, MoveParty, Party, PartyEndpoint, PartyInvitations, PlaytimeAdded, PlaytimeEntry,
-    PlaytimeUpload, PresenceRequest, Privacy, ProfilePage, PublicProfile, Rarity, ReactionRequest,
-    Reactions, Redeemed, RefreshRequest, Relays, Report, RunReport, RunSummary, SecretsChanged,
-    SendMessage, Session, SignedIn, SignupRequest, Statement, Statements, TicketRequest, Tokens,
-    TrophiesAdded, Trophy, TrophyCompare, TrophyNumbers, TrophyUpload, UpdateParty, UpdateSession,
-    path,
+    AcceptShare, AccountId, AccountLink, AccountTrophies, AddToConversation, Added, ApiError,
+    AppealRequest, AppearOffline, BrowserTokenRequest, Cards, CodeAnswer, CodeRequest,
+    Conversation, Conversations, CreateConversation, CreateSession, CreateShare, Device,
+    DiscordCodeExchange, DiscordRefresh, DiscordTokens, EmailAnswer, EmailRequest, ErrorCode,
+    FriendLists, FriendRequest, FriendRequestAnswer, Info, Invite, Invited, JoinCode, JoinSession,
+    MarkRead, Me, Message, Messages, MoveParty, Party, PartyEndpoint, PartyInvitations,
+    PlaytimeAdded, PlaytimeEntry, PlaytimeUpload, PresenceRequest, Privacy, ProfilePage,
+    PublicProfile, Rarity, ReactionRequest, Reactions, Redeemed, RefreshRequest, Relays, Report,
+    RunReport, RunSummary, SecretsChanged, SendMessage, Session, Share, ShareInvitations, SignedIn,
+    SignupRequest, Statement, Statements, TicketRequest, Tokens, TrophiesAdded, Trophy,
+    TrophyCompare, TrophyNumbers, TrophyUpload, UpdateParty, UpdateSession, UpdateShare, path,
 };
 use anyplay_proof::{DeviceKey, Subject};
 use reqwest::{Method, StatusCode};
@@ -909,6 +909,43 @@ impl Cloud {
     pub async fn party_endpoint(&self, body: &PartyEndpoint) -> Result<Party, CloudError> {
         self.call(Method::PUT, path::PARTY_ENDPOINT, Some(body))
             .await
+    }
+
+    // Share play
+
+    /// The host invites a party member (`POST /v1/shares`).
+    pub async fn create_share(&self, body: &CreateShare) -> Result<Share, CloudError> {
+        self.call(Method::POST, path::SHARES, Some(body)).await
+    }
+
+    /// The share this account is in, if any.
+    pub async fn share(&self) -> Result<Option<Share>, CloudError> {
+        match self.call::<(), Share>(Method::GET, path::SHARE, None).await {
+            Ok(share) => Ok(Some(share)),
+            Err(CloudError::Api(api)) if api.error == ErrorCode::NotFound => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
+    pub async fn share_invitations(&self) -> Result<ShareInvitations, CloudError> {
+        self.call::<(), _>(Method::GET, path::SHARE_INVITATIONS, None)
+            .await
+    }
+
+    /// The invited guest accepts with their tunnel key and relay.
+    pub async fn accept_share(&self, body: &AcceptShare) -> Result<Share, CloudError> {
+        self.call(Method::POST, path::SHARE_ACCEPT, Some(body))
+            .await
+    }
+
+    /// Ends the share, declines the invitation, or leaves.
+    pub async fn end_share(&self) -> Result<(), CloudError> {
+        self.empty(Method::DELETE, path::SHARE).await
+    }
+
+    /// The host tells what the share shows now (the mode, the path).
+    pub async fn update_share(&self, body: &UpdateShare) -> Result<Share, CloudError> {
+        self.call(Method::PATCH, path::SHARE, Some(body)).await
     }
 
     // Join codes

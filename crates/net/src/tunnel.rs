@@ -193,6 +193,8 @@ pub struct Tunnels {
     voice: Arc<Mutex<Option<voice::Sink>>>,
     /// Where connections with the screen ALPN go; none while the player is in no party.
     screen: Arc<Mutex<Option<screen::Sink>>>,
+    /// Where connections with the share play ALPN go; none while no share is held.
+    play: Arc<Mutex<Option<screen::Sink>>>,
     relay_only: bool,
     relay_quic_port: Option<u16>,
 }
@@ -225,6 +227,7 @@ impl Tunnels {
                 ALPN.to_vec(),
                 voice::ALPN.to_vec(),
                 screen::ALPN.to_vec(),
+                crate::play::ALPN.to_vec(),
             ])
             .relay_mode(RelayMode::Custom(relay_map(
                 &options.relays,
@@ -253,6 +256,7 @@ impl Tunnels {
             changes,
             voice: Arc::new(Mutex::new(None)),
             screen: Arc::new(Mutex::new(None)),
+            play: Arc::new(Mutex::new(None)),
             relay_only: options.relay_only,
             relay_quic_port: options.relay_quic_port,
         };
@@ -279,6 +283,12 @@ impl Tunnels {
     /// refused.
     pub(crate) fn set_screen_sink(&self, sink: Option<screen::Sink>) {
         *self.screen.lock().unwrap_or_else(|e| e.into_inner()) = sink;
+    }
+
+    /// Sets who takes the connections that arrive with the share play ALPN. Without one they
+    /// are refused.
+    pub(crate) fn set_play_sink(&self, sink: Option<screen::Sink>) {
+        *self.play.lock().unwrap_or_else(|e| e.into_inner()) = sink;
     }
 
     /// The relay this endpoint is reachable through, once it has one.
@@ -502,6 +512,18 @@ impl Tunnels {
                     match sink {
                         Some(sink) => sink(connection),
                         None => connection.close(1u8.into(), b"no voice here"),
+                    }
+                    return;
+                }
+                if connection.alpn() == crate::play::ALPN {
+                    let sink = tunnels
+                        .play
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .clone();
+                    match sink {
+                        Some(sink) => sink(connection),
+                        None => connection.close(1u8.into(), b"no share here"),
                     }
                     return;
                 }
