@@ -307,6 +307,72 @@ The cloud keeps a **trophy record** per trophy a player earned: the title, the t
 - `players` counts the accounts with at least one record for the title. Rarity is only given once 10 players have the title; below that `players` is 0 and `trophies` empty, so it cannot tell which trophies one person earned.
 - A gamer card's `trophies` counts the account's records by grade, or is null when its trophies are hidden from the caller. Its `avatar` is the hash of the account's avatar, absent when there is none or the caller may not see it. Nothing else is on a card. (Points and level are on the profile and the comparison, not on the card.)
 
+## Leaderboards
+
+The cloud keeps boards of best scores, one per title and board ID, for every game the same way ([ADR 0041](../docs/adr/0041-leaderboards-are-boards-of-best-scores-named-by-the-game.md)). A game's own names and art for a board never reach the cloud. Off by default: with `leaderboards_enabled` unset every route below answers `forbidden` (a read on the portal answers `not_found`).
+
+- A **board** is `title_id` plus a `board` ID (`is_board_id`: 1 to 64 characters from `A-Z a-z 0-9 _ -`). It is made by the first accepted score, with `order: "high"`, `status: "open"` and the bounds `0` to `9007199254740991` (`SCORE_MIN_DEFAULT`, `SCORE_MAX_DEFAULT`). A moderator sets the real order, the bounds and the status ([below](#boards-moderation)). A title has at most 64 boards, an account may make at most 16 and keeps a score on at most 1,000.
+- An **entry** is an account's best score on a board and the time it was reached (`achieved`). A score is an integer; there is no history. A better score replaces the entry by the board's order (higher for `high`, lower for `low`); an equal or worse score changes nothing.
+- A score outside the bounds of the board is refused with `bad_request`, not clamped.
+
+### Reading
+
+| Request | Answer |
+|---|---|
+| `GET /v1/boards/{title_id}/{board}?start=&count=` | `BoardPage` with `view: "top"`: the best entries the caller may see, from position `start` (0 by default), `count` of them (25 by default, at most 100). |
+| `GET /v1/boards/{title_id}/{board}/around?count=` | `BoardPage` with `view: "around"`: `count` entries (25 by default, at most 100) with the caller's own in the middle, `count / 2` above it and the rest below (a window that would reach above the first place starts at the first place). Empty entries and no `me` when the caller has no entry. `start` in the answer is the position of the first line. |
+| `GET /v1/boards/{title_id}/{board}/friends?start=&count=` | `BoardPage` with `view: "friends"`: the caller and the friends who show their scores to friends or to everyone. |
+| `GET /v1/titles/{title_id}/boards` | `TitleBoards`: the boards of the title that have at least one entry the caller may see, ordered by ID, with `order`, `status` and the number of entries the caller may see. |
+
+- `BoardPage` is `{title_id, board, order, status, view, total, start, entries, me}`. `entries` are `BoardEntry` (`rank`, `account`, `score`, `achieved`) in rank order; `me` is the caller's own line in this view, absent when they have none. `total` is the number of entries the caller may see in this view.
+- **Rank** is the place among the entries the caller may see in the view, counting from 1. Equal scores share a rank and the next rank skips the places they take (1, 2, 2, 4). Equal scores are listed earlier time first, then lower account ID, so a page is stable. Because rank counts only what the caller may see, two callers can read different ranks for the same entry, and no rank shows that someone is hidden.
+- A board that does not exist answers `not_found`; a board of which the caller sees no entry answers an empty page. A closed board is read like an open one.
+
+### Who sees an entry
+
+An entry is seen by:
+
+- its owner, always;
+- a friend of the owner, unless the owner's audience is `nobody`;
+- anyone else, only when the owner's audience is `everyone`.
+
+A block in either direction hides the entry from the other account, and a banned account's entries are in no view. The audience is the account's `scores` setting: `friends` for a new account ([ADR 0012](../docs/adr/0012-private-by-default.md)).
+
+| Request | Body | Answer |
+|---|---|---|
+| `GET /v1/me/score-privacy` | | `ScorePrivacy`: `{scores: "friends" \| "everyone" \| "nobody"}` |
+| `PUT /v1/me/score-privacy` | `ScorePrivacy` | the same object |
+
+The setting is a call of its own, like [Appearing offline](#appearing-offline): it is not part of `Privacy`, so a client that saves the six audiences never resets it. Changing it changes every entry of the account at once, and takes effect on the next read.
+
+### Submitting
+
+`PUT /v1/me/scores/{title_id}/{board}` with `ScoreSubmit` (`{score}`) answers `ScoreSaved`: `{accepted, score, achieved, rank, total}`. `accepted` is true when the score is the account's new best; `score` and `achieved` are the best after the call; `rank` and `total` are those of the caller's `top` view.
+
+| Code | Status | When |
+|---|---|---|
+| `bad_request` | 400 | A title or board ID with a wrong shape, or a score outside the bounds. |
+| `forbidden` | 403 | The cloud does not offer leaderboards, the board is closed, or a moderator removed the account's entry (it stays removed until restored). |
+| `limit` | 409 | The title has 64 boards already, the account made 16 boards, or it keeps a score on 1,000. |
+| `rate_limited` | 429 | More than 60 submissions in 10 minutes. |
+
+The call is idempotent: the same score again is `accepted: false` with the same numbers. A new board costs the account one of its 16.
+
+### Boards: moderation
+
+A moderator (see [Who may moderate](#who-may-moderate)) calls:
+
+| Request | Body | Answer |
+|---|---|---|
+| `PUT /v1/moderation/boards/{title_id}/{board}` | `BoardChange`: any of `order`, `status`, `min_score`, `max_score` | `BoardSettings`. Makes the board if it does not exist. `bad_request` when `min_score` is above `max_score` or a bound is outside ±(2^53 - 1). Changing the order re-ranks at once, the stored scores are untouched. |
+| `DELETE /v1/moderation/boards/{title_id}/{board}/entries/{account}` | `EntryRemoval` (`{reason}`, 1 to 500 characters) | 204. Takes the entry out of every view and stops the account from submitting to this board. `not_found` when there is no entry. |
+| `POST /v1/moderation/boards/{title_id}/{board}/entries/{account}/restore` | `{}` | 204. Puts the removed entry back; the account may submit again. `not_found` when it is not removed. |
+
+A removal keeps the moderator's name, the reason and the time on the entry; the other changes go to the cloud's log with the moderator's name ([ADR 0015](../docs/adr/0015-moderators-are-accounts.md)).
+
+### Data
+
+The cloud keeps, per account, its entries (board, score, time, removal mark) and its audience; per board the data above. All of it is deleted with the account and is part of `GET /v1/me/export` (`scores`). Boards stay when their last entry goes.
 ## Run reports
 
 A **run report** is a player's answer to "How did it run?" after a session: the title, the game version, the toolkit version, a verdict and the player's system. Nothing else leaves the player's machine: no paths, hardware IDs or game data ([ADR 0021](../docs/adr/0021-the-line-is-drawn-at-the-law.md) draws the line; a run report is an opinion, not a game file).
@@ -716,6 +782,7 @@ DiscordTokens { access, refresh, expires_in, scope }   expires_in: seconds; scop
 | conversations with strangers | 10 per account per hour |
 | friend requests of a new account | 10 in its first day (`new_account_friend_requests_per_day`) |
 | `PUT /v1/me/run-reports/{title_id}` | 30 per account per hour |
+| `PUT /v1/me/scores/{title_id}/{board}` | 60 per account per 10 minutes |
 | `PUT/DELETE /v1/feed/{id}/reaction` | 60 per account per minute |
 | `join-codes` | 10 new codes and 30 redemptions per account per hour |
 | `me/discord/token` and `me/discord/refresh` | 10 per account per hour, together |

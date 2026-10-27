@@ -61,6 +61,8 @@ impl Kind {
     pub const SHARE_PAD: Kind = Kind(0x0504);
     pub const OVERRIDE: Kind = Kind(0x0505);
     pub const SHARE_STATUS: Kind = Kind(0x0506);
+    pub const SCORE_RECORD: Kind = Kind(0x0601);
+    pub const BOARD_READ: Kind = Kind(0x0602);
 
     /// The kind of the reply to a request of this kind.
     pub const fn reply(self) -> Kind {
@@ -267,6 +269,10 @@ pub enum Message {
     SharePad(SharePad),
     Override { action: OverrideAction },
     ShareStatus(ShareStatus),
+    ScoreRecord(ScoreRecord),
+    ScoreRecorded(ScoreRecorded),
+    BoardRead(BoardRead),
+    BoardPage(BoardPage),
 }
 
 impl Message {
@@ -304,6 +310,10 @@ impl Message {
             Message::SharePad(_) => Kind::SHARE_PAD,
             Message::Override { .. } => Kind::OVERRIDE,
             Message::ShareStatus(_) => Kind::SHARE_STATUS,
+            Message::ScoreRecord(_) => Kind::SCORE_RECORD,
+            Message::ScoreRecorded(_) => Kind::SCORE_RECORD.reply(),
+            Message::BoardRead(_) => Kind::BOARD_READ,
+            Message::BoardPage(_) => Kind::BOARD_READ.reply(),
         }
     }
 
@@ -445,6 +455,38 @@ impl Message {
                 w.u32(m.frames);
                 w.u32(m.dropped);
                 w.u32(m.audio_underruns);
+            }
+            Message::ScoreRecord(m) => {
+                w.i32(m.user_id);
+                w.str(&m.board)?;
+                w.i64(m.score);
+            }
+            Message::ScoreRecorded(m) => {
+                w.u8(m.result as u8);
+                w.i64(m.score);
+                w.u32(m.rank);
+                w.u32(m.total);
+            }
+            Message::BoardRead(m) => {
+                w.i32(m.user_id);
+                w.str(&m.board)?;
+                w.u8(m.view as u8);
+                w.u32(m.start);
+                w.u16(m.count);
+            }
+            Message::BoardPage(m) => {
+                w.u8(m.result as u8);
+                w.u32(m.total);
+                w.u32(m.me_rank);
+                w.i64(m.me_score);
+                w.u16(u16::try_from(m.entries.len()).map_err(|_| Error::TooLong)?);
+                for row in &m.entries {
+                    w.u32(row.rank);
+                    w.u64(row.account_id);
+                    w.str(&row.handle)?;
+                    w.i64(row.score);
+                    w.u64(row.achieved);
+                }
             }
         }
         Ok(w.into_inner())
@@ -604,6 +646,48 @@ impl Message {
                 dropped: r.u32()?,
                 audio_underruns: r.u32()?,
             }),
+            Kind::SCORE_RECORD => Message::ScoreRecord(ScoreRecord {
+                user_id: r.i32()?,
+                board: r.str()?,
+                score: r.i64()?,
+            }),
+            k if k == Kind::SCORE_RECORD.reply() => Message::ScoreRecorded(ScoreRecorded {
+                result: ScoreResult::from(r.u8()?),
+                score: r.i64()?,
+                rank: r.u32()?,
+                total: r.u32()?,
+            }),
+            Kind::BOARD_READ => Message::BoardRead(BoardRead {
+                user_id: r.i32()?,
+                board: r.str()?,
+                view: BoardView::from(r.u8()?),
+                start: r.u32()?,
+                count: r.u16()?,
+            }),
+            k if k == Kind::BOARD_READ.reply() => {
+                let result = BoardResult::from(r.u8()?);
+                let total = r.u32()?;
+                let me_rank = r.u32()?;
+                let me_score = r.i64()?;
+                let count = r.u16()? as usize;
+                let mut entries = Vec::with_capacity(count.min(r.remaining() / BoardRow::MIN_LEN));
+                for _ in 0..count {
+                    entries.push(BoardRow {
+                        rank: r.u32()?,
+                        account_id: r.u64()?,
+                        handle: r.str()?,
+                        score: r.i64()?,
+                        achieved: r.u64()?,
+                    });
+                }
+                Message::BoardPage(BoardPage {
+                    result,
+                    total,
+                    me_rank,
+                    me_score,
+                    entries,
+                })
+            }
             _ => return Ok(None),
         };
         Ok(Some(message))
@@ -823,6 +907,65 @@ pub struct ShareStatus {
     pub audio_underruns: u32,
 }
 
+/// The game records a score for one of its boards (`spec/bridge-protocol.md#leaderboards-0x06xx`).
+/// The title is the one of the running game start, so the board is named by what the game passes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ScoreRecord {
+    pub user_id: i32,
+    /// The board as the game names it, 1 to 64 characters from `A-Z a-z 0-9 _ -`.
+    pub board: String,
+    pub score: i64,
+}
+
+/// What became of a recorded score. `score` is the player's best on the board now (0 when they
+/// have none), `rank` their place among the entries they may see (0 when they have none) and
+/// `total` the number of those entries.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ScoreRecorded {
+    pub result: ScoreResult,
+    pub score: i64,
+    pub rank: u32,
+    pub total: u32,
+}
+
+/// The game reads a range of one board. `start` counts from 0 and is used by `Top` and
+/// `Friends`; `Around` takes `count` entries with the player in the middle.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BoardRead {
+    pub user_id: i32,
+    pub board: String,
+    pub view: BoardView,
+    pub start: u32,
+    pub count: u16,
+}
+
+/// One line of a board.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BoardRow {
+    pub rank: u32,
+    pub account_id: u64,
+    pub handle: String,
+    pub score: i64,
+    /// Unix seconds.
+    pub achieved: u64,
+}
+
+impl BoardRow {
+    /// The size of a row with an empty handle.
+    pub const MIN_LEN: usize = 4 + 8 + 2 + 8 + 8;
+}
+
+/// The answer to a board read. `total` counts the entries the view holds, `me_rank` and
+/// `me_score` are the player's own line in it (0 and 0 when they have none).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BoardPage {
+    pub result: BoardResult,
+    pub total: u32,
+    pub me_rank: u32,
+    pub me_score: i64,
+    pub entries: Vec<BoardRow>,
+}
+
 macro_rules! byte_enum {
     ($(#[$meta:meta])* $name:ident { $($variant:ident = $value:literal),+ $(,)? }) => {
         $(#[$meta])*
@@ -851,6 +994,19 @@ byte_enum!(PeerState { Connecting = 1, Connected = 2, Disconnected = 3, Failed =
 byte_enum!(Transport { Datagram = 1, Stream = 2 });
 byte_enum!(BindResult { Bound = 0, InUse = 1 });
 byte_enum!(DialogResult { Sent = 0, Cancelled = 1 });
+byte_enum!(
+    /// What became of a recorded score.
+    ScoreResult { Stored = 0, Kept = 1, OutOfRange = 2, Refused = 3, Limited = 4, SignedOut = 5 }
+);
+byte_enum!(
+    /// Which entries of a board a read asks for: the best, those around the player, or the
+    /// player and their friends.
+    BoardView { Top = 1, Around = 2, Friends = 3 }
+);
+byte_enum!(
+    /// The answer to a board read.
+    BoardResult { Done = 0, UnknownBoard = 1, Refused = 2, Limited = 3, SignedOut = 4 }
+);
 byte_enum!(
     /// What the guest may do: watch only, play as the host's pad, or play a second pad.
     ShareMode { Watch = 0, HandOver = 1, Together = 2 }

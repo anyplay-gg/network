@@ -233,6 +233,168 @@ impl Default for RememberPlayedWith {
     }
 }
 
+// Leaderboards
+
+/// The most entries one read of a board returns.
+pub const BOARD_PAGE_MAX: u32 = 100;
+/// The entries a read returns when it says nothing.
+pub const BOARD_PAGE_DEFAULT: u32 = 25;
+/// The most boards one title may have. The cloud makes a board when the first score comes in, so
+/// the number bounds what a client can make up.
+pub const BOARDS_PER_TITLE_MAX: u32 = 64;
+/// The most boards one account may make.
+pub const BOARDS_PER_ACCOUNT_MAKE: u32 = 16;
+/// The most boards one account keeps a score on.
+pub const SCORES_PER_ACCOUNT_MAX: u32 = 1_000;
+/// The lowest score a board takes until a moderator sets other bounds.
+pub const SCORE_MIN_DEFAULT: i64 = 0;
+/// The highest score a board takes until a moderator sets other bounds: 2^53 - 1, so every JSON
+/// parser reads a score exactly.
+pub const SCORE_MAX_DEFAULT: i64 = 9_007_199_254_740_991;
+
+/// True for a board ID: what the game passes to name a board, 1 to 64 characters from
+/// `A-Z a-z 0-9 _ -`. It has the shape of a title ID.
+pub fn is_board_id(text: &str) -> bool {
+    is_title_id(text)
+}
+
+/// Which end of a board is better. A moderator sets it from what the game does; a new board
+/// ranks the highest score first.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BoardOrder {
+    #[default]
+    High,
+    Low,
+}
+
+/// Whether a board takes new scores. A closed board stays readable.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BoardStatus {
+    #[default]
+    Open,
+    Closed,
+}
+
+/// Which entries of a board a read lists.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BoardView {
+    /// The best entries the viewer may see.
+    Top,
+    /// The entries around the viewer's own.
+    Around,
+    /// The viewer and their friends.
+    Friends,
+}
+
+/// The body of `PUT /v1/me/scores/{title}/{board}`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScoreSubmit {
+    pub score: i64,
+}
+
+/// What became of a submitted score.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScoreSaved {
+    /// True when the score is the account's new best; false when the account's best on the board
+    /// was as good or better and stays.
+    pub accepted: bool,
+    /// The account's best on the board now.
+    pub score: i64,
+    /// When that best was reached, in Unix seconds.
+    pub achieved: u64,
+    /// The account's place among the entries it may see, counting from 1.
+    pub rank: u32,
+    /// The number of those entries.
+    pub total: u32,
+}
+
+/// One line of a board.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BoardEntry {
+    /// Counts from 1. Equal scores share a rank, and the next rank skips the places they take.
+    pub rank: u32,
+    pub account: Account,
+    pub score: i64,
+    /// When the account reached the score, in Unix seconds.
+    pub achieved: u64,
+}
+
+/// A range of a board as one viewer sees it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BoardPage {
+    pub title_id: String,
+    pub board: String,
+    pub order: BoardOrder,
+    pub status: BoardStatus,
+    pub view: BoardView,
+    /// The number of entries the viewer may see in this view.
+    pub total: u32,
+    /// The position of the first entry of `entries` in the view, counting from 0.
+    pub start: u32,
+    pub entries: Vec<BoardEntry>,
+    /// The viewer's own entry in this view, absent for a viewer without one or not signed in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub me: Option<BoardEntry>,
+}
+
+/// A board in the list of a title.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BoardSummary {
+    pub board: String,
+    pub order: BoardOrder,
+    pub status: BoardStatus,
+    /// The number of entries the viewer may see.
+    pub entries: u32,
+}
+
+/// The answer of `GET /v1/titles/{title}/boards`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TitleBoards {
+    pub title_id: String,
+    pub boards: Vec<BoardSummary>,
+}
+
+/// Who may see the account's scores on boards: the body of `PUT /v1/me/score-privacy` and its
+/// answer. A part of the profile's privacy in kind, a call of its own in form (ADR 0041).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScorePrivacy {
+    pub scores: Audience,
+}
+
+/// A board with the data a moderator sets: the answer of
+/// `PUT /v1/moderation/boards/{title}/{board}`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BoardSettings {
+    pub title_id: String,
+    pub board: String,
+    pub order: BoardOrder,
+    pub status: BoardStatus,
+    pub min_score: i64,
+    pub max_score: i64,
+}
+
+/// The body of `PUT /v1/moderation/boards/{title}/{board}`: what to change.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BoardChange {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub order: Option<BoardOrder>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<BoardStatus>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_score: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_score: Option<i64>,
+}
+
+/// The body of the moderator's removal of an entry.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EntryRemoval {
+    pub reason: String,
+}
+
 /// The tokens of one signed-in device.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Tokens {
@@ -3064,6 +3226,49 @@ mod tests {
         assert!(one.title.is_none() && one.title_id.is_none() && !one.friend);
         let text = serde_json::to_string(one).unwrap();
         assert!(!text.contains("title"), "{text}");
+    }
+
+    #[test]
+    fn boards_rank_the_high_end_first_and_start_open() {
+        assert_eq!(BoardOrder::default(), BoardOrder::High);
+        assert_eq!(BoardStatus::default(), BoardStatus::Open);
+        assert_eq!(ScorePrivacy::default().scores, Audience::Friends);
+        assert_eq!(
+            serde_json::to_string(&BoardView::Around).unwrap(),
+            r#""around""#
+        );
+        assert_eq!(SCORE_MAX_DEFAULT, (1_i64 << 53) - 1);
+    }
+
+    #[test]
+    fn board_ids_have_the_shape_of_title_ids() {
+        for good in ["7", "weekly-1", "A_b-9", &"x".repeat(64)] {
+            assert!(is_board_id(good), "{good}");
+        }
+        for bad in ["", "a b", "a/b", "a.b", "\u{e4}", &"x".repeat(65)] {
+            assert!(!is_board_id(bad), "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_board_page_leaves_out_an_absent_entry_and_reads_without_it() {
+        let page = BoardPage {
+            title_id: "GAME00001".into(),
+            board: "7".into(),
+            order: BoardOrder::Low,
+            status: BoardStatus::Closed,
+            view: BoardView::Friends,
+            total: 0,
+            start: 0,
+            entries: Vec::new(),
+            me: None,
+        };
+        let text = serde_json::to_string(&page).unwrap();
+        assert!(!text.contains("\"me\""), "{text}");
+        assert_eq!(serde_json::from_str::<BoardPage>(&text).unwrap(), page);
+        let change: BoardChange = serde_json::from_str(r#"{"order":"low"}"#).unwrap();
+        assert_eq!(change.order, Some(BoardOrder::Low));
+        assert!(change.status.is_none() && change.min_score.is_none());
     }
 
     #[test]

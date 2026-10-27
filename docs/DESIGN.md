@@ -43,7 +43,7 @@ A separate process that the launcher starts and watches ([ADR 0004](adr/0004-net
 
 - **Account and device.** The refresh token is kept in the operating system's credential store, with the key of the device that it is bound to. The player signs in and manages the account on the cloud's web pages in their browser ([ADR 0016](adr/0016-accounts-are-managed-on-the-web.md)).
 - **A lasting connection to the cloud** for presence, invitations, friend requests and session events.
-- **Translation.** It turns the platform-shaped web API requests from the bridge into the cloud's own API, with one handler per API group. `userProfile` and `communicationRestrictionStatus` are answered today ([spec/web-api](../spec/web-api/README.md)); sessions, matchmaking and the profanity filter come next, leaderboards and title storage later. Anything unknown is refused and written to the observation log ([ADR 0001](adr/0001-bridge-forwards-net-service-translates.md)).
+- **Translation.** It turns the platform-shaped web API requests from the bridge into the cloud's own API, with one handler per API group. `userProfile` and `communicationRestrictionStatus` are answered today ([spec/web-api](../spec/web-api/README.md)); sessions, matchmaking and the profanity filter come next, leaderboards ([below](#leaderboards)) and title storage later. Anything unknown is refused and written to the observation log ([ADR 0001](adr/0001-bridge-forwards-net-service-translates.md)).
 - **Tunnels** on [iroh](https://www.iroh.computer/) 1.0: QUIC, hole punching, relays as the fallback, encrypted end to end ([ADR 0002](adr/0002-tunnels-on-iroh.md)). Each time a tunnel settles on a direct or a relayed path, the service logs one line on standard error with target `anyplay::path`, the kind of path and running totals (`direct`, `relay`, `upgrades`). The line names no one and nothing leaves the PC: it measures our own test machines and probes. The service also reports each settled path to the cloud, which only counts it ([spec](../spec/cloud-api.md#tunnel-paths)): no account, peer or time, fire and forget.
 - **Party voice** ([`voice.rs`](../crates/net/src/voice.rs), [spec](../spec/voice.md), [ADR 0010](adr/0010-voice-and-shared-play-go-through-the-tunnels.md), [ADR 0014](adr/0014-voice-is-an-engine-without-a-transport.md), [ADR 0017](adr/0017-voice-has-a-connection-of-its-own.md)). When the player has switched voice on and is in a party, one task, the **hub**, owns the voice engine and with it the microphone and speakers; with voice off or no party nothing is opened. For each other member who takes part it holds a second QUIC connection on the tunnels' own iroh endpoint, with the ALPN `anyplay/voice/0`, because game datagrams carry no tag byte to tell them from voice. It is a connection of its own but not a path of its own: relay-only clears the endpoint's direct addresses, so voice goes through the relay whenever the tunnels do, and a restart of the tunnels (relay-only changed, new tickets) hangs voice up and joins it again on the new endpoint. The hub pumps the engine every 5 ms, sends each frame it produces as a datagram to every member, and gives each member's datagrams to the engine under that member's account.
   - **Who may connect** is the party's member list and nothing else. The cloud's `Party` carries each member's tunnel key, relay and a `voice` flag, which each net service announces with `PUT /v1/party/endpoint` ([cloud API](../spec/cloud-api.md#parties)); sessions do the same with `Member`. A connection stays only if the key the handshake proves is a current member's key; anything else is closed at once and never reaches the engine. A key that two members name belongs to neither. As for tunnels, the smaller key of a pair dials and the larger accepts.
@@ -91,6 +91,43 @@ A link such as `anyps5://v1/join/…` never starts a game by itself; it opens th
 | Friends, presence, profiles, block list | From the cloud. |
 | Connect to another player | A tunnel with a virtual address. |
 | Invite friends | A friend picker in the launcher; the invitation goes through the cloud. |
+| Record a score, read a ranking | A board of the cloud, keyed by the title and what the game passes ([Leaderboards](#leaderboards)). |
+
+## Leaderboards
+
+A game that ranks its players records a score for a board and reads a range of it. The network answers both for AnyPlay accounts, from the cloud, for every title the same way ([ADR 0041](adr/0041-leaderboards-are-boards-of-best-scores-named-by-the-game.md)).
+
+**Domain.**
+
+| Term | Meaning |
+|---|---|
+| Board | A title ID plus a board ID, the text the game passes. Has an order (`high` or `low` is better), bounds for plausible scores and a status (`open` or `closed`). |
+| Entry | One account's best score on one board and when it was reached. No history. |
+| Range | Which lines a read returns: `top` (the best the viewer may see), `around` (the lines around the viewer's own), `friends` (the viewer and their friends). |
+| Rank | The place among the entries the viewer may see in that range; equal scores share a rank. |
+| Audience | Who sees an account's entries: friends (default), everyone or nobody. A block hides both ways. |
+
+**Flow.**
+
+```text
+game ──record score / read range──▶ bridge ──0x0601 / 0x0602──▶ net service ──PUT /v1/me/scores, GET /v1/boards──▶ cloud
+                                                                                                                      │
+launcher (later), web page ◀──────────────────────────────── reads ─────────────────────────────────────────────────────┘
+```
+
+- The bridge forwards a call as one request and waits for its reply, like a web request. It sends no title: the net service knows the title of the game start and puts it into the cloud path. The board ID is the game's own number or name as text.
+- The net service checks nothing about a score beyond its shape. The cloud applies bounds, limits and privacy and answers with the result codes of the [bridge protocol](../spec/bridge-protocol.md#leaderboards-0x06xx).
+- The web shows a read-only page per board at `/boards/{title}/{board}`, from the [portal API](../spec/portal-api.md#leaderboards). A visitor who is not signed in sees only the entries whose owners chose `everyone`.
+- The net service does not handle the two requests yet and answers `unsupported`; the cloud side is built and tested on its own.
+- Everything is behind the cloud's `ANYPLAY_CLOUD_LEADERBOARDS_ENABLED` (off by default). A bridge that talks to a cloud with the flag off gets `refused` in the replies and the game sees its ranking service as not available.
+
+**What the engine will need later** (a note for the engine owners, not engine code):
+
+1. Find, by observation of games we own, which library calls a game uses to record a score and to read a ranking, and what the game does with the replies. Write what is found into `spec/web-api/` or a new file under `spec/`, from observation only ([OBSERVING.md](OBSERVING.md)); no names, formats or documents from the platform's own material.
+2. Map each call to `0x0601` (record) or `0x0602` (read) and fill the reply in the shape the game accepts. A game that reads "by account IDs" has no view for it yet: that is a new `view` value (additive), asked for when a game needs it.
+3. Turn the board the game names (a number or a name) into the text board ID and pass it as it is; a game that has a communication ID or a service label per title set needs no extra field, since the title is the game start's.
+4. Report `unsupported` and `refused` replies to the game as it reports a ranking service that is down. Never invent a rank locally.
+5. Then the net service needs a handler for the two requests (calls to `PUT /v1/me/scores/{title}/{board}` and `GET /v1/boards/...`, mapping the cloud's error codes to the result codes). It is small and waits for step 1 so that it is built against a real game.
 
 ## Limits
 

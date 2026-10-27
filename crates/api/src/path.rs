@@ -47,6 +47,16 @@ pub const APPEAR_OFFLINE: &str = "/v1/me/appear-offline";
 pub const PUBLIC_PROFILE: &str = "/v1/me/public-profile";
 pub const PLAYED_WITH: &str = "/v1/me/played-with";
 pub const PLAYED_WITH_REMEMBER: &str = "/v1/me/played-with/remember";
+pub const MY_SCORE: &str = "/v1/me/scores/{id}/{board}";
+pub const SCORE_PRIVACY: &str = "/v1/me/score-privacy";
+pub const TITLE_BOARDS: &str = "/v1/titles/{id}/boards";
+pub const BOARD: &str = "/v1/boards/{id}/{board}";
+pub const BOARD_AROUND: &str = "/v1/boards/{id}/{board}/around";
+pub const BOARD_FRIENDS: &str = "/v1/boards/{id}/{board}/friends";
+pub const MOD_BOARD: &str = "/v1/moderation/boards/{id}/{board}";
+pub const MOD_BOARD_ENTRY: &str = "/v1/moderation/boards/{id}/{board}/entries/{account}";
+pub const MOD_BOARD_ENTRY_RESTORE: &str =
+    "/v1/moderation/boards/{id}/{board}/entries/{account}/restore";
 pub const MY_PROFILE: &str = "/v1/me/profile";
 pub const ACCOUNT_PROFILE: &str = "/v1/accounts/{id}/profile";
 pub const FEED: &str = "/v1/feed";
@@ -125,6 +135,11 @@ pub fn fill_seq(path: &str, id: impl std::fmt::Display, seq: u64) -> String {
 /// The path with `{id}` and `{title}` replaced.
 pub fn fill_title(path: &str, id: impl std::fmt::Display, title: impl std::fmt::Display) -> String {
     fill(path, id).replacen("{title}", &title.to_string(), 1)
+}
+
+/// The path with `{id}` and `{board}` replaced.
+pub fn fill_board(path: &str, id: impl std::fmt::Display, board: impl std::fmt::Display) -> String {
+    fill(path, id).replacen("{board}", &board.to_string(), 1)
 }
 
 #[cfg(test)]
