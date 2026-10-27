@@ -4275,7 +4275,13 @@ impl Service {
             | Message::ShareOpen(_)
             | Message::ShareClose
             | Message::ShareMode { .. }
-            | Message::SharePad(_) => {
+            | Message::SharePad(_)
+            // The net service has no handler for the leaderboard requests yet: a game that sends
+            // one is answered `unsupported`. Their replies travel from the service to the game.
+            | Message::ScoreRecord(_)
+            | Message::BoardRead(_)
+            | Message::ScoreRecorded(_)
+            | Message::BoardPage(_) => {
                 if request != 0 {
                     self.bridge_reply(connection, request, Message::Unsupported);
                 }

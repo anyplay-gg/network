@@ -203,7 +203,19 @@ _Avoid_: Rank, account level
 
 **Trophy comparison**:
 Two players' trophy records in one title side by side (ID, grade and time each), with their totals, points and levels. It shows only what each player's trophy visibility allows; ids only, never names or art.
-_Avoid_: Leaderboard (that ranks many players)
+_Avoid_: Leaderboard (see Board: that ranks many players)
+
+**Board**:
+The ranking of one title's scores for one thing a game ranks, named by the title ID and the board ID the game passes. Has an order (which end is better), bounds for plausible scores and a status. Its name, art and units belong to the game.
+_Avoid_: Leaderboard (alone, when one board is meant), table, chart
+
+**Score entry**:
+One account's best score on one board and when it was reached. Only the best is kept; a better score replaces it. Seen by its owner, by friends unless the owner chose nobody, and by others only if the owner chose everyone ([ADR 0041](docs/adr/0041-leaderboards-are-boards-of-best-scores-named-by-the-game.md)).
+_Avoid_: Record (a trophy record is meant by that), result
+
+**Board rank**:
+The place of an entry among the entries a viewer may see on a board. Equal scores share a rank. Counted per viewer, so it never shows a hidden player.
+_Avoid_: Level (trophy level), position (a position is the zero-based index of a line in a read)
 
 **Secret trophy**:
 A trophy record that the owner's launcher marked as secret because the game hides it. Nobody but the owner sees, counts or hears of it until the owner reveals it; it then behaves like any record.
