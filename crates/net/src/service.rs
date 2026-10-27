@@ -4149,6 +4149,8 @@ impl Service {
             Message::Hello(_)
             | Message::Welcome(_)
             | Message::Reject(_)
+            | Message::Challenge(_)
+            | Message::Auth(_)
             | Message::Unsupported
             | Message::State(_)
             | Message::WebReply(_)
