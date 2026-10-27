@@ -144,7 +144,7 @@ Test vector: key secret of 32 bytes of `0x07` (public key `6kpsY-KcUgq-9VB7Ey7F-
 v1.1800000000.AQEBAQEBAQEBAQEBAQEBAQ.nyoO-XK2j-igBkE6cd81u4D3dW5O4JKKa62lLTRZU4LOfJj6Vt8Gopf6TGpJBqneapSZxWgs9x7C26rXSQxuAQ
 ```
 
-Which requests carry a proof: **refresh**, for every device that has a key, and **`browser/link`**. Other requests carry the access token alone: it lives 15 minutes and its device must exist.
+Which requests carry a proof: **refresh**, for every device that has a key, **`browser/link`**, and **`DELETE /v1/me`** (the proof is made over the access token, like the link's; without a valid one the deletion is refused with `unauthorized` and nothing is scheduled). Other requests carry the access token alone: it lives 15 minutes and its device must exist.
 
 ### Devices without a key
 
@@ -170,7 +170,7 @@ The browser's own session on these pages is a cookie that never reaches the API.
 | `PUT /v1/me/appear-offline` | `AppearOffline` in and out: see [Appearing offline](#appearing-offline) |
 | `GET /v1/me/public-profile` | `PublicProfile` |
 | `PUT /v1/me/public-profile` | `PublicProfile` in and out: see [Public profile](#public-profile) |
-| `DELETE /v1/me` | 200 `{deletion: {at}}`. Schedules the deletion of the account for `at` (Unix seconds), 30 days from now, signs out every device and every browser, and refuses the access tokens issued so far; the player can cancel on the [web portal](portal-api.md#deleting-the-account) until `at`. A request that comes again keeps the first `at`. At `at` the cloud deletes the account with its devices, friends, requests, blocks, trophy records, profile, avatar and playtime. Reports the account filed lose their link to it; reports about it, the actions against it and the ban on its e-mail address stay until their retention ends (see Moderation). |
+| `DELETE /v1/me` | A [proof](#device-keys-and-proofs) from the device's key, then 200 `{deletion: {at}}`. Schedules the deletion of the account for `at` (Unix seconds), 30 days from now, signs out every device and every browser, and refuses the access tokens issued so far; the player can cancel on the [web portal](portal-api.md#deleting-the-account) until `at`. A request that comes again keeps the first `at`. At `at` the cloud deletes the account with its devices, friends, requests, blocks, trophy records, profile, avatar and playtime. Reports the account filed lose their link to it; reports about it, the actions against it and the ban on its e-mail address stay until their retention ends (see Moderation). |
 | `GET /v1/me/export` | Everything the cloud stores about the account, as JSON, trophy records, privacy settings, profile, avatar and playtime included. |
 | `GET /v1/accounts/{id}` | `Account` |
 | `GET /v1/accounts?handle=<handle>` | `Account`; the lookup is exact apart from case. There is no search. |
@@ -507,7 +507,7 @@ A missed call also ends when the two stop being friends or one blocks the other,
 
 ## Conversations and messages
 
-A **conversation** is `direct` (two accounts, one per pair), `group` (2 to 32 accounts) or `party` (see above). Messages are text of 1 to 2,000 characters. They are stored so that every device of the receiver gets them, and the cloud deletes them after 30 days, or the time the operator set ([ADR 0011](../docs/adr/0011-messages-are-stored-to-be-delivered.md)).
+A **conversation** is `direct` (two accounts, one per pair), `group` (2 to 32 accounts) or `party` (see above). Messages are text of 1 to 2,000 characters, with no control characters other than line breaks and tabs and no direction overrides (U+202A to U+202E, U+2066 to U+2069); the plain marks U+200E, U+200F and U+061C are allowed. They are stored so that every device of the receiver gets them, and the cloud deletes them after 30 days, or the time the operator set ([ADR 0011](../docs/adr/0011-messages-are-stored-to-be-delivered.md)).
 
 Every message has a number `seq` that counts up by one in its conversation, starting at 1. Numbers are given in the order the messages were stored, and a message with a lower number is always stored before one with a higher number ([ADR 0013](../docs/adr/0013-messages-are-numbered-per-conversation.md)).
 
@@ -563,7 +563,7 @@ A message keeps its number when it is edited, unsent or reacted to, so the numbe
 
 ### Unread counts
 
-`Conversation.unread` is the number of messages above the caller's `read` mark, written by others, visible to the caller (no block, not from before the caller joined) and not unsent. The cloud counts, so every device shows the same number, in the list and in `GET /v1/conversations/{id}`. A client replaces its own count with the cloud's after every read of the list (after `welcome` and after every reconnect) and after its own `read` event, `message_update` and `conversation` events for the conversation. Between those it may add one for each message it fetched that counts. A muted conversation keeps its `unread` but a client shows no badge for it and sums none of it into a total. Requests are not part of any total; they have their own count.
+`Conversation.unread` is the number of messages above the caller's `read` mark, written by others, visible to the caller (no block, not from before the caller joined) and not unsent. The cloud counts, so every device shows the same number (at most 100: a larger number reads as 100, and a client may show `100+`), in the list and in `GET /v1/conversations/{id}`. A client replaces its own count with the cloud's after every read of the list (after `welcome` and after every reconnect) and after its own `read` event, `message_update` and `conversation` events for the conversation. Between those it may add one for each message it fetched that counts. A muted conversation keeps its `unread` but a client shows no badge for it and sums none of it into a total. Requests are not part of any total; they have their own count.
 
 ### Typing
 
