@@ -81,14 +81,14 @@ pub mod code {
 pub const MAX_QUEUED_MESSAGES: usize = 256;
 
 /// The hub's end of the queue of control messages to one peer: never blocks, bounded.
-struct PeerTx {
+pub(crate) struct PeerTx {
     tx: mpsc::Sender<Message>,
     /// Ends the connection; called once when the queue overflows.
     on_overflow: Box<dyn Fn() + Send + Sync>,
 }
 
 impl PeerTx {
-    fn new(
+    pub(crate) fn new(
         capacity: usize,
         on_overflow: impl Fn() + Send + Sync + 'static,
     ) -> (PeerTx, mpsc::Receiver<Message>) {
@@ -104,7 +104,7 @@ impl PeerTx {
 
     /// `true` when the message is queued. On overflow the connection is ended and the message
     /// is not queued; a closed queue (the connection is already gone) is not an overflow.
-    fn send(&self, message: Message) -> bool {
+    pub(crate) fn send(&self, message: Message) -> bool {
         match self.tx.try_send(message) {
             Ok(()) => true,
             Err(mpsc::error::TrySendError::Full(_)) => {

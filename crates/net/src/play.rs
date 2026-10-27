@@ -32,7 +32,7 @@ use iroh::{Endpoint, EndpointAddr, EndpointId, RelayUrl};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
-use crate::screen::{PlayLaunch, RingLaunch, Sink, Workers};
+use crate::screen::{MAX_QUEUED_MESSAGES, PeerTx, PlayLaunch, RingLaunch, Sink, Workers};
 use crate::shareplay::{Event as HostEvent, ShareHost, Step};
 use crate::tunnel::Tunnels;
 use crate::worker_process::ToWorkerTx;
@@ -299,7 +299,7 @@ struct Peer {
     serial: usize,
     link: Link,
     rtt_ms: Option<u32>,
-    writer: mpsc::UnboundedSender<wire::Message>,
+    writer: PeerTx,
     hello: Option<wire::Hello>,
     last_ping: Instant,
     messages: (Instant, u32),
@@ -584,7 +584,12 @@ impl Task {
         self.connections += 1;
         let serial = self.connections;
         let dialing = self.me.as_bytes() < active.bind.peer.as_bytes();
-        let (writer, queue) = mpsc::unbounded_channel();
+        // A peer that stops reading its control stream until this many messages pile up is
+        // gone: the connection ends (code 8) rather than the queue growing or losing messages.
+        let (writer, queue) = PeerTx::new(MAX_QUEUED_MESSAGES, {
+            let connection = connection.clone();
+            move || connection.close(code::TIMED_OUT.into(), b"control stream stalled")
+        });
         // Our hello goes first on the stream.
         let caps = self.workers.capabilities().unwrap_or_default();
         let hello = match active.bind.role {
@@ -1364,7 +1369,7 @@ async fn control_stream(
     serial: usize,
     dialing: bool,
     connection: Connection,
-    mut queue: mpsc::UnboundedReceiver<wire::Message>,
+    mut queue: mpsc::Receiver<wire::Message>,
     net: mpsc::Sender<Net>,
 ) {
     let opened = if dialing {
