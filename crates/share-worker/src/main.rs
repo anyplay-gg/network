@@ -5,8 +5,8 @@
 //! ```text
 //! anyplay-share --capabilities
 //! anyplay-share --role host|guest [--link 127.0.0.1:PORT] [--token TOKEN]
-//!               [--source game|test_pattern] [--title TITLE] [--window HWND] [--pid PID]...
-//!               [--headless]
+//!               [--source game|test_pattern|ring] [--ring NAME] [--title TITLE]
+//!               [--window HWND] [--pid PID]... [--headless] [--pad]
 //! anyplay-share --clips SECONDS [--title TITLE] [--window HWND] [--pid PID]...
 //! anyplay-share --screen-access | --request-screen-access | --open-screen-settings
 //! ```
@@ -25,6 +25,9 @@
 //! `--open-screen-settings` opens the page of System Settings where the player switches it on.
 //! Clips, broadcast and a stream end with `no_permission` while it is off.
 //! `--headless` draws no window on the viewer's side (tests on a machine without a desktop).
+//! `--source ring` is share play: the worker makes the frame ring `--ring NAME` (sized by
+//! `--width`, `--height` and `--fps`), says so on the link and streams what the game's engine
+//! writes into it. `--pad` lets the viewer's window read the guest's pad from the keyboard.
 
 use std::process::ExitCode;
 
@@ -45,6 +48,8 @@ fn main() -> ExitCode {
     let mut title = String::new();
     let mut window: Option<i64> = None;
     let mut headless = false;
+    let mut pad = false;
+    let mut ring: Option<String> = None;
     let mut pids: Vec<u32> = Vec::new();
     let mut clips: Option<u32> = None;
     let mut broadcast = false;
@@ -93,6 +98,8 @@ fn main() -> ExitCode {
             "--source" => source = args.next().unwrap_or_default(),
             "--title" => title = args.next().unwrap_or_default(),
             "--headless" => headless = true,
+            "--pad" => pad = true,
+            "--ring" => ring = args.next(),
             "--window" => window = args.next().and_then(|v| v.parse().ok()),
             "--pid" => pids.extend(args.next().and_then(|v| v.parse::<u32>().ok())),
             _ => {}
@@ -116,6 +123,24 @@ fn main() -> ExitCode {
         }
     };
     match role {
+        Role::Host if source == "ring" => {
+            let Some(name) = ring else {
+                return fail(port, "share play needs --ring NAME".into());
+            };
+            match anyplay_share_worker::ring_source::create(&name, shape.0, shape.1, shape.2) {
+                Ok((frames, sound, ready)) => {
+                    // The net service hands the ring to the game when it reads this.
+                    let _ = port.to_service.send(FromWorker::RingReady(ready));
+                    host::run_with_sound(
+                        Box::new(frames),
+                        Box::new(encoder_for),
+                        Some(Box::new(sound)),
+                        port,
+                    );
+                }
+                Err(reason) => return fail(port, format!("the frame ring: {reason}")),
+            }
+        }
         Role::Host => {
             if source == "game" && !access::state().allows_capture() {
                 return fail(port, access::EXPLANATION.into());
@@ -129,7 +154,7 @@ fn main() -> ExitCode {
         Role::Guest => {
             let decoders: DecoderFactory = Box::new(decoder_for);
             let speakers = if headless { None } else { speakers() };
-            let sink = sink(&title, headless, speakers.is_some());
+            let sink = sink(&title, headless, speakers.is_some(), pad);
             viewer::run_with_sound(decoders, sink, speakers, port);
         }
     }
@@ -206,19 +231,20 @@ fn speakers() -> Option<Box<dyn SoundOut>> {
 
 /// The viewer's window: "title" and, without speakers, a note that there is no sound.
 #[cfg(any(windows, target_os = "linux"))]
-fn sink(title: &str, headless: bool, sound: bool) -> Box<dyn FrameSink> {
+fn sink(title: &str, headless: bool, sound: bool, pad: bool) -> Box<dyn FrameSink> {
     if headless {
         return Box::new(anyplay_share_worker::viewer::NullSink);
     }
     let name = if title.is_empty() { "AnyPlay" } else { title };
     let note = if sound { "" } else { " (no sound)" };
-    Box::new(anyplay_share_worker::window::WindowSink::new(&format!(
-        "{name} - AnyPlay Share screen{note}"
-    )))
+    let kind = if pad { "Share play" } else { "Share screen" };
+    let window =
+        anyplay_share_worker::window::WindowSink::new(&format!("{name} - AnyPlay {kind}{note}"));
+    Box::new(if pad { window.with_pad() } else { window })
 }
 
 #[cfg(not(any(windows, target_os = "linux")))]
-fn sink(_title: &str, _headless: bool, _sound: bool) -> Box<dyn FrameSink> {
+fn sink(_title: &str, _headless: bool, _sound: bool, _pad: bool) -> Box<dyn FrameSink> {
     Box::new(anyplay_share_worker::viewer::NullSink)
 }
 

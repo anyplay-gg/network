@@ -1031,7 +1031,11 @@ impl Task {
                         });
                         self.stop_sharing("ended");
                     }
-                    FromWorker::Report(_) | FromWorker::Key(_) => {}
+                    // Share screen has no pad and no ring: nothing of the kind is acted on.
+                    FromWorker::Report(_)
+                    | FromWorker::Key(_)
+                    | FromWorker::Pad(_)
+                    | FromWorker::RingReady(_) => {}
                 }
             }
             WorkerRole::Viewer => {
@@ -1065,7 +1069,9 @@ impl Task {
                         tracing::info!("screen: viewer worker ended: {reason}");
                         self.leave();
                     }
-                    FromWorker::Datagram(_) => {}
+                    FromWorker::Datagram(_) | FromWorker::RingReady(_) => {}
+                    // Share screen is watch only (ADR 0023): a pad state is dropped here.
+                    FromWorker::Pad(_) => {}
                 }
             }
         }

@@ -7,6 +7,8 @@
 //! behind [`VideoEncoder`] and [`VideoDecoder`]).
 //!
 //! * [`audio`]: the numbering of the game's sound and the viewer's jitter buffer.
+//! * [`pad`]: the guest's pad state, the pad datagram, and the host's rules for it.
+//! * [`ring`]: the layout of the frame ring between the game and the worker.
 //! * [`wire`]: the video and audio datagrams, with a [`wire::Refusal`] for each reason the
 //!   receiver rules give.
 //! * [`packetiser`]: one encoded frame into datagrams with Reed-Solomon parity.
@@ -42,9 +44,11 @@ pub mod codec;
 pub mod control;
 pub mod link;
 pub mod packetiser;
+pub mod pad;
 pub mod pixels;
 pub mod rate;
 pub mod reassembler;
+pub mod ring;
 mod rs;
 pub mod testcodec;
 pub mod wire;

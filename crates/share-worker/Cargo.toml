@@ -39,6 +39,7 @@ windows = { version = "0.62", features = [
     "Win32_Media_MediaFoundation",
     "Win32_Media_Multimedia",
     "Win32_Security",
+    "Win32_System_Memory",
     "Win32_System_Com",
     "Win32_System_Com_StructuredStorage",
     "Win32_System_Ole",
@@ -63,6 +64,11 @@ pipewire = "0.10"
 # (BSD-2-Clause; docs/adr/0027). Nothing of OpenH264 is built into the worker.
 openh264 = { version = "0.9", default-features = false, features = ["libloading"] }
 openh264-sys2 = { version = "0.9", default-features = false, features = ["libloading"] }
+
+# The frame ring is shared memory by name: shm_open and mmap on Linux and the other Unixes
+# (MIT or Apache-2.0); on Windows a named file mapping, from the `windows` crate above.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 # macOS: ScreenCaptureKit for the game's window and sound, VideoToolbox for the system's H.264
 # encoder, and the permission check, all through the objc2 bindings (Zlib OR Apache-2.0 OR MIT,

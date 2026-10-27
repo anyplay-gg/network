@@ -15,6 +15,7 @@ pub mod broadcast;
 pub mod capture;
 pub mod clips;
 pub mod host;
+pub mod input;
 pub mod limits;
 #[cfg(windows)]
 pub mod loopback;
@@ -27,6 +28,8 @@ pub mod oh264;
 pub mod pick;
 #[cfg(target_os = "linux")]
 pub mod portal;
+pub mod ring_source;
+pub mod shm;
 pub mod socket;
 pub mod sound;
 #[cfg(windows)]

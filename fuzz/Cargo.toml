@@ -77,6 +77,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "share_pad_datagram"
+path = "fuzz_targets/share_pad_datagram.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "share_control_line"
 path = "fuzz_targets/share_control_line.rs"
 test = false
