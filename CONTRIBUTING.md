@@ -12,7 +12,7 @@ Issues and pull requests from anyone are welcome here. The rules that hold in ev
 
 ## Build and test
 
-You need Rust 1.88 or newer. These are the commands CI runs on Windows and on Linux. A pull request needs all of them green:
+You need Rust 1.91 or newer. These are the commands CI runs on Windows and on Linux. A pull request needs all of them green:
 
 ```sh
 cargo fmt --all -- --check
