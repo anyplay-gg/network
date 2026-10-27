@@ -23,8 +23,8 @@ use anyplay_net::screen::{PlayLaunch, WorkerPort, Workers};
 use anyplay_net::traffic::Traffic;
 use anyplay_net::tunnel::{Options, RelayAccess, Tunnels};
 use anyplay_share::codec::{Frame as Picture, VideoDecoder, VideoEncoder};
-use anyplay_share::control::Role;
-use anyplay_share::link::{Capabilities, FromWorker};
+use anyplay_share::control::{Report, Role};
+use anyplay_share::link::{Capabilities, FromWorker, Start, ToWorker};
 use anyplay_share::pad::{PadState, button};
 use anyplay_share::ring::RingWriter;
 use anyplay_share::testcodec::{TestDecoder, TestEncoder, TestPattern};
@@ -69,9 +69,40 @@ struct TestWorkers {
     launches: Mutex<Vec<PlayLaunch>>,
     /// Where the guest's viewer would put the pad it read.
     pad: Mutex<Option<std::sync::mpsc::Sender<FromWorker>>>,
+    /// Every setup the net service gave a worker, with the role of the worker.
+    setups: Mutex<Vec<(Role, Start)>>,
 }
 
 impl TestWorkers {
+    /// The setups a role's worker was given, in order.
+    fn setups(&self, role: Role) -> Vec<Start> {
+        self.setups
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(r, _)| *r == role)
+            .map(|(_, start)| start.clone())
+            .collect()
+    }
+
+    /// The guest's viewer reports: `lost` of every `received + lost` packets went missing.
+    fn report(&self, received: u32, lost: u32) {
+        let pad = self.pad.lock().unwrap();
+        pad.as_ref()
+            .expect("a guest worker runs")
+            .send(FromWorker::Report(Report {
+                frame: 0,
+                received,
+                lost,
+                recovered: 0,
+                delay_trend_us: 0,
+                queue_ms: 0,
+                decoded_fps: 30,
+                shown_fps: 30,
+            }))
+            .unwrap();
+    }
+
     fn press(&self, buttons: u32) {
         let pad = self.pad.lock().unwrap();
         pad.as_ref()
@@ -117,8 +148,12 @@ impl Workers for Shared {
         if role == Role::Guest {
             *self.0.pad.lock().unwrap() = Some(worker_out.clone());
         }
+        let workers = self.0.clone();
         std::thread::spawn(move || {
             while let Some(message) = to_rx.blocking_recv() {
+                if let ToWorker::Start(start) = &message {
+                    workers.setups.lock().unwrap().push((role, start.clone()));
+                }
                 if worker_in_tx.send(message).is_err() {
                     return;
                 }
@@ -648,4 +683,52 @@ async fn a_game_that_cannot_open_the_ring_ends_the_share() {
     assert!(
         host.saw(|s| matches!(s, Seen::Notice(message) if message.contains("would not share")))
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn loss_steps_the_picture_down_the_ladder_and_the_guest_follows() {
+    let (_relay, host, guest, _game) = playing(ShareMode::Watch).await;
+    // The game fills a ring of the ladder's top rung, whatever the stream starts at.
+    let ring = host.workers.launches.lock().unwrap()[0]
+        .ring
+        .clone()
+        .unwrap();
+    assert_eq!((ring.width, ring.height, ring.fps), (1920, 1080, 60));
+    let first = host.workers.setups(Role::Host)[0].clone();
+    assert_eq!(first.epoch, 0);
+    assert!(first.height >= 720, "the stream starts high: {first:?}");
+    let shown_before = guest.workers.shown.lock().unwrap().numbers.len();
+
+    // The guest reports heavy loss for a few seconds.
+    for _ in 0..50 {
+        guest.workers.report(50, 8);
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    eventually("the host's worker to be given the smaller picture", || {
+        host.workers
+            .setups(Role::Host)
+            .last()
+            .is_some_and(|s| s.height == 540 && s.epoch > 0)
+    })
+    .await;
+    let host_setup = host.workers.setups(Role::Host).last().cloned().unwrap();
+    assert_eq!((host_setup.width, host_setup.fps), (960, 30));
+
+    // The guest hears it in a config and gives its viewer the same epoch and size.
+    eventually("the guest's viewer to follow", || {
+        guest
+            .workers
+            .setups(Role::Guest)
+            .last()
+            .is_some_and(|s| (s.epoch, s.width, s.height) == (host_setup.epoch, 960, 540))
+    })
+    .await;
+
+    // And the pictures go on, whole.
+    eventually("pictures after the step", || {
+        guest.workers.shown.lock().unwrap().numbers.len() > shown_before + 20
+    })
+    .await;
+    let shown = guest.workers.shown.lock().unwrap();
+    assert_eq!(shown.damaged, 0, "a damaged picture was shown");
 }
