@@ -160,6 +160,73 @@ struct Dialog {
     session: String,
 }
 
+/// The peers by endpoint, leaving out an endpoint that is this device's own or that two
+/// different accounts name: whose it is cannot be told, so neither gets it.
+fn unambiguous_endpoints<T>(
+    named: Vec<(EndpointId, u64, T)>,
+    own: EndpointId,
+) -> HashMap<EndpointId, T> {
+    let mut seen: HashMap<EndpointId, (u64, Option<T>)> = HashMap::new();
+    for (endpoint, account, peer) in named {
+        if endpoint == own {
+            continue;
+        }
+        match seen.get_mut(&endpoint) {
+            None => {
+                seen.insert(endpoint, (account, Some(peer)));
+            }
+            Some((first, kept)) if *first != account => *kept = None,
+            Some(_) => {}
+        }
+    }
+    seen.into_iter()
+        .filter_map(|(endpoint, (_, peer))| peer.map(|p| (endpoint, p)))
+        .collect()
+}
+
+/// Whether the session's record of this endpoint should be pushed now. Pushing the same
+/// endpoint and relay twice never helps: if the record is still stale after the first push, the
+/// cloud answers differently than asked, and asking again would loop.
+fn endpoint_push_due(
+    pushed: &mut HashMap<String, (String, Option<String>)>,
+    session: &str,
+    stale: bool,
+    endpoint: &str,
+    relay: &Option<String>,
+) -> bool {
+    if !stale {
+        pushed.remove(session);
+        return false;
+    }
+    if pushed
+        .get(session)
+        .is_some_and(|(e, r)| e == endpoint && r == relay)
+    {
+        return false;
+    }
+    pushed.insert(session.to_owned(), (endpoint.to_owned(), relay.clone()));
+    true
+}
+
+/// Whether `game` is the run that began with `token`.
+fn game_is(game: Option<&GameRun>, token: &[u8]) -> bool {
+    game.is_some_and(|g| g.token == token)
+}
+
+/// How many invitation dialogs may wait for the player at once.
+const MAX_DIALOGS: usize = 8;
+
+/// Keeps a new dialog and returns its id, or `None` when [`MAX_DIALOGS`] already wait.
+fn admit_dialog(dialogs: &mut HashMap<u64, Dialog>, next: &mut u64, dialog: Dialog) -> Option<u64> {
+    if dialogs.len() >= MAX_DIALOGS {
+        return None;
+    }
+    let id = *next;
+    *next += 1;
+    dialogs.insert(id, dialog);
+    Some(id)
+}
+
 enum PendingSignIn {
     Code {
         challenge: String,
@@ -192,6 +259,9 @@ pub struct Service {
     address: Option<Ipv4Addr>,
     /// What the game calls each peer, over all sessions.
     peer_addresses: PeerAddresses,
+    /// What this device last told each session about its endpoint, so a cloud that answers
+    /// with a different record does not make it announce the same thing over and over.
+    pushed_endpoints: HashMap<String, (String, Option<String>)>,
     friends: FriendLists,
     friends_dirty: bool,
     friends_sent: Instant,
@@ -322,6 +392,7 @@ impl Service {
             next_events: 1,
             address: None,
             peer_addresses: PeerAddresses::default(),
+            pushed_endpoints: HashMap::new(),
             friends: FriendLists::default(),
             friends_dirty: false,
             friends_sent: Instant::now() - FRIENDS_PACE,
@@ -1570,15 +1641,14 @@ impl Service {
         }
         tracing::info!("launcher {launcher}, cloud {url}");
         let store = Store::open(&self.config.data, url, self.config.file_credentials);
-        let sink_store = store.clone();
+        let queue = crate::credentials::SaveQueue::new(store.clone());
         let sink: crate::cloud::TokenSink = Arc::new(move |tokens| {
             let saved = tokens.map(|(t, key)| Saved {
                 device: t.device,
                 refresh: t.refresh.clone(),
                 key: key.map(anyplay_proof::DeviceKey::secret),
             });
-            let store = sink_store.clone();
-            std::thread::spawn(move || store.save(saved.as_ref()));
+            queue.save(saved);
         });
         let cloud = Cloud::new(url, sink);
         self.hello = true;
@@ -3300,11 +3370,18 @@ impl Service {
                 .iter()
                 .find(|m| m.account.id == me)
                 .is_some_and(|m| m.endpoint != endpoint || m.relay != relay);
-            if !stale {
+            if !endpoint_push_due(
+                &mut self.pushed_endpoints,
+                &session.id,
+                stale,
+                &endpoint,
+                &relay,
+            ) {
                 continue;
             }
             let cloud = cloud.clone();
             let id = session.id.clone();
+            let failed = id.clone();
             let body = JoinSession {
                 version: session.version.clone(),
                 build: session.build.clone(),
@@ -3317,9 +3394,11 @@ impl Service {
             };
             self.spawn(
                 async move { cloud.join(&id, &body).await },
-                |service, result| {
-                    if let Ok(session) = result {
-                        service.session_changed(session);
+                move |service, result| match result {
+                    Ok(session) => service.session_changed(session),
+                    // A failed announcement may be tried again.
+                    Err(_) => {
+                        service.pushed_endpoints.remove(&failed);
                     }
                 },
             );
@@ -3332,7 +3411,8 @@ impl Service {
         let Some(tunnels) = &self.tunnels else {
             return;
         };
-        let mut peers = HashMap::new();
+        let own = self.secret.public();
+        let mut named = Vec::new();
         for session in self.sessions.values() {
             for member in &session.members {
                 if Some(member.account.id) == me {
@@ -3344,8 +3424,9 @@ impl Service {
                 ) else {
                     continue;
                 };
-                peers.insert(
+                named.push((
                     endpoint,
+                    member.account.id.0,
                     tunnel::Peer {
                         account: member.account.id.0,
                         handle: member.account.handle.clone(),
@@ -3355,9 +3436,10 @@ impl Service {
                             .as_deref()
                             .and_then(|r| r.parse::<RelayUrl>().ok()),
                     },
-                );
+                ));
             }
         }
+        let peers = unambiguous_endpoints(named, own);
         tunnels.set_peers(peers);
         self.sync_audience();
     }
@@ -3479,6 +3561,7 @@ impl Service {
     }
 
     fn session_gone(&mut self, id: &str) {
+        self.pushed_endpoints.remove(id);
         let before = self.sessions.remove(id);
         if self.is_activated(id)
             && let Some(before) = before
@@ -3669,9 +3752,16 @@ impl Service {
         if override_version {
             tracing::info!("joining {session} although the version rule may not fit (Try Anyway)");
         }
+        let game_token = token.to_vec();
         self.spawn(
             async move { cloud.join(&session, &body).await },
             move |service, result| match result {
+                // The game this join was for ended or was replaced while the cloud answered:
+                // the session belongs to no game, so it is left at once.
+                Ok(joined) if !game_is(service.game.as_ref(), &game_token) => {
+                    service.leave_orphan(joined.id);
+                    service.ok(id, GameStarted { env, session: None });
+                }
                 Ok(joined) => {
                     let joined_id = joined.id.clone();
                     service
@@ -4125,16 +4215,25 @@ impl Service {
                     );
                     return;
                 };
-                let id = self.next_dialog;
-                self.next_dialog += 1;
-                self.dialogs.insert(
-                    id,
+                let Some(id) = admit_dialog(
+                    &mut self.dialogs,
+                    &mut self.next_dialog,
                     Dialog {
                         connection,
                         request,
                         session,
                     },
-                );
+                ) else {
+                    self.bridge_reply(
+                        connection,
+                        request,
+                        Message::InvitationDialogReply {
+                            result: DialogResult::Cancelled,
+                            sent: 0,
+                        },
+                    );
+                    return;
+                };
                 let title = self
                     .game
                     .as_ref()
@@ -4211,7 +4310,7 @@ impl Service {
             "api_group": web.api_group,
             "path": web.path,
             "method": web.method,
-            "headers": web.headers.iter().map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone()))).collect::<serde_json::Map<_, _>>(),
+            "headers": observe::redact_headers(&web.headers),
             "body": observe::game_bytes(&web.body),
         });
         if web.body.len() > observe::CUT {
@@ -4847,6 +4946,76 @@ mod party_voice_tests {
 #[cfg(test)]
 mod hardening_tests {
     use super::*;
+
+    #[test]
+    fn an_endpoint_named_by_two_accounts_or_by_us_gets_no_peer() {
+        let own = SecretKey::generate().public();
+        let shared = SecretKey::generate().public();
+        let alone = SecretKey::generate().public();
+        let named = vec![
+            (shared, 2, "first"),
+            (alone, 3, "alone"),
+            (shared, 4, "second"),
+            (own, 5, "us"),
+            // one account in two sessions is one peer
+            (alone, 3, "alone-again"),
+        ];
+        let peers = unambiguous_endpoints(named, own);
+        assert_eq!(peers.len(), 1);
+        assert_eq!(peers[&alone], "alone");
+    }
+
+    #[test]
+    fn an_endpoint_the_cloud_keeps_refusing_is_pushed_once() {
+        let mut pushed = HashMap::new();
+        let relay = Some("https://r.example/".to_owned());
+        assert!(endpoint_push_due(&mut pushed, "s", true, "e", &relay));
+        // still stale after the push: the cloud answered differently, do not ask again
+        for _ in 0..5 {
+            assert!(!endpoint_push_due(&mut pushed, "s", true, "e", &relay));
+        }
+        // a new relay is news
+        let other = Some("https://r2.example/".to_owned());
+        assert!(endpoint_push_due(&mut pushed, "s", true, "e", &other));
+        // once the record matches, the memory is cleared and a later change pushes again
+        assert!(!endpoint_push_due(&mut pushed, "s", false, "e", &other));
+        assert!(endpoint_push_due(&mut pushed, "s", true, "e", &other));
+    }
+
+    #[test]
+    fn a_join_answer_counts_only_for_the_game_that_asked() {
+        let run = |token: u8| GameRun {
+            title_id: String::new(),
+            title: String::new(),
+            version: String::new(),
+            build: String::new(),
+            token: vec![token; 32],
+            join: None,
+            intent_sent: false,
+            sessions: HashSet::new(),
+        };
+        assert!(game_is(Some(&run(1)), &[1; 32]));
+        assert!(!game_is(Some(&run(2)), &[1; 32]), "another game began");
+        assert!(!game_is(None, &[1; 32]), "the game ended");
+    }
+
+    #[test]
+    fn at_most_eight_invitation_dialogs_wait() {
+        let mut dialogs = HashMap::new();
+        let mut next = 1;
+        let make = |n: u32| Dialog {
+            connection: 1,
+            request: n,
+            session: "s".into(),
+        };
+        for n in 0..MAX_DIALOGS as u32 {
+            assert!(admit_dialog(&mut dialogs, &mut next, make(n)).is_some());
+        }
+        assert!(admit_dialog(&mut dialogs, &mut next, make(99)).is_none());
+        assert_eq!(dialogs.len(), MAX_DIALOGS);
+        dialogs.remove(&1);
+        assert!(admit_dialog(&mut dialogs, &mut next, make(100)).is_some());
+    }
 
     #[tokio::test]
     async fn a_line_without_end_is_dropped_and_the_next_line_is_read() {

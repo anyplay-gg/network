@@ -525,8 +525,13 @@ async fn a_guest_who_vanishes_leaves_the_game_with_a_neutral_pad() {
     // The guest's PC goes away in the middle of a held button.
     guest.hub = None;
     guest.tunnels.close().await;
+    // The host sends the neutral pad when the guest goes silent, and the share may end right
+    // after (the host sees the connection close), which also clears the game's current pad. Either
+    // order is right; what must hold is that the last pad the game was given is neutral.
     eventually("a neutral pad", || {
-        game.game.share_engine().now[0].is_some_and(|p| p.buttons == 0)
+        let engine = game.game.share_engine();
+        engine.now[0].is_some_and(|p| p.buttons == 0)
+            || (engine.now[0].is_none() && engine.taken.last().is_some_and(|p| p.buttons == 0))
     })
     .await;
     drop(host);
