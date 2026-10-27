@@ -50,8 +50,11 @@ impl<M: Memory> FrameSource for RingSource<M> {
                 return Next::Picture(Frame {
                     width: picture.width,
                     height: picture.height,
-                    // The engine's clock in microseconds, wrapping at 2^32 as the stream does.
-                    timestamp_us: picture.present_us as u32,
+                    // The system clock when the worker took the picture, in microseconds,
+                    // wrapping at 2^32 as the stream does: the engine's own clock is not one
+                    // the other PC can be compared with. The engine's copy and the wait in the
+                    // ring (a frame at most) are not in the delay figure.
+                    timestamp_us: crate::wall_us() as u32,
                     bgra: std::mem::take(&mut self.pixels),
                 });
             }
@@ -151,7 +154,9 @@ mod tests {
         match source.next_frame() {
             Next::Picture(frame) => {
                 assert_eq!((frame.width, frame.height), (8, 4));
-                assert_eq!(frame.timestamp_us, 5_000_000);
+                // The system clock of the moment, not the engine's.
+                let age = (crate::wall_us() as u32).wrapping_sub(frame.timestamp_us);
+                assert!(age < 5_000_000, "stamped {age} us ago");
                 assert!(frame.is_well_formed());
                 assert_eq!(frame.bgra, picture);
             }

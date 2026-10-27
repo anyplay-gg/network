@@ -53,6 +53,15 @@ pub struct Port {
     pub to_service: mpsc::Sender<FromWorker>,
 }
 
+/// The system clock in microseconds since 1970: the clock that the pictures' timestamps and the
+/// net service's `ping`s share on one PC, so that the net service's estimate of the other PC's
+/// clock (`ToWorker::Clock`) tells the viewer how old a picture is.
+pub fn wall_us() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_micros() as u64)
+}
+
 /// A key frame at least this often from the test codec, so that a viewer who joins late waits
 /// at most 2 seconds.
 pub const TEST_KEY_INTERVAL: u32 = 120;

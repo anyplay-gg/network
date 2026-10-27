@@ -224,7 +224,9 @@ async fn the_game_is_asked_for_the_workers_ring_and_fills_it() {
         Next::Picture(frame) => {
             assert_eq!((frame.width, frame.height), (WIDTH, HEIGHT));
             assert_eq!(frame.bgra, picture);
-            assert_eq!(frame.timestamp_us, 1_000_000);
+            // The stamp is the system clock of the moment the worker took the picture.
+            let age = (anyplay_share_worker::wall_us() as u32).wrapping_sub(frame.timestamp_us);
+            assert!(age < 5_000_000, "stamped {age} us ago");
         }
         other => panic!("a picture from the ring, got {other:?}"),
     }

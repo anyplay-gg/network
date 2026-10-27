@@ -15,6 +15,7 @@
 //! * [`reassembler`]: datagrams into complete frames, in order, never damaged.
 //! * [`rate`]: the rate controller, a pure function of the reports and the connection.
 //! * [`control`]: the control stream's JSON lines.
+//! * [`delay`]: the median and the 95th percentile of a delay, and the clock offset to use.
 //! * [`testcodec`]: a lossless test codec and a test picture that carries its frame number.
 //!
 //! ```
@@ -42,6 +43,7 @@
 pub mod audio;
 pub mod codec;
 pub mod control;
+pub mod delay;
 pub mod link;
 pub mod packetiser;
 pub mod pad;

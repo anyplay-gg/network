@@ -217,6 +217,11 @@ impl PadSender {
         PadSender::default()
     }
 
+    /// The sequence number of the newest datagram `next` made.
+    pub fn sequence(&self) -> u16 {
+        self.sequence
+    }
+
     /// The datagram for the next state. A state with a reserved bit is cleaned of it, so the
     /// host never gets a reason to refuse what an honest viewer sends.
     pub fn next(&mut self, state: PadState) -> Vec<u8> {

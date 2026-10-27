@@ -99,6 +99,8 @@ impl TestWorkers {
                 queue_ms: 0,
                 decoded_fps: 30,
                 shown_fps: 30,
+                stream_delay: None,
+                input_delay: None,
             }))
             .unwrap();
     }
@@ -731,4 +733,51 @@ async fn loss_steps_the_picture_down_the_ladder_and_the_guest_follows() {
     .await;
     let shown = guest.workers.shown.lock().unwrap();
     assert_eq!(shown.damaged, 0, "a damaged picture was shown");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn both_sides_see_how_old_the_pictures_are_and_how_long_the_pad_takes() {
+    let (_relay, host, guest, _game) = playing(ShareMode::HandOver).await;
+    // The guest keeps pressing; the host acknowledges the states the game got.
+    eventually("the figures on both sides", || {
+        guest.workers.press(button::SOUTH);
+        let figures = |node: &Node| {
+            node.view()
+                .map(|v| (v.stats.stream_delay_ms, v.stats.input_delay_ms))
+        };
+        matches!(figures(&guest), Some((Some(_), Some(_))))
+            && matches!(figures(&host), Some((Some(_), Some(_))))
+    })
+    .await;
+    // Both PCs are one machine here, so the figures are small; a clock that was not put right
+    // would show seconds.
+    for node in [&guest, &host] {
+        let stats = node.view().unwrap().stats;
+        let (stream, input) = (
+            stats.stream_delay_ms.unwrap(),
+            stats.input_delay_ms.unwrap(),
+        );
+        assert!(stream.p50 <= stream.p95 && stream.p95 < 1_000, "{stream:?}");
+        assert!(input.p50 <= input.p95 && input.p95 < 1_000, "{input:?}");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_hosts_limits_hold_the_picture_under_them() {
+    let (_relay, host, guest, _game) = playing(ShareMode::Watch).await;
+    host.hub().quality(Some(6_000), Some(540));
+    // The ladder is at 720p30 or 720p60 at first; the limit takes it to 540p.
+    for _ in 0..10 {
+        guest.workers.report(50, 0);
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    eventually("the picture to be 540p", || {
+        host.workers
+            .setups(Role::Host)
+            .last()
+            .is_some_and(|s| s.height == 540)
+    })
+    .await;
+    let last = host.workers.setups(Role::Host).last().cloned().unwrap();
+    assert!(last.kbps <= 6_000, "{last:?}");
 }
