@@ -6,6 +6,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::net::{Ipv4Addr, SocketAddr};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
@@ -31,6 +32,11 @@ const OVERSIZE_QUEUE: usize = 64;
 const OVERSIZE_SEND_TIMEOUT: Duration = Duration::from_millis(250);
 /// Queued oversized datagrams older than this are stale for a game and dropped unsent.
 const OVERSIZE_MAX_AGE: Duration = Duration::from_millis(500);
+/// How long to wait for the tunnel header when a stream is opened.
+pub const STREAM_HEADER_TIMEOUT: Duration = Duration::from_secs(5);
+/// How long a stream may stay idle with no data in either direction before it is closed.
+pub const STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
+
 /// How long the receiving side waits for the rest of an oversized datagram before it gives up.
 pub const OVERSIZE_READ_TIMEOUT: Duration = Duration::from_secs(1);
 
@@ -357,9 +363,19 @@ impl Traffic {
         }
     }
 
-    async fn open_stream(&self, mut stream: TcpStream) -> Result<(), String> {
+    async fn open_stream(&self, stream: TcpStream) -> Result<(), String> {
+        self.open_stream_with(stream, STREAM_HEADER_TIMEOUT, STREAM_IDLE_TIMEOUT)
+            .await
+    }
+
+    async fn open_stream_with(
+        &self,
+        mut stream: TcpStream,
+        header_timeout: Duration,
+        idle_timeout: Duration,
+    ) -> Result<(), String> {
         let mut head = [0u8; STREAM_KEY_LEN + TrafficHeader::LEN];
-        tokio::time::timeout(Duration::from_secs(5), stream.read_exact(&mut head))
+        tokio::time::timeout(header_timeout, stream.read_exact(&mut head))
             .await
             .map_err(|_| "no header in time".to_owned())?
             .map_err(|e| e.to_string())?;
@@ -377,22 +393,40 @@ impl Traffic {
         send.write_all(&tunnel_header(header.vport, header.source_vport))
             .await
             .map_err(|e| e.to_string())?;
-        pipe(stream, send, recv).await;
+        pipe(stream, send, recv, idle_timeout).await;
         Ok(())
     }
 
     /// Tunnel to bridge: a stream the peer at `from` opened.
-    pub async fn deliver_stream(&self, from: Ipv4Addr, mut send: SendStream, mut recv: RecvStream) {
+    pub async fn deliver_stream(&self, from: Ipv4Addr, send: SendStream, recv: RecvStream) {
+        self.deliver_stream_with(from, send, recv, STREAM_HEADER_TIMEOUT, STREAM_IDLE_TIMEOUT)
+            .await;
+    }
+
+    /// Tunnel to bridge with explicit timeouts for tests.
+    pub async fn deliver_stream_with(
+        &self,
+        from: Ipv4Addr,
+        mut send: SendStream,
+        mut recv: RecvStream,
+        header_timeout: Duration,
+        idle_timeout: Duration,
+    ) {
         if !self.may_reach_game(from) {
             count(&self.drops.unknown_peer);
             let _ = send.reset(0u8.into());
             return;
         }
         let mut head = [0u8; TUNNEL_HEADER];
-        if recv.read_exact(&mut head).await.is_err() {
+        let read_head = tokio::time::timeout(header_timeout, recv.read_exact(&mut head)).await;
+        if read_head.is_err() || read_head.unwrap().is_err() {
+            let _ = send.reset(0u8.into());
+            let _ = recv.stop(0u8.into());
             return;
         }
         let Some((vport, source_vport, _)) = split_tunnel_header(&head) else {
+            let _ = send.reset(0u8.into());
+            let _ = recv.stop(0u8.into());
             return;
         };
         let port = self.read().streams.get(&vport).copied();
@@ -415,7 +449,7 @@ impl Traffic {
         if stream.write_all(&opening).await.is_err() {
             return;
         }
-        pipe(stream, send, recv).await;
+        pipe(stream, send, recv, idle_timeout).await;
     }
 }
 
@@ -529,19 +563,69 @@ fn split_tunnel_header(bytes: &[u8]) -> Option<(u16, u16, &[u8])> {
     ))
 }
 
-/// Copies both ways between a loopback stream and a tunnel stream until either side ends.
-async fn pipe(stream: TcpStream, mut send: SendStream, mut recv: RecvStream) {
+/// Copies both ways between a loopback stream and a tunnel stream, ending when either side
+/// ends or when neither side transfers any bytes within `idle_timeout`.
+async fn pipe(
+    stream: TcpStream,
+    mut send: SendStream,
+    mut recv: RecvStream,
+    idle_timeout: Duration,
+) {
     let _ = stream.set_nodelay(true);
     let (mut read, mut write) = stream.into_split();
-    let out = async {
-        let _ = tokio::io::copy(&mut read, &mut send).await;
-        let _ = send.finish();
+    let activity = Arc::new(AtomicBool::new(false));
+
+    let act_out = activity.clone();
+    let out = async move {
+        let mut buf = [0u8; 16 * 1024];
+        loop {
+            match read.read(&mut buf).await {
+                Ok(0) | Err(_) => {
+                    let _ = send.finish();
+                    break;
+                }
+                Ok(n) => {
+                    act_out.store(true, Ordering::Relaxed);
+                    if send.write_all(&buf[..n]).await.is_err() {
+                        break;
+                    }
+                }
+            }
+        }
     };
-    let back = async {
-        let _ = tokio::io::copy(&mut recv, &mut write).await;
-        let _ = write.shutdown().await;
+
+    let act_in = activity.clone();
+    let back = async move {
+        let mut buf = [0u8; 16 * 1024];
+        loop {
+            match recv.read(&mut buf).await {
+                Ok(Some(n)) if n > 0 => {
+                    act_in.store(true, Ordering::Relaxed);
+                    if write.write_all(&buf[..n]).await.is_err() {
+                        break;
+                    }
+                }
+                _ => {
+                    let _ = write.shutdown().await;
+                    break;
+                }
+            }
+        }
     };
-    tokio::join!(out, back);
+
+    let watchdog = async move {
+        loop {
+            tokio::time::sleep(idle_timeout).await;
+            if !activity.swap(false, Ordering::Relaxed) {
+                break;
+            }
+        }
+    };
+
+    tokio::select! {
+        _ = async { tokio::join!(out, back) } => {}
+        _ = watchdog => {}
+    }
 }
 
 fn is_loopback(address: SocketAddr) -> bool {
@@ -818,5 +902,87 @@ mod tests {
                 .load(std::sync::atomic::Ordering::Relaxed),
             1
         );
+    }
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn silent_peer_stream_header_times_out() {
+        let (client, server, _endpoints) = connected().await;
+        let traffic = Traffic::start().await.unwrap();
+        let peer_addr = Ipv4Addr::new(10, 77, 0, 2);
+        traffic.set_inbound(HashSet::from([peer_addr]));
+
+        let (mut client_send, mut client_recv) = client.open_bi().await.unwrap();
+        // Send a partial 1-byte header so the QUIC stream frame is transmitted and accepted.
+        client_send.write_all(&[1]).await.unwrap();
+        let (server_send, server_recv) = server.accept_bi().await.unwrap();
+
+        // Server waits for the 4-byte header with a 50 ms timeout, but peer stays silent.
+        traffic
+            .deliver_stream_with(
+                peer_addr,
+                server_send,
+                server_recv,
+                Duration::from_millis(50),
+                Duration::from_millis(100),
+            )
+            .await;
+
+        let mut buf = [0u8; 16];
+        let res = client_recv.read(&mut buf).await;
+        assert!(
+            res.is_err() || res.as_ref().is_ok_and(|opt| opt.is_none()),
+            "silent peer stream must be dropped"
+        );
+        drop(client_send);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn silent_peer_stream_idle_times_out() {
+        let (client, server, _endpoints) = connected().await;
+        let traffic = Traffic::start().await.unwrap();
+        let peer_addr = Ipv4Addr::new(10, 77, 0, 2);
+        traffic.set_inbound(HashSet::from([peer_addr]));
+
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        assert_eq!(
+            traffic.bind(8000, Transport::Stream, port),
+            BindResult::Bound
+        );
+
+        let (mut client_send, mut client_recv) = client.open_bi().await.unwrap();
+        // Client sends the 4-byte tunnel header to establish the stream to port 8000.
+        client_send
+            .write_all(&tunnel_header(8000, 5000))
+            .await
+            .unwrap();
+
+        let (server_send, server_recv) = server.accept_bi().await.unwrap();
+
+        let delivery = tokio::spawn(async move {
+            traffic
+                .deliver_stream_with(
+                    peer_addr,
+                    server_send,
+                    server_recv,
+                    Duration::from_secs(5),
+                    Duration::from_millis(50),
+                )
+                .await;
+        });
+
+        // The game side accepts the connection and reads the traffic opening header.
+        let (mut game_stream, _) = listener.accept().await.unwrap();
+        let mut key_buf = [0u8; 16 + TrafficHeader::LEN];
+        game_stream.read_exact(&mut key_buf).await.unwrap();
+
+        // Both sides now stay silent. The watchdog should fire after 50 ms idle timeout.
+        let mut buf = [0u8; 16];
+        let res = client_recv.read(&mut buf).await;
+        assert!(
+            res.is_err() || res.as_ref().is_ok_and(|opt| opt.is_none()),
+            "idle stream must be dropped"
+        );
+
+        delivery.await.unwrap();
     }
 }

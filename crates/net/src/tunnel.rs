@@ -19,7 +19,7 @@ use iroh_relay::RelayQuicConfig;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::task::JoinHandle;
 
-use crate::traffic::{Traffic, receive_oversized};
+pub use crate::traffic::{STREAM_HEADER_TIMEOUT, STREAM_IDLE_TIMEOUT, Traffic, receive_oversized};
 use crate::{screen, voice};
 
 /// A connection that held at least this long counts as good: the next dial starts over at
