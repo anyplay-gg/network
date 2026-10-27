@@ -562,10 +562,22 @@ mod system {
             };
             assert_eq!(stick(0.0, 0.0, 0.0, 0.0), (128, 128, 128, 128), "rest");
             assert_eq!(stick(0.0, 1.0, 0.0, 0.0), (128, 0, 128, 128), "left up");
-            assert_eq!(stick(1.0, 0.0, 0.0, 0.0), (255, 128, 128, 128), "left right");
-            assert_eq!(stick(0.0, 0.0, 0.0, -1.0), (128, 128, 128, 255), "right down");
+            assert_eq!(
+                stick(1.0, 0.0, 0.0, 0.0),
+                (255, 128, 128, 128),
+                "left right"
+            );
+            assert_eq!(
+                stick(0.0, 0.0, 0.0, -1.0),
+                (128, 128, 128, 255),
+                "right down"
+            );
             assert_eq!(stick(0.0, 0.0, -1.0, 0.0), (128, 128, 0, 128), "right left");
-            assert_eq!(stick(0.1, -0.1, 0.1, 0.1), (128, 128, 128, 128), "dead zone");
+            assert_eq!(
+                stick(0.1, -0.1, 0.1, 0.1),
+                (128, 128, 128, 128),
+                "dead zone"
+            );
         }
 
         #[test]
