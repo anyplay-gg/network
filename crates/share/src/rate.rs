@@ -179,6 +179,8 @@ pub struct RateController {
     window: VecDeque<(u64, u32, u32)>,
     parity: u8,
     generation: u32,
+    /// The first rung the player's picture-size limit allows (`share_quality`).
+    top_rung: usize,
 }
 
 fn rung_for(budget: f64) -> usize {
@@ -205,10 +207,31 @@ impl RateController {
             window: VecDeque::new(),
             parity: 0,
             generation: 0,
+            top_rung: 0,
         };
         c.budget = c.budget.min(c.cap());
         c.rung = rung_for(c.budget);
         c
+    }
+
+    /// The tallest picture the player allows (`share_quality`); 0 lifts the limit. The ladder
+    /// never goes above the first rung that fits, and this limit alone never pauses the video:
+    /// a limit under 540 still gives 540p.
+    pub fn set_max_height(&mut self, max_height: u32) {
+        self.top_rung = if max_height == 0 {
+            0
+        } else {
+            LADDER
+                .iter()
+                .position(|r| r.height <= max_height)
+                .unwrap_or(LADDER.len() - 1)
+        };
+        if self.rung < self.top_rung {
+            self.rung = self.top_rung;
+            self.below_since = None;
+            self.above_since = None;
+            self.generation += 1;
+        }
     }
 
     /// The path changed (direct to relayed or back).
@@ -349,7 +372,7 @@ impl RateController {
     }
 
     fn update_rung(&mut self, now: u64) {
-        let want = rung_for(self.budget);
+        let want = rung_for(self.budget).max(self.top_rung);
         let before = self.rung;
         if want > self.rung {
             // The budget is below the current rung.
@@ -790,5 +813,36 @@ mod tests {
         let ts = simulate(&mut c, &mut link, 0, 120);
         assert!(ts.iter().all(|t| t.height <= 720 && t.kbps <= 6_000));
         assert_eq!(ts.last().unwrap().fps, 60);
+    }
+
+    #[test]
+    fn the_players_height_limit_holds_the_ladder_down_and_lifts_again() {
+        let mut c = RateController::new(RateConfig::default(), PathKind::Direct, 0);
+        let mut link = Link {
+            capacity_kbps: 50_000.0,
+            queue_kbit: 0.0,
+            buffer_ms: 100.0,
+        };
+        let a = simulate(&mut c, &mut link, 0, 60);
+        assert_eq!(a.last().unwrap().height, 1080);
+        let before = a.last().unwrap().generation;
+        c.set_max_height(720);
+        let t = c.target();
+        assert_eq!(t.height, 720, "the limit applies at once");
+        assert!(t.generation > before, "a new epoch starts");
+        let b = simulate(&mut c, &mut link, 60, 120);
+        assert!(b.iter().all(|t| t.height <= 720), "stays under the limit");
+        assert_eq!(b.last().unwrap().fps, 60);
+        c.set_max_height(0);
+        let d = simulate(&mut c, &mut link, 120, 200);
+        assert_eq!(d.last().unwrap().height, 1080, "the limit is lifted");
+    }
+
+    #[test]
+    fn a_height_limit_under_the_last_rung_gives_the_last_rung_not_a_pause() {
+        let mut c = RateController::new(RateConfig::default(), PathKind::Direct, 0);
+        c.set_max_height(240);
+        let t = c.target();
+        assert_eq!((t.height, t.paused), (540, false));
     }
 }

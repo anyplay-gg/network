@@ -24,7 +24,7 @@ use anyplay_control::{Link, ShareStats};
 use anyplay_share::control::{self as wire, Role};
 use anyplay_share::link::{FromWorker, RingReady, Start, ToWorker, WorkerStats};
 use anyplay_share::pad::{PadSender, TYPE_PAD};
-use anyplay_share::rate::{PathKind, RateConfig, RateController, RateInput};
+use anyplay_share::rate::{LADDER, PathKind, RateConfig, RateController, RateInput, Target};
 use bytes::Bytes;
 use futures_util::StreamExt;
 use iroh::endpoint::Connection;
@@ -382,6 +382,44 @@ fn path_kind(link: Link) -> PathKind {
         // Until the path is known, assume the narrower one.
         Link::Relay | Link::Connecting => PathKind::Relay,
     }
+}
+
+/// The lowest rate the encoder is given while the ladder pauses the video: the picture does
+/// not stop, it only gets as small as it can.
+const PAUSED_KBPS: u32 = 300;
+
+/// What a new target asks of the host's worker.
+#[derive(Debug, PartialEq, Eq)]
+enum Retune {
+    Keep,
+    /// Only the bitrate or the loss protection changed: the running encoder follows.
+    Rate,
+    /// The size or the frame rate changed: a new epoch, a new encoder, a key frame.
+    Shape,
+}
+
+/// Moves the worker's setup to `target` and says what the worker has to be told.
+fn retune(start: &mut Start, target: &Target) -> Retune {
+    let kbps = if target.paused {
+        target.kbps.max(PAUSED_KBPS)
+    } else {
+        target.kbps
+    };
+    let shape = (target.width, target.height, target.fps);
+    let result = if shape != (start.width, start.height, start.fps) {
+        start.epoch = start.epoch.wrapping_add(1);
+        start.width = target.width;
+        start.height = target.height;
+        start.fps = target.fps;
+        Retune::Shape
+    } else if (kbps, target.parity_percent) != (start.kbps, start.parity_percent) {
+        Retune::Rate
+    } else {
+        return Retune::Keep;
+    };
+    start.kbps = kbps;
+    start.parity_percent = target.parity_percent;
+    result
 }
 
 /// Whether a mode gives the guest a pad.
@@ -887,11 +925,13 @@ impl Task {
         let launch = PlayLaunch {
             role: Role::Host,
             title: active.bind.title.clone(),
+            // The ring has the size of the ladder's top rung, so that the picture can go up the
+            // ladder as well as down; the worker scales each picture to the rung it streams.
             ring: Some(RingLaunch {
                 name: anyplay_share::ring::name_from_random(random),
-                width: target.width,
-                height: target.height,
-                fps: target.fps,
+                width: LADDER[0].width,
+                height: LADDER[0].height,
+                fps: LADDER[0].fps,
             }),
         };
         let port = match self.workers.launch_play(&launch) {
@@ -1053,8 +1093,8 @@ impl Task {
             .max(anyplay_share::packetiser::MIN_PAYLOAD)
     }
 
-    /// The guest's report feeds the controller; its target goes to the worker. The picture
-    /// keeps the size of the frame ring the game fills, so only the rate follows.
+    /// The guest's report feeds the controller; its target goes to the worker: a new rate at
+    /// once, a new size or frame rate as a new epoch that the guest hears of in a `config`.
     fn guest_reports(&mut self, report: wire::Report) {
         let now_us = self.now_us();
         let Some(active) = &mut self.active else {
@@ -1078,13 +1118,18 @@ impl Task {
         let Some(start) = &mut worker.start else {
             return;
         };
-        if (target.kbps, target.parity_percent) != (start.kbps, start.parity_percent) {
-            start.kbps = target.kbps;
-            start.parity_percent = target.parity_percent;
-            let _ = worker.to.send(ToWorker::Rate {
-                kbps: target.kbps,
-                parity_percent: target.parity_percent,
-            });
+        match retune(start, &target) {
+            Retune::Keep => {}
+            Retune::Rate => {
+                let _ = worker.to.send(ToWorker::Rate {
+                    kbps: start.kbps,
+                    parity_percent: start.parity_percent,
+                });
+            }
+            Retune::Shape => {
+                let _ = worker.to.send(ToWorker::Start(start.clone()));
+                self.send_config();
+            }
         }
     }
 
@@ -1452,5 +1497,80 @@ async fn dial(endpoint: Endpoint, id: EndpointId, relay: Option<RelayUrl>, net: 
         }
         tokio::time::sleep(pause).await;
         pause = (pause * 2).min(LONGEST_PAUSE);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn start() -> Start {
+        Start {
+            epoch: 0,
+            codec: "h264".into(),
+            width: 1280,
+            height: 720,
+            fps: 30,
+            kbps: 4_000,
+            parity_percent: 0,
+            max_payload: 1180,
+        }
+    }
+
+    fn target(width: u32, height: u32, fps: u32, kbps: u32) -> Target {
+        Target {
+            kbps,
+            width,
+            height,
+            fps,
+            parity_percent: 0,
+            paused: false,
+            generation: 0,
+        }
+    }
+
+    #[test]
+    fn the_same_target_changes_nothing() {
+        let mut s = start();
+        assert_eq!(retune(&mut s, &target(1280, 720, 30, 4_000)), Retune::Keep);
+        assert_eq!(s, start());
+    }
+
+    #[test]
+    fn a_new_rate_alone_keeps_the_epoch() {
+        let mut s = start();
+        let mut t = target(1280, 720, 30, 3_200);
+        t.parity_percent = 10;
+        assert_eq!(retune(&mut s, &t), Retune::Rate);
+        assert_eq!((s.epoch, s.kbps, s.parity_percent), (0, 3_200, 10));
+    }
+
+    #[test]
+    fn a_new_size_or_frame_rate_starts_a_new_epoch() {
+        let mut s = start();
+        assert_eq!(retune(&mut s, &target(960, 540, 30, 2_000)), Retune::Shape);
+        assert_eq!((s.epoch, s.width, s.height, s.fps, s.kbps), (1, 960, 540, 30, 2_000));
+        assert_eq!(retune(&mut s, &target(1280, 720, 60, 6_000)), Retune::Shape);
+        assert_eq!((s.epoch, s.height, s.fps), (2, 720, 60));
+        // the codec and the datagram size stay
+        assert_eq!((s.codec.as_str(), s.max_payload), ("h264", 1180));
+    }
+
+    #[test]
+    fn the_epoch_wraps() {
+        let mut s = start();
+        s.epoch = u8::MAX;
+        assert_eq!(retune(&mut s, &target(960, 540, 30, 2_000)), Retune::Shape);
+        assert_eq!(s.epoch, 0);
+    }
+
+    #[test]
+    fn a_paused_ladder_keeps_a_small_picture_going() {
+        let mut s = start();
+        let mut t = target(960, 540, 30, 0);
+        t.paused = true;
+        assert_eq!(retune(&mut s, &t), Retune::Shape);
+        assert_eq!(s.kbps, PAUSED_KBPS);
+        assert_eq!(retune(&mut s, &t), Retune::Keep, "it does not flap");
     }
 }
