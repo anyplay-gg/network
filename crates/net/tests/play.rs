@@ -751,7 +751,10 @@ async fn both_sides_see_how_old_the_pictures_are_and_how_long_the_pad_takes() {
     // would show seconds.
     for node in [&guest, &host] {
         let stats = node.view().unwrap().stats;
-        let (stream, input) = (stats.stream_delay_ms.unwrap(), stats.input_delay_ms.unwrap());
+        let (stream, input) = (
+            stats.stream_delay_ms.unwrap(),
+            stats.input_delay_ms.unwrap(),
+        );
         assert!(stream.p50 <= stream.p95 && stream.p95 < 1_000, "{stream:?}");
         assert!(input.p50 <= input.p95 && input.p95 < 1_000, "{input:?}");
     }

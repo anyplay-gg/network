@@ -147,8 +147,14 @@ enum Ctl {
     Stop,
     Accepted(Connection),
     Bind(Bind),
-    Unbind { code: u32, reason: String },
-    End { code: u32, reason: String },
+    Unbind {
+        code: u32,
+        reason: String,
+    },
+    End {
+        code: u32,
+        reason: String,
+    },
     Mode(ShareMode),
     Request(ShareMode),
     Quality {
