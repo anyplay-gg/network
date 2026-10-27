@@ -37,6 +37,8 @@ pub async fn listen(out: UnboundedSender<BridgeInput>) -> std::io::Result<u16> {
         let mut next = 1u64;
         loop {
             let Ok((stream, from)) = listener.accept().await else {
+                // A failing accept (out of file handles, say) repeats at once: do not spin on it.
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
                 continue;
             };
             if !from.ip().is_loopback() {
