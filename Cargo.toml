@@ -7,7 +7,7 @@ version = "0.0.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/anyplaynet/network"
-rust-version = "1.88"
+rust-version = "1.91"
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }

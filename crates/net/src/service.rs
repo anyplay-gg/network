@@ -1479,6 +1479,13 @@ impl Service {
                 }
                 self.ok(id, Done {});
             }
+            Command::VoiceEcho { enabled } => {
+                self.voice.settings.echo_cancellation = Some(enabled);
+                if let Some(hub) = &self.voice.hub {
+                    hub.set_echo_cancellation(enabled);
+                }
+                self.ok(id, Done {});
+            }
             Command::MicMute { muted } => {
                 self.voice.settings.mic_muted = muted;
                 if let Some(hub) = &self.voice.hub {
@@ -3082,6 +3089,7 @@ impl Service {
         let (input, output) = (self.voice.input.clone(), self.voice.output.clone());
         let mode = self.voice.settings.mode;
         let noise = self.voice.settings.noise_suppression;
+        let echo = self.voice.settings.echo_cancellation;
         self.spawn(
             async move {
                 tokio::task::spawn_blocking(move || {
@@ -3089,6 +3097,7 @@ impl Service {
                     let config = anyplay_voice::Config {
                         mode,
                         noise_suppression: noise.unwrap_or(true),
+                        echo_cancellation: echo.unwrap_or(true),
                         ..anyplay_voice::Config::default()
                     };
                     Engine::new(config, device).map_err(|e| e.to_string())

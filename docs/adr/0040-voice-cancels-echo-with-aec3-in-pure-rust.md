@@ -1,0 +1,29 @@
+# Voice cancels echo with AEC3, ported to Rust, on by default
+
+[ADR 0014](0014-voice-is-an-engine-without-a-transport.md) left echo to push-to-talk and headphones and named echo cancellation as the next step if players ask for an open microphone on speakers. A console-style launcher is played from a couch with the TV's or a soundbar's speakers, so that is the normal case, not the exception: the far member's voice leaves the speakers, enters the microphone, and goes back to the whole party. The engine now cancels it. `Config::echo_cancellation` is on by default, the control protocol has `voice_echo` to switch it off, and the canceller sits first in the sending chain: capture, resample to 48 kHz, **echo cancellation**, RNNoise, gate, Opus.
+
+## The choice: `sonora`, the pure-Rust port of WebRTC's AEC3
+
+[`sonora`](https://crates.io/crates/sonora) 0.2 (BSD-3-Clause, [source](https://github.com/dignifiedquire/sonora)) is WebRTC's audio processing module M145 ported to Rust: AEC3 with its own delay estimator and echo-path change detection, a noise suppressor, AGC2, and SIMD paths (SSE2, AVX2, NEON). It is pure Rust with three small dependencies of its own, so it builds the same on Windows (MSVC and GNU), Linux and macOS with the toolchain the workspace already has, and needs no system package, no CMake step, and no meson or ninja. BSD-3-Clause is already on the allow list of `deny.toml` and is compatible with distributing under MIT OR Apache-2.0 (the notice is kept in the licence listing the launcher ships). It needs Rust 1.91, so the workspace `rust-version` goes from 1.88 to 1.91; CI and the launcher build with stable, which is newer.
+
+What we use of it is the echo canceller. We do not use its noise suppressor (RNNoise stays: its speech probability is the voice activity detector, and it is tuned) and not AGC2. The gain control would be cheap to add, but a microphone whose level the player cannot see moving is a setting of its own, and nobody asked.
+
+### The delay
+
+AEC3 needs the exact signal the speakers play and finds the delay to the microphone itself, up to a few hundred milliseconds. The engine knows the first part exactly, because it writes the playback samples itself, from the mixer, in 20 ms frames. It writes up to 60 ms ahead of the device, though, so handing the reference over at once would add that queue to the delay AEC3 must find, and the queue's length changes with every pump. Instead the reference waits in a small line and is released to the canceller when the device has taken it off its queue (`playback_queued` shrank). What AEC3 still has to find is then the device's hardware buffers, the room, and the capture ring, which is its job, and a fixed start hint of 40 ms. The queue length is counted at 48 kHz whatever the device's rate.
+
+## Considered options
+
+- **`webrtc-audio-processing` (tonarino), the C++ library behind a Rust wrapper** (2.1, BSD-3-Clause style licence): the original AEC3, with years of field use. Rejected as the first choice only for the build: the `bundled` feature needs meson, ninja and a C++ compiler on every runner and every developer's PC, without it the build links the system library (`libwebrtc-audio-processing-dev`), which the release builds do not have and Windows does not have at all. This is the fallback, behind the same two calls (`render`, `capture`) in `echo.rs`, if `sonora` turns out to behave worse than the original on real hardware: it is a one-file swap.
+- **`aec3`** (RubyBit, MIT OR BSD-3-Clause): another port of AEC3, built around a node graph with its own scheduler. More than we need to put one filter in a chain.
+- **The speex canceller (`speexdsp` bindings)**: older, a simple adaptive filter, no delay estimation, a C dependency. Clearly behind AEC3 for a room with reflections.
+- **The operating system's canceller.** Windows: capturing in the communications category turns on the driver's echo cancellation only where the driver provides one, which many do not, and cpal does not expose the category. PipeWire and PulseAudio: `module-echo-cancel` is a module the user loads, not something an application can count on. macOS: the VoiceProcessingIO audio unit does it well, but it is a different audio API from the one cpal uses and also changes the output (ducks other audio, which would duck the game). Three platform back ends with three behaviours, none testable without a device, against one library that is the same everywhere and can be tested offline. Rejected as the primary; if a platform later offers a reliable one, it can come in front of this as a bypass.
+- **Nothing, as before.** Rejected by the reason above.
+
+## What follows
+
+- The setting is `Config::echo_cancellation` and `Engine::set_echo_cancellation`; the net service carries `voice_echo { enabled }` ([control protocol](../../spec/control-protocol.md)). An older launcher never sends it and gets the default, on; an older net service that receives it answers it as an unknown command, which a launcher treats as "not supported".
+- With headphones there is no echo and AEC3's transparent mode keeps the player's voice as it was; a test checks that a silent reference changes the voice by less than 1.5 dB.
+- The cost is a few percent of one core while the engine runs.
+- Tests are offline (`crates/voice/tests/echo.rs`): a fixed-seed voice plays into a simulated room (a 40 ms delay and three reflections) and the figure asserted is ERLE, with the canceller alone, with a second voice talking at the same time, and through the whole engine (two engines, Opus in between).
+- Not covered by any test, because it needs hardware: how it sounds on real speakers and microphones, with devices whose buffers drift against each other, and on a laptop with the microphone a few centimetres from the speakers. Those are listening tests on real PCs.

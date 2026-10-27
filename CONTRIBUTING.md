@@ -12,7 +12,7 @@ Issues and pull requests from anyone are welcome here. This repository and the [
 
 ## Build and test
 
-You need Rust 1.88 or newer. These are the commands CI runs on Windows, Linux and macOS. A pull request needs all of them green:
+You need Rust 1.91 or newer. These are the commands CI runs on Windows, Linux and macOS. A pull request needs all of them green:
 
 ```sh
 cargo fmt --all -- --check
