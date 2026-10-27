@@ -47,6 +47,7 @@ use crate::voice::{self, Audio, Hub};
 use crate::webapi;
 
 mod discord;
+mod share;
 
 /// How the service is set up; the cloud comes later, with the launcher's hello.
 #[derive(Clone, Debug)]
@@ -86,6 +87,8 @@ enum Input {
     Voice(u64, voice::Report),
     /// A report of the screen hub of that generation.
     Screen(u64, screen::Output),
+    /// A report of the share play hub of that generation.
+    Play(u64, crate::play::Output),
     Done(Continuation),
     Discord(anyplay_discord::Event),
     Tick,
@@ -201,6 +204,7 @@ pub struct Service {
     party_invitations: HashMap<String, anyplay_api::PartyInvitation>,
     voice: VoiceSide,
     screen: ScreenSide,
+    share: share::ShareSide,
     conversation_answers: Answers,
     /// The pace of typing signals to the cloud (see [`crate::typing`]).
     typing: crate::typing::TypingThrottle,
@@ -329,6 +333,7 @@ impl Service {
             party_invitations: HashMap::new(),
             voice: VoiceSide::default(),
             screen: ScreenSide::default(),
+            share: share::ShareSide::default(),
             conversation_answers: Answers::default(),
             typing: crate::typing::TypingThrottle::default(),
             restrictions: Vec::new(),
@@ -429,6 +434,11 @@ impl Service {
                 Input::Screen(generation, output) => {
                     if generation == self.screen.generation && self.screen.hub.is_some() {
                         self.screen_output(output);
+                    }
+                }
+                Input::Play(generation, output) => {
+                    if self.share.hub_is_there(generation) {
+                        self.share_output(output);
                     }
                 }
                 Input::Discord(event) => self.discord_event(event),
@@ -1301,6 +1311,7 @@ impl Service {
                             .collect()
                     };
                     self.screen_event();
+                    self.share_changed();
                     self.ok(
                         id,
                         control::ScreenWorkerReady {
@@ -1321,6 +1332,15 @@ impl Service {
                 }
                 Err(error) => self.fail(id, Failure::new(ErrorCode::NotFound.as_str(), error)),
             },
+            // Share play
+            Command::ShareStart { account, mode } => self.share_start(id, account, mode),
+            Command::ShareAnswer {
+                id: invitation,
+                accept,
+            } => self.share_answer(id, invitation, accept),
+            Command::ShareMode { mode } => self.share_mode(id, mode),
+            Command::ShareRequest { mode } => self.share_request(id, mode),
+            Command::ShareStop => self.share_stop(id),
             // Voice
             Command::Voice { on } => {
                 self.voice.enabled = on;
@@ -1729,6 +1749,7 @@ impl Service {
             answers.ignore_pending();
         }
         self.invitations.clear();
+        self.share_reset();
         self.forget_social();
         if why != "offline" {
             self.discord_end(false);
@@ -1765,6 +1786,7 @@ impl Service {
                 self.refresh_sessions();
                 self.refresh_social();
                 self.fetch_restrictions();
+                self.share_fetch();
             }
             EventInput::Offline(reason) => {
                 tracing::info!("event connection: {reason}");
@@ -2588,6 +2610,10 @@ impl Service {
                 title_id,
                 by,
             }),
+            event @ (Event::ShareInvitation { .. }
+            | Event::ShareInvitationGone { .. }
+            | Event::Share { .. }
+            | Event::ShareGone { .. }) => self.share_cloud_event(event),
             Event::Feed => self.feed_dirty = true,
             Event::AppearOffline { appear_offline } => self.set_appear_offline(appear_offline),
             _ => {}
@@ -2607,6 +2633,7 @@ impl Service {
             party: Some(launcher_party(party)),
         });
         self.voice_sync();
+        self.share_party_changed();
     }
 
     fn party_cleared(&mut self) {
@@ -2615,6 +2642,7 @@ impl Service {
         }
         self.voice.announced = None;
         self.voice_sync();
+        self.share_party_changed();
     }
 
     /// Holds the invitation a redeemed join code made, as if it had arrived as an event, so that
@@ -2747,6 +2775,7 @@ impl Service {
 
     /// Starts the hub when the player is in a party, follows the members, ends it otherwise.
     fn screen_sync(&mut self) {
+        self.share_sync();
         if !self.screen_wanted() {
             if self.screen.hub.take().is_some() {
                 self.screen.generation += 1;
@@ -3576,6 +3605,7 @@ impl Service {
         });
         self.push_presence();
         self.screen_event();
+        self.share_changed();
         let Some(session) = join else {
             match host {
                 Some(host) => self.host_session(id, env, host, hosted, version, build),
@@ -3799,10 +3829,12 @@ impl Service {
         let Some(game) = self.game.take() else {
             return;
         };
+        self.share_game_ended();
         if let Some(hub) = &self.screen.hub {
             hub.stop_sharing("game_ended");
         }
         self.screen_event();
+        self.share_changed();
         if let Some(cloud) = self.cloud.clone() {
             for session in game.sessions {
                 let cloud = cloud.clone();
@@ -3865,6 +3897,7 @@ impl Service {
                     activated: HashSet::new(),
                 });
                 self.last_bridge_state = None;
+                self.share_changed();
                 self.bridge_state();
                 if let Some(game) = &mut self.game {
                     game.intent_sent = false;
@@ -3880,6 +3913,8 @@ impl Service {
                 if self.bridge.as_ref().map(|b| b.connection) == Some(connection) {
                     tracing::info!("bridge {connection} disconnected");
                     self.bridge = None;
+                    self.share_bridge_lost();
+                    self.share_changed();
                     self.traffic.unbind_all();
                     self.dialogs.retain(|_, d| d.connection != connection);
                     if self.control_closed {
@@ -4081,6 +4116,10 @@ impl Service {
                     max: dialog.max,
                 });
             }
+            // The game's answers and news about a share go to the hub that holds it.
+            Message::ShareOpened { .. }
+            | Message::Override { .. }
+            | Message::ShareStatus(_) => self.share_from_game(frame),
             Message::Hello(_)
             | Message::Welcome(_)
             | Message::Reject(_)
@@ -4098,12 +4137,9 @@ impl Service {
             // `shareplay::ShareHost`; a game that sends one of them to a service that holds no
             // share is answered `unsupported` (a request) or ignored (an event).
             | Message::ShareOpen(_)
-            | Message::ShareOpened { .. }
             | Message::ShareClose
             | Message::ShareMode { .. }
-            | Message::SharePad(_)
-            | Message::Override { .. }
-            | Message::ShareStatus(_) => {
+            | Message::SharePad(_) => {
                 if request != 0 {
                     self.bridge_reply(connection, request, Message::Unsupported);
                 }

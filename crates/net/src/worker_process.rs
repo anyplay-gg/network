@@ -23,7 +23,7 @@ use anyplay_share::link::{
 };
 use tokio::sync::mpsc;
 
-use crate::screen::{GameWindow, WorkerPort, Workers};
+use crate::screen::{GameWindow, PlayLaunch, WorkerPort, Workers};
 
 /// How long a worker program has to ask for its capabilities.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -192,6 +192,55 @@ impl Workers for ProcessWorkers {
         title: &str,
         game: &GameWindow,
     ) -> Result<WorkerPort, String> {
+        let mut args: Vec<String> = vec![
+            "--source".into(),
+            match source {
+                ScreenSource::Game => "game",
+                ScreenSource::TestPattern => "test_pattern",
+            }
+            .into(),
+            "--title".into(),
+            title.into(),
+        ];
+        args.extend(
+            game.window
+                .into_iter()
+                .flat_map(|window| ["--window".to_owned(), window.to_string()]),
+        );
+        args.extend(
+            game.pids
+                .iter()
+                .flat_map(|pid| ["--pid".to_owned(), pid.to_string()]),
+        );
+        self.spawn(role, args)
+    }
+
+    fn launch_play(&self, launch: &PlayLaunch) -> Result<WorkerPort, String> {
+        let mut args: Vec<String> = vec!["--title".into(), launch.title.clone()];
+        match (&launch.ring, launch.role) {
+            (Some(ring), Role::Host) => args.extend([
+                "--source".into(),
+                "ring".into(),
+                "--ring".into(),
+                ring.name.clone(),
+                "--width".into(),
+                ring.width.to_string(),
+                "--height".into(),
+                ring.height.to_string(),
+                "--fps".into(),
+                ring.fps.to_string(),
+            ]),
+            (None, Role::Guest) => args.push("--pad".into()),
+            _ => return Err("a host's worker needs a ring and a guest's has none".into()),
+        }
+        self.spawn(launch.role, args)
+    }
+}
+
+impl ProcessWorkers {
+    /// Starts the worker program for one side with these arguments after the role, and the
+    /// share link it connects back to.
+    fn spawn(&self, role: Role, args: Vec<String>) -> Result<WorkerPort, String> {
         let path = self
             .state
             .lock()
@@ -211,24 +260,8 @@ impl Workers for ProcessWorkers {
                     Role::Host => "host",
                     Role::Guest => "guest",
                 },
-                "--source",
-                match source {
-                    ScreenSource::Game => "game",
-                    ScreenSource::TestPattern => "test_pattern",
-                },
-                "--title",
-                title,
             ])
-            .args(
-                game.window
-                    .into_iter()
-                    .flat_map(|window| ["--window".to_owned(), window.to_string()]),
-            )
-            .args(
-                game.pids
-                    .iter()
-                    .flat_map(|pid| ["--pid".to_owned(), pid.to_string()]),
-            )
+            .args(&args)
             .args(self.headless.then_some("--headless"))
             .env("ANYPLAY_SHARE_ENDPOINT", address.to_string())
             .env("ANYPLAY_SHARE_TOKEN", &token)

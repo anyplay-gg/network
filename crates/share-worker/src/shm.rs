@@ -307,7 +307,14 @@ mod tests {
     use super::*;
 
     fn unique() -> String {
+        // Tests run at the same time and a clock may tick coarsely: a counter keeps names apart.
+        static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
         let mut random = [0u8; 16];
+        random[12..].copy_from_slice(
+            &NEXT
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                .to_le_bytes(),
+        );
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()

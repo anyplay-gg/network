@@ -81,14 +81,14 @@ pub mod code {
 pub const MAX_QUEUED_MESSAGES: usize = 256;
 
 /// The hub's end of the queue of control messages to one peer: never blocks, bounded.
-struct PeerTx {
+pub(crate) struct PeerTx {
     tx: mpsc::Sender<Message>,
     /// Ends the connection; called once when the queue overflows.
     on_overflow: Box<dyn Fn() + Send + Sync>,
 }
 
 impl PeerTx {
-    fn new(
+    pub(crate) fn new(
         capacity: usize,
         on_overflow: impl Fn() + Send + Sync + 'static,
     ) -> (PeerTx, mpsc::Receiver<Message>) {
@@ -104,7 +104,7 @@ impl PeerTx {
 
     /// `true` when the message is queued. On overflow the connection is ended and the message
     /// is not queued; a closed queue (the connection is already gone) is not an overflow.
-    fn send(&self, message: Message) -> bool {
+    pub(crate) fn send(&self, message: Message) -> bool {
         match self.tx.try_send(message) {
             Ok(()) => true,
             Err(mpsc::error::TrySendError::Full(_)) => {
@@ -133,6 +133,26 @@ pub struct WorkerPort {
     pub from: mpsc::Receiver<FromWorker>,
 }
 
+/// How a worker is started for share play (`spec/share-play.md`): the host's reads the frame
+/// ring the game fills, the guest's reads the guest's pad as well as showing the picture.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PlayLaunch {
+    pub role: Role,
+    /// The game's title, for the viewer's window.
+    pub title: String,
+    /// The ring the host's worker makes (`--source ring`); none for the guest.
+    pub ring: Option<RingLaunch>,
+}
+
+/// The frame ring a host's worker makes: its name and the picture it holds.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RingLaunch {
+    pub name: String,
+    pub width: u32,
+    pub height: u32,
+    pub fps: u32,
+}
+
 /// Where workers come from: the child process of the real service, or memory in tests.
 pub trait Workers: Send + Sync + 'static {
     /// What the worker can do; none while there is none.
@@ -145,6 +165,11 @@ pub trait Workers: Send + Sync + 'static {
         title: &str,
         game: &GameWindow,
     ) -> Result<WorkerPort, String>;
+    /// Starts a worker for share play. The first message it gets is [`ToWorker::Start`]; the
+    /// host's worker says `RingReady` first. A set of workers that has no share play says so.
+    fn launch_play(&self, _: &PlayLaunch) -> Result<WorkerPort, String> {
+        Err("this share worker cannot do share play".into())
+    }
     /// Tells it where the verified worker program is and answers what that can do. Only the
     /// real service has a program to point at.
     fn set_path(&self, _path: &str) -> Result<Capabilities, String> {
