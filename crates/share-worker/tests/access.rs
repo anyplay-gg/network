@@ -268,7 +268,7 @@ mod real_window {
         );
         let first = &frame.bgra[..4];
         assert!(
-            frame.bgra.chunks_exact(4).any(|p| p != first),
+            frame.bgra.as_chunks::<4>().0.iter().any(|p| p != first),
             "the picture is one flat colour"
         );
         // A window that does not change gives its last picture again.
