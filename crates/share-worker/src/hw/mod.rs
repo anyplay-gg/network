@@ -257,7 +257,8 @@ mod tests {
     fn hardware_gets_1080p60_and_software_is_not_asked() {
         let log = Rc::default();
         let mut s = start(1920, 1080, 60);
-        let (_, name) = open_h264(&mut s, &two(&log), |_| panic!("software must not open")).unwrap();
+        let (_, name) =
+            open_h264(&mut s, &two(&log), |_| panic!("software must not open")).unwrap();
         assert_eq!(name, "nvenc");
         assert_eq!((s.width, s.height, s.fps), (1920, 1080, 60));
     }
