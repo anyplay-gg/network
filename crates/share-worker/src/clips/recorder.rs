@@ -40,8 +40,49 @@ impl Setup {
     }
 }
 
-/// Records until told to quit, the source ends or the launcher hangs up.
+/// Records until told to quit, the source ends or the launcher hangs up. A clip may be saved
+/// anywhere.
 pub fn run(
+    setup: Setup,
+    source: Box<dyn FrameSource>,
+    encoder: Box<dyn VideoEncoder>,
+    commands: Receiver<Command>,
+    events: Sender<Event>,
+) {
+    run_in(None, setup, source, encoder, commands, events)
+}
+
+/// Whether a clip may be written to `path`: an absolute `.mp4` path with no `..` below
+/// `folder`.
+pub fn is_clip_path(folder: &Path, path: &Path) -> bool {
+    use std::path::Component;
+    let same = |a: &Component, b: &Component| {
+        if cfg!(windows) {
+            a.as_os_str().eq_ignore_ascii_case(b.as_os_str())
+        } else {
+            a == b
+        }
+    };
+    let mut inside = path.components();
+    for want in folder.components() {
+        match inside.next() {
+            Some(got) if same(&got, &want) => {}
+            _ => return false,
+        }
+    }
+    let rest: Vec<Component> = inside.collect();
+    path.is_absolute()
+        && !rest.is_empty()
+        && rest.iter().all(|c| matches!(c, Component::Normal(_)))
+        && path
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("mp4"))
+}
+
+/// Like [`run`], but with `folder` set a save outside it (or not to an `.mp4` file) is
+/// refused, so a wrong command cannot make the worker write elsewhere.
+pub fn run_in(
+    folder: Option<PathBuf>,
     setup: Setup,
     mut source: Box<dyn FrameSource>,
     mut encoder: Box<dyn VideoEncoder>,
@@ -66,7 +107,18 @@ pub fn run(
         loop {
             let wait = next.saturating_duration_since(Instant::now());
             match commands.recv_timeout(wait) {
-                Ok(Command::Save { path }) => save(&ring, &setup, path, &events),
+                Ok(Command::Save { path }) => {
+                    if folder
+                        .as_deref()
+                        .is_some_and(|f| !is_clip_path(f, Path::new(&path)))
+                    {
+                        let _ = events.send(Event::SaveFailed {
+                            reason: "outside_clips_folder".into(),
+                        });
+                    } else {
+                        save(&ring, &setup, path, &events)
+                    }
+                }
                 Ok(Command::Quit) | Err(RecvTimeoutError::Disconnected) => {
                     let _ = events.send(Event::Ended {
                         reason: "quit".into(),
@@ -315,6 +367,65 @@ mod tests {
             wait_for(&events, |e| matches!(e, Event::Ended { .. })),
             Event::Ended { reason } if reason == "quit"
         ));
+        thread.join().unwrap();
+    }
+
+    #[test]
+    fn only_mp4_files_inside_the_clips_folder_are_clip_paths() {
+        let folder = tempdir("confine");
+        assert!(is_clip_path(&folder, &folder.join("a.mp4")));
+        assert!(is_clip_path(&folder, &folder.join("game").join("a.MP4")));
+        assert!(!is_clip_path(&folder, &folder.join("a.exe")));
+        assert!(!is_clip_path(&folder, &folder.join("..").join("a.mp4")));
+        assert!(!is_clip_path(
+            &folder,
+            &folder.join("x").join("..").join("..").join("a.mp4")
+        ));
+        assert!(!is_clip_path(
+            &folder,
+            &folder.with_file_name("elsewhere").join("a.mp4")
+        ));
+        assert!(!is_clip_path(&folder, Path::new("a.mp4")));
+        assert!(!is_clip_path(&folder, &folder));
+    }
+
+    #[test]
+    fn a_save_outside_the_clips_folder_is_refused_and_writes_nothing() {
+        let folder = tempdir("confined");
+        let outside = tempdir("outside");
+        let (command_tx, command_rx) = mpsc::channel();
+        let (event_tx, events) = mpsc::channel();
+        let keys = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let (key_tx, _keys) = mpsc::channel();
+        let encoder = FakeEncoder {
+            count: 0,
+            keys: keys.clone(),
+            keyframes: key_tx,
+        };
+        let allowed = folder.clone();
+        let thread = std::thread::spawn(move || {
+            run_in(
+                Some(allowed),
+                setup(),
+                Box::new(Pattern {
+                    frames: TestPattern::default(),
+                    keys,
+                }),
+                Box::new(encoder),
+                command_rx,
+                event_tx,
+            )
+        });
+        wait_for(&events, |e| matches!(e, Event::Ready { .. }));
+        command_tx
+            .send(Command::Save {
+                path: outside.join("clip.mp4").to_string_lossy().into_owned(),
+            })
+            .unwrap();
+        let failed = wait_for(&events, |e| matches!(e, Event::SaveFailed { .. }));
+        assert!(matches!(failed, Event::SaveFailed { reason } if reason == "outside_clips_folder"));
+        assert!(!outside.join("clip.mp4").exists());
+        command_tx.send(Command::Quit).unwrap();
         thread.join().unwrap();
     }
 

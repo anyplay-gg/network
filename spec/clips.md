@@ -7,10 +7,11 @@ Clips touch no network, no account and no cloud. The share worker (`anyplay-shar
 ## Starting
 
 ```text
-anyplay-share --clips SECONDS [--title TITLE] [--window HWND] [--pid PID]...
+anyplay-share --clips SECONDS [--clips-dir DIR] [--title TITLE] [--window HWND] [--pid PID]...
 ```
 
 - `SECONDS` is how long a clip is at least: the launcher offers 15, 30, 60 and 120.
+- `--clips-dir` is the folder clips belong in. With it, a `save` to any other place, or to a path that is not an absolute `.mp4` path inside it, is refused with `save_failed` `outside_clips_folder`. The launcher passes it; without it a save goes where the command says.
 - `--window`, `--pid` and `--title` name the game's window by the rules of [share screen's capture](screen-share.md#capture).
 - The launcher starts one worker for a running game when Clips is on, ends it (closes its standard input) when the game ends or Clips is switched off, and starts none when Clips is off. A worker that exits is not restarted for the same game.
 

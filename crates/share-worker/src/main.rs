@@ -7,7 +7,7 @@
 //! anyplay-share --role host|guest [--link 127.0.0.1:PORT] [--token TOKEN]
 //!               [--source game|test_pattern|ring] [--ring NAME] [--title TITLE]
 //!               [--window HWND] [--pid PID]... [--headless] [--pad]
-//! anyplay-share --clips SECONDS [--title TITLE] [--window HWND] [--pid PID]...
+//! anyplay-share --clips SECONDS [--clips-dir DIR] [--title TITLE] [--window HWND] [--pid PID]...
 //! anyplay-share --screen-access | --request-screen-access | --open-screen-settings
 //! ```
 //!
@@ -15,6 +15,7 @@
 //! `--title` is the game's title: the viewer names its window after it. The streamer captures
 //! the window the launcher named (`--window`), else the largest window of the game's processes
 //! (`--pid`, repeated), and only without any process a window whose title contains `--title`.
+//! `--clips-dir` confines the saves to that folder (the launcher's clips folder).
 //! `--clips` keeps the last SECONDS of the game's window and saves them on command (no link,
 //! no network; JSON lines on standard input and output, see spec/clips.md).
 //! `--broadcast` publishes the game's window live to an RTMP server (no link; JSON lines on
@@ -29,6 +30,7 @@
 //! `--width`, `--height` and `--fps`), says so on the link and streams what the game's engine
 //! writes into it. `--pad` lets the viewer's window read the guest's pad from the keyboard.
 
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 use anyplay_share::control::Role;
@@ -52,6 +54,7 @@ fn main() -> ExitCode {
     let mut ring: Option<String> = None;
     let mut pids: Vec<u32> = Vec::new();
     let mut clips: Option<u32> = None;
+    let mut clips_dir: Option<PathBuf> = None;
     let mut broadcast = false;
     let mut shape = (1280u32, 720u32, 30u32, 4500u32);
     while let Some(arg) = args.next() {
@@ -88,6 +91,7 @@ fn main() -> ExitCode {
                 };
             }
             "--clips" => clips = args.next().and_then(|v| v.parse().ok()),
+            "--clips-dir" => clips_dir = args.next().map(PathBuf::from),
             "--broadcast" => broadcast = true,
             "--width" => shape.0 = args.next().and_then(|v| v.parse().ok()).unwrap_or(shape.0),
             "--height" => shape.1 = args.next().and_then(|v| v.parse().ok()).unwrap_or(shape.1),
@@ -106,7 +110,7 @@ fn main() -> ExitCode {
         }
     }
     if let Some(seconds) = clips {
-        return run_clips(seconds, &title, window, pids);
+        return run_clips(seconds, clips_dir, &title, window, pids);
     }
     if broadcast {
         return run_broadcast(shape, &title, window, pids);
@@ -249,7 +253,13 @@ fn sink(_title: &str, _headless: bool, _sound: bool, _pad: bool) -> Box<dyn Fram
 }
 
 /// Clips mode: records the game's window into a ring and answers the launcher's commands.
-fn run_clips(seconds: u32, title: &str, window: Option<i64>, pids: Vec<u32>) -> ExitCode {
+fn run_clips(
+    seconds: u32,
+    folder: Option<PathBuf>,
+    title: &str,
+    window: Option<i64>,
+    pids: Vec<u32>,
+) -> ExitCode {
     use anyplay_share_worker::clips::{Command, Event, recorder};
     use std::io::{BufRead, Write};
     use std::sync::mpsc;
@@ -304,7 +314,7 @@ fn run_clips(seconds: u32, title: &str, window: Option<i64>, pids: Vec<u32>) -> 
             }
         }
     });
-    recorder::run(setup, source, encoder, command_rx, event_tx);
+    recorder::run_in(folder, setup, source, encoder, command_rx, event_tx);
     let _ = printer.join();
     ExitCode::SUCCESS
 }

@@ -382,23 +382,59 @@ fn probe(path: &Path) -> Result<Capabilities, String> {
         .map_err(|_| "that is not a share worker of this version".to_owned())
 }
 
-/// Accepts the one connection of the worker that was started and checks its hello.
+/// How long one connection may take to say hello before the next one is tried.
+const HELLO_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Accepts the connection of the worker that was started and checks its hello. Another local
+/// process may connect first; a connection that does not prove itself with the token is dropped
+/// and the listener keeps waiting for the expected worker until the deadline.
 fn accept(listener: &TcpListener, token: &str, role: Role) -> Result<TcpStream, String> {
+    accept_within(listener, token, role, CONNECT_TIMEOUT, HELLO_TIMEOUT)
+}
+
+fn accept_within(
+    listener: &TcpListener,
+    token: &str,
+    role: Role,
+    within: Duration,
+    hello_within: Duration,
+) -> Result<TcpStream, String> {
     listener.set_nonblocking(true).map_err(|e| e.to_string())?;
-    let deadline = Instant::now() + CONNECT_TIMEOUT;
-    let mut stream = loop {
+    let deadline = Instant::now() + within;
+    loop {
         match listener.accept() {
-            Ok((stream, _)) => break stream,
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock && Instant::now() < deadline => {
+            Ok((stream, _)) => {
+                let left = deadline.saturating_duration_since(Instant::now());
+                match handshake(stream, token, role, hello_within.min(left)) {
+                    Ok(stream) => return Ok(stream),
+                    Err(error) => tracing::debug!("share link: a connection was refused: {error}"),
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                if Instant::now() >= deadline {
+                    return Err("the share worker never connected".into());
+                }
                 thread::sleep(Duration::from_millis(10));
             }
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
             Err(_) => return Err("the share worker never connected".into()),
         }
-    };
+        if Instant::now() >= deadline {
+            return Err("the share worker never connected".into());
+        }
+    }
+}
+
+fn handshake(
+    mut stream: TcpStream,
+    token: &str,
+    role: Role,
+    hello_within: Duration,
+) -> Result<TcpStream, String> {
     stream.set_nonblocking(false).map_err(|e| e.to_string())?;
     stream.set_nodelay(true).map_err(|e| e.to_string())?;
     stream
-        .set_read_timeout(Some(CONNECT_TIMEOUT))
+        .set_read_timeout(Some(hello_within.max(Duration::from_millis(1))))
         .map_err(|e| e.to_string())?;
     let hello = Frame::read_from(&mut stream)
         .ok()
@@ -424,6 +460,62 @@ fn accept(listener: &TcpListener, token: &str, role: Role) -> Result<TcpStream, 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn hello(token: &str) -> Frame {
+        Frame::json(
+            KIND_HELLO,
+            &Hello {
+                version: LINK_VERSION,
+                token: token.to_owned(),
+                role: Role::Guest,
+            },
+        )
+    }
+
+    #[test]
+    fn a_local_process_cannot_take_the_place_of_the_worker() {
+        let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let address = listener.local_addr().unwrap();
+        let waiting = thread::spawn(move || {
+            accept_within(
+                &listener,
+                "right",
+                Role::Guest,
+                Duration::from_secs(10),
+                Duration::from_millis(200),
+            )
+            .map(|_| ())
+        });
+        // One that stays silent, one that connects and leaves, one with a wrong token.
+        let silent = TcpStream::connect(address).unwrap();
+        drop(TcpStream::connect(address).unwrap());
+        let mut wrong = TcpStream::connect(address).unwrap();
+        hello("wrong").write_to(&mut wrong).unwrap();
+        // Then the worker itself.
+        let mut worker = TcpStream::connect(address).unwrap();
+        hello("right").write_to(&mut worker).unwrap();
+        let answer = Frame::read_from(&mut worker).unwrap().unwrap();
+        assert_eq!(answer.kind, KIND_WELCOME);
+        assert_eq!(waiting.join().unwrap(), Ok(()));
+        drop(silent);
+    }
+
+    #[test]
+    fn no_worker_at_all_ends_at_the_deadline() {
+        let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let address = listener.local_addr().unwrap();
+        let _rogue = TcpStream::connect(address).unwrap();
+        let started = Instant::now();
+        let result = accept_within(
+            &listener,
+            "right",
+            Role::Guest,
+            Duration::from_millis(400),
+            Duration::from_millis(100),
+        );
+        assert!(result.is_err());
+        assert!(started.elapsed() < Duration::from_secs(5));
+    }
 
     #[test]
     fn a_worker_that_stops_reading_cannot_make_the_datagram_queue_grow() {
