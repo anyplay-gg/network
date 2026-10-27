@@ -712,6 +712,10 @@ pub struct Info {
     /// this cloud serves none. The browser sign-in starts at `<web>/web/authorize`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub web: Option<String>,
+    /// Whether this cloud offers share play, and the rate it allows on a relayed path. Absent
+    /// from a cloud that predates share play; treat that as off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub share: Option<ShareInfo>,
 }
 
 // Trophies and privacy
@@ -1544,6 +1548,24 @@ pub enum Event {
         title_id: String,
         by: Account,
     },
+    // Share play
+    /// A party member invited this account to share play.
+    ShareInvitation {
+        invitation: ShareInvitation,
+    },
+    /// A share invitation expired, was declined or its share ended.
+    ShareInvitationGone {
+        id: String,
+    },
+    /// The share this account is in changed. A client drops a copy whose revision is older.
+    Share {
+        share: Box<Share>,
+    },
+    /// This account is no longer in the share.
+    ShareGone {
+        id: String,
+        reason: ShareGoneReason,
+    },
     /// An event this version does not know.
     #[serde(other)]
     Unknown,
@@ -1849,6 +1871,140 @@ pub struct UpdateParty {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MoveParty {
     pub session: String,
+}
+
+// Share play
+
+/// What a cloud says about share play in `GET /v1/info`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShareInfo {
+    /// False by default on a public cloud until the legal review is done; every share request
+    /// is then answered `forbidden`.
+    pub enabled: bool,
+    /// The most a relayed share may stream, in kbit/s.
+    pub relay_kbps: u32,
+}
+
+/// What the guest of a share may do with the host's pad.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ShareMode {
+    Watch,
+    HandOver,
+    Together,
+    /// A mode this version does not know.
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ShareState {
+    /// The guest has been asked and has not accepted.
+    Invited,
+    Active,
+    #[serde(other)]
+    Unknown,
+}
+
+/// The path a share's connection takes, as its host's net service reports it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SharePath {
+    Direct,
+    Relay,
+    #[serde(other)]
+    Unknown,
+}
+
+/// Why an account is no longer in a share.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ShareGoneReason {
+    Ended,
+    Declined,
+    Left,
+    GameEnded,
+    Blocked,
+    Banned,
+    Timeout,
+    Quota,
+    #[serde(other)]
+    Unknown,
+}
+
+/// A host streaming their game to one member of their party. The endpoints are given only to
+/// the two parties; the invited guest sees `host_endpoint` only after accepting.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Share {
+    pub id: String,
+    pub host: Account,
+    pub guest: Account,
+    pub title_id: String,
+    pub title: String,
+    pub mode: ShareMode,
+    pub state: ShareState,
+    /// The tunnel key of the host's net service (an iroh endpoint ID in lowercase hex).
+    #[serde(default)]
+    pub host_endpoint: String,
+    #[serde(default)]
+    pub host_relay: Option<String>,
+    /// Empty until the guest accepted.
+    #[serde(default)]
+    pub guest_endpoint: String,
+    #[serde(default)]
+    pub guest_relay: Option<String>,
+    #[serde(default)]
+    pub path: Option<SharePath>,
+    pub created: u64,
+    /// Rises with every change. A client drops a copy older than the one it has.
+    #[serde(default)]
+    pub revision: u64,
+}
+
+/// What the invited guest sees before accepting. It names the title and the mode.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShareInvitation {
+    pub id: String,
+    pub from: Account,
+    pub share: String,
+    pub title_id: String,
+    pub title: String,
+    pub mode: ShareMode,
+    pub expires: u64,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShareInvitations {
+    pub invitations: Vec<ShareInvitation>,
+}
+
+/// `POST /v1/shares`: the host invites a party member.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CreateShare {
+    pub to: AccountId,
+    pub mode: ShareMode,
+    /// The host's tunnel key and relay.
+    pub endpoint: String,
+    #[serde(default)]
+    pub relay: Option<String>,
+}
+
+/// `POST /v1/share/accept`: the invited guest accepts with their tunnel key and relay.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AcceptShare {
+    pub endpoint: String,
+    #[serde(default)]
+    pub relay: Option<String>,
+}
+
+/// `PATCH /v1/share`: the host changes what the share shows.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UpdateShare {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<ShareMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<SharePath>,
 }
 
 // Conversations and messages
@@ -2576,6 +2732,75 @@ mod tests {
         assert_eq!(
             serde_json::from_str::<Event>(r#"{"type":"party_gone","id":"p"}"#).unwrap(),
             Event::PartyGone { id: "p".into() }
+        );
+    }
+
+    #[test]
+    fn share_play_travels_as_the_spec_names_it() {
+        let share = Share {
+            id: "s1".into(),
+            host: Account {
+                id: AccountId(2),
+                handle: "lumen".into(),
+            },
+            guest: Account {
+                id: AccountId(3),
+                handle: "ann".into(),
+            },
+            title_id: "T".into(),
+            title: "A game".into(),
+            mode: ShareMode::HandOver,
+            state: ShareState::Invited,
+            host_endpoint: "ab".repeat(32),
+            host_relay: None,
+            guest_endpoint: String::new(),
+            guest_relay: None,
+            path: None,
+            created: 5,
+            revision: 2,
+        };
+        let json = serde_json::to_string(&Event::Share {
+            share: Box::new(share.clone()),
+        })
+        .unwrap();
+        assert!(
+            json.starts_with(r#"{"type":"share","share":{"id":"s1""#),
+            "{json}"
+        );
+        assert!(json.contains(r#""mode":"hand_over""#) && json.contains(r#""state":"invited""#));
+        assert_eq!(
+            serde_json::from_str::<Event>(&json).unwrap(),
+            Event::Share {
+                share: Box::new(share)
+            }
+        );
+        assert_eq!(
+            serde_json::from_str::<Event>(
+                r#"{"type":"share_gone","id":"s1","reason":"game_ended"}"#
+            )
+            .unwrap(),
+            Event::ShareGone {
+                id: "s1".into(),
+                reason: ShareGoneReason::GameEnded
+            }
+        );
+        // A mode or reason of a newer cloud is read, not refused.
+        assert_eq!(
+            serde_json::from_str::<ShareMode>(r#""spectate""#).unwrap(),
+            ShareMode::Unknown
+        );
+        assert_eq!(
+            serde_json::from_str::<Event>(r#"{"type":"share_invitation_gone","id":"i"}"#).unwrap(),
+            Event::ShareInvitationGone { id: "i".into() }
+        );
+        let body: CreateShare = serde_json::from_str(&format!(
+            r#"{{"to":4,"mode":"watch","endpoint":"{}"}}"#,
+            "ab".repeat(32)
+        ))
+        .unwrap();
+        assert_eq!(
+            (body.to, body.mode, body.relay),
+            (AccountId(4), ShareMode::Watch, None)
         );
     }
 
