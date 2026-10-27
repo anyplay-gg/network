@@ -59,6 +59,9 @@ pub const MAX_PARTY_MEMBERS: u16 = 8;
 pub const MAX_GROUP_MEMBERS: u16 = 32;
 /// The longest message, in characters.
 pub const MAX_MESSAGE_CHARS: usize = 2000;
+/// The largest unread count the cloud reports for one conversation; more reads as this number,
+/// and a client may show it as `100+`.
+pub const MAX_UNREAD: u64 = 100;
 /// The longest name of a group conversation, in characters.
 pub const MAX_CONVERSATION_NAME: usize = 64;
 /// The most messages one fetch answers with.
@@ -2115,7 +2118,7 @@ pub struct Conversation {
     /// The party, for a party's chat.
     pub party: Option<String>,
     /// Messages of others above `read` that the caller can see: what an unread badge counts.
-    /// The cloud counts, so every device shows the same number.
+    /// The cloud counts, so every device shows the same number, up to [`MAX_UNREAD`].
     #[serde(default)]
     pub unread: u64,
     /// The caller muted the conversation: no toast, no badge, no notification.
@@ -2236,15 +2239,25 @@ pub struct MarkRead {
     pub seq: u64,
 }
 
+/// True for the characters that force a direction on the text around them: the embeddings and
+/// overrides U+202A to U+202E and the isolates U+2066 to U+2069. A message that carries one can
+/// make the text after it read in another order. The plain marks (U+200E, U+200F and U+061C) are
+/// not in this set: they only settle which way punctuation faces, and Arabic and Hebrew writers
+/// need them.
+pub fn is_bidi_control(c: char) -> bool {
+    matches!(c, '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
+}
+
 /// True for message text the cloud takes: 1 to [`MAX_MESSAGE_CHARS`] characters, not only white
-/// space, and no control characters other than line breaks and tabs.
+/// space, no control characters other than line breaks and tabs, and no direction overrides
+/// (see [`is_bidi_control`]).
 pub fn is_message_text(text: &str) -> bool {
     let chars = text.chars().count();
     (1..=MAX_MESSAGE_CHARS).contains(&chars)
         && !text.trim().is_empty()
         && !text
             .chars()
-            .any(|c| c.is_control() && !matches!(c, '\n' | '\t'))
+            .any(|c| (c.is_control() && !matches!(c, '\n' | '\t')) || is_bidi_control(c))
 }
 
 // Join codes
@@ -2707,6 +2720,19 @@ mod tests {
         assert!(!is_message_text(""));
         assert!(!is_message_text(" \n\t "));
         assert!(!is_message_text("bell\u{7}"));
+    }
+
+    #[test]
+    fn message_text_refuses_direction_overrides() {
+        for c in ('\u{202A}'..='\u{202E}').chain('\u{2066}'..='\u{2069}') {
+            assert!(!is_message_text(&format!("a{c}b")), "U+{:04X}", c as u32);
+            assert!(!is_message_text(&format!("{c}")));
+        }
+        // The plain marks stay: right-to-left writers need them.
+        assert!(is_message_text("shalom\u{200F}!"));
+        assert!(is_message_text("a\u{200E}b\u{61C}c"));
+        // The neighbours of the ranges are ordinary characters.
+        assert!(is_message_text("x\u{2029}\u{202F}\u{2065}\u{206A}"));
     }
 
     #[test]
