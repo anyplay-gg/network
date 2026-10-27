@@ -101,17 +101,6 @@ mod encoder {
             fps: 30,
             kbps: 2000,
         };
-        let encoder = match VtEncoder::open_best(setup) {
-            Ok(encoder) => encoder,
-            Err(why) => {
-                assert!(
-                    !std::env::var("ANYPLAY_REQUIRE_VT").is_ok_and(|v| v == "1"),
-                    "no encoder: {why}"
-                );
-                eprintln!("skipped: {why}");
-                return;
-            }
-        };
         let mut recording = recorder::Setup::new(1);
         recording.width = setup.width;
         recording.height = setup.height;
@@ -119,7 +108,19 @@ mod encoder {
         recording.kbps = setup.kbps;
         let (command_tx, command_rx) = mpsc::channel();
         let (event_tx, event_rx) = mpsc::channel();
+        let (opened_tx, opened_rx) = mpsc::channel::<Result<(), String>>();
+        // The encoder lives on the recorder's thread, as in the worker.
         let thread = std::thread::spawn(move || {
+            let encoder = match VtEncoder::open_best(setup) {
+                Ok(encoder) => {
+                    let _ = opened_tx.send(Ok(()));
+                    encoder
+                }
+                Err(why) => {
+                    let _ = opened_tx.send(Err(why));
+                    return;
+                }
+            };
             recorder::run(
                 recording,
                 Box::new(PatternSource::default()),
@@ -128,6 +129,14 @@ mod encoder {
                 event_tx,
             )
         });
+        if let Err(why) = opened_rx.recv().unwrap() {
+            assert!(
+                !std::env::var("ANYPLAY_REQUIRE_VT").is_ok_and(|v| v == "1"),
+                "no encoder: {why}"
+            );
+            eprintln!("skipped: {why}");
+            return;
+        }
         wait_for(&event_rx, |e| matches!(e, Event::Ready { .. }));
         // Two seconds of pictures: at least one whole group of pictures is kept.
         std::thread::sleep(std::time::Duration::from_millis(2500));
