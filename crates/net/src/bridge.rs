@@ -534,7 +534,7 @@ mod tests {
             proof: proof(&TOKEN, Role::Bridge, &bridge_nonce, &challenge.nonce),
         }))
         .await;
-        assert!(reject_reason(wire.read().await).contains("does not match"));
+        assert!(reject_reason(wire.read().await).contains("changed"));
         assert_never_introduced(&mut rx).await;
     }
 
