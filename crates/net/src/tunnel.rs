@@ -30,6 +30,33 @@ const FIRST_PAUSE: Duration = Duration::from_millis(500);
 /// The longest wait between two dials.
 const LONGEST_PAUSE: Duration = Duration::from_secs(30);
 
+/// How many incoming connections may be in their handshake at once; more are refused.
+const MAX_PENDING_HANDSHAKES: usize = 64;
+/// How long an incoming handshake may take.
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Counts the incoming handshakes in progress, so that a flood of half-open connections cannot
+/// pile up tasks and memory.
+#[derive(Clone)]
+struct Handshakes(Arc<tokio::sync::Semaphore>);
+
+impl Handshakes {
+    fn new(limit: usize) -> Self {
+        Handshakes(Arc::new(tokio::sync::Semaphore::new(limit)))
+    }
+
+    /// A place for one more handshake, or `None` when all are taken.
+    fn begin(&self) -> Option<tokio::sync::OwnedSemaphorePermit> {
+        self.0.clone().try_acquire_owned().ok()
+    }
+}
+
+/// Whether a connection may be stored in `slot`. An incoming connection takes only a free slot;
+/// the dialer's own result replaces what is there.
+fn slot_takes<T>(slot: &Option<T>, only_if_free: bool) -> bool {
+    !only_if_free || slot.is_none()
+}
+
 /// How many oversized datagrams one connection reads from streams at once.
 const MAX_OVERSIZE_READS: usize = 32;
 
@@ -469,7 +496,7 @@ impl Tunnels {
                 .await
             {
                 Ok(Ok(connection)) => {
-                    if !self.adopt(id, connection.clone()) {
+                    if !self.adopt(id, connection.clone(), false) {
                         return;
                     }
                     let since = Instant::now();
@@ -494,15 +521,22 @@ impl Tunnels {
 
     /// Accepts tunnels from members, and refuses everyone else before the handshake ends.
     async fn accept(self) {
+        let handshakes = Handshakes::new(MAX_PENDING_HANDSHAKES);
         while let Some(incoming) = self.endpoint.accept().await {
+            let Some(permit) = handshakes.begin() else {
+                incoming.refuse();
+                continue;
+            };
             let tunnels = self.clone();
             tokio::spawn(async move {
                 let Ok(accepting) = incoming.accept() else {
                     return;
                 };
-                let Ok(connection) = accepting.await else {
+                let Ok(Ok(connection)) = tokio::time::timeout(HANDSHAKE_TIMEOUT, accepting).await
+                else {
                     return;
                 };
+                drop(permit);
                 if connection.alpn() == voice::ALPN {
                     let sink = tunnels
                         .voice
@@ -551,7 +585,7 @@ impl Tunnels {
                     connection.close(1u8.into(), b"not in a session together");
                     return;
                 }
-                if tunnels.adopt(id, connection.clone()) {
+                if tunnels.adopt(id, connection.clone(), true) {
                     tunnels.watch(id, connection).await;
                 }
             });
@@ -559,12 +593,19 @@ impl Tunnels {
     }
 
     /// Records a fresh connection as the tunnel to `id`; false when `id` is no longer wanted.
-    fn adopt(&self, id: EndpointId, connection: Connection) -> bool {
+    /// An incoming connection (`only_if_free`) is taken only while there is none: the check
+    /// is made again here under the lock, because another connection from the same peer may
+    /// have been adopted since the caller looked.
+    fn adopt(&self, id: EndpointId, connection: Connection, only_if_free: bool) -> bool {
         let mut state = self.lock();
         let Some(tunnel) = state.tunnels.get_mut(&id) else {
             connection.close(1u8.into(), b"not in a session together");
             return false;
         };
+        if !slot_takes(&tunnel.connection, only_if_free) {
+            connection.close(1u8.into(), b"already connected");
+            return false;
+        }
         self.traffic
             .route(tunnel.peer.address, Some(connection.clone()));
         tunnel.connection = Some(connection);
@@ -723,6 +764,24 @@ mod tests {
             varies,
             public,
         }
+    }
+
+    #[test]
+    fn only_so_many_handshakes_run_at_once() {
+        let handshakes = Handshakes::new(MAX_PENDING_HANDSHAKES);
+        let held: Vec<_> = (0..MAX_PENDING_HANDSHAKES)
+            .map(|_| handshakes.begin().expect("room"))
+            .collect();
+        assert!(handshakes.begin().is_none(), "the next one is refused");
+        drop(held);
+        assert!(handshakes.begin().is_some(), "room again once they end");
+    }
+
+    #[test]
+    fn an_incoming_connection_never_replaces_one_that_is_there() {
+        assert!(slot_takes(&None::<u8>, true));
+        assert!(!slot_takes(&Some(1u8), true));
+        assert!(slot_takes(&Some(1u8), false), "a dial replaces its own");
     }
 
     #[test]
