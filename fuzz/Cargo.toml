@@ -35,6 +35,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "bridge_handshake"
+path = "fuzz_targets/bridge_handshake.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "traffic_header"
 path = "fuzz_targets/traffic_header.rs"
 test = false

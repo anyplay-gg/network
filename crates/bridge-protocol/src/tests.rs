@@ -41,7 +41,7 @@ fn header_layout_matches_the_spec() {
 fn a_frame_survives_the_round_trip() {
     let frame = Frame::event(&Message::Hello(Hello {
         version: VERSION,
-        token: b"secret".to_vec(),
+        nonce: vec![7; NONCE_LEN],
     }))
     .unwrap();
     let mut decoder = Decoder::new();
@@ -170,11 +170,19 @@ fn samples() -> Vec<Message> {
     ];
     vec![
         Message::Hello(Hello {
-            version: 0,
-            token: vec![1, 2, 3],
+            version: 1,
+            nonce: vec![1; NONCE_LEN],
+        }),
+        Message::Challenge(Challenge {
+            version: 1,
+            nonce: [2; NONCE_LEN],
+            proof: [3; PROOF_LEN],
+        }),
+        Message::Auth(Auth {
+            proof: [4; PROOF_LEN],
         }),
         Message::Welcome(Welcome {
-            version: 0,
+            version: 1,
             udp_port: 50_001,
             tcp_port: 50_002,
             stream_key: [7; STREAM_KEY_LEN],
@@ -312,7 +320,194 @@ fn samples() -> Vec<Message> {
             dropped: 12,
             audio_underruns: 1,
         }),
+        Message::ScoreRecord(ScoreRecord {
+            user_id: -1,
+            board: "weekly-1".into(),
+            score: -9_007_199_254_740_991,
+        }),
+        Message::ScoreRecorded(ScoreRecorded {
+            result: ScoreResult::Stored,
+            score: 9_007_199_254_740_991,
+            rank: 17,
+            total: 4_021,
+        }),
+        Message::BoardRead(BoardRead {
+            user_id: 0,
+            board: "7".into(),
+            view: BoardView::Around,
+            start: 0,
+            count: 11,
+        }),
+        Message::BoardPage(BoardPage {
+            result: BoardResult::Done,
+            total: 3,
+            me_rank: 2,
+            me_score: 450,
+            entries: vec![
+                BoardRow {
+                    rank: 1,
+                    account_id: 9,
+                    handle: "Lumen".into(),
+                    score: 900,
+                    achieved: 1_790_000_000,
+                },
+                BoardRow {
+                    rank: 2,
+                    account_id: 4,
+                    handle: "Ember".into(),
+                    score: 450,
+                    achieved: 1_790_000_100,
+                },
+            ],
+        }),
+        Message::BoardPage(BoardPage {
+            result: BoardResult::UnknownBoard,
+            total: 0,
+            me_rank: 0,
+            me_score: 0,
+            entries: Vec::new(),
+        }),
     ]
+}
+
+#[test]
+fn leaderboard_kinds_are_the_ones_in_the_spec() {
+    let kinds: Vec<u16> = [
+        Kind::SCORE_RECORD,
+        Kind::SCORE_RECORD.reply(),
+        Kind::BOARD_READ,
+        Kind::BOARD_READ.reply(),
+    ]
+    .iter()
+    .map(|k| k.0)
+    .collect();
+    assert_eq!(kinds, [0x0601, 0x8601, 0x0602, 0x8602]);
+}
+
+#[test]
+fn leaderboard_payloads_have_the_layout_of_the_spec() {
+    let record = Message::ScoreRecord(ScoreRecord {
+        user_id: 1,
+        board: "b".into(),
+        score: -2,
+    });
+    assert_eq!(
+        record.payload().unwrap(),
+        [
+            1, 0, 0, 0, // user_id
+            1, 0, b'b', // board: str
+            0xFE, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, // score: i64
+        ]
+    );
+    let recorded = Message::ScoreRecorded(ScoreRecorded {
+        result: ScoreResult::Kept,
+        score: 0x0102,
+        rank: 3,
+        total: 4,
+    });
+    assert_eq!(
+        recorded.payload().unwrap(),
+        [
+            1, // result
+            2, 1, 0, 0, 0, 0, 0, 0, // score
+            3, 0, 0, 0, // rank
+            4, 0, 0, 0, // total
+        ]
+    );
+    let read = Message::BoardRead(BoardRead {
+        user_id: 0,
+        board: "x".into(),
+        view: BoardView::Friends,
+        start: 5,
+        count: 25,
+    });
+    assert_eq!(
+        read.payload().unwrap(),
+        [
+            0, 0, 0, 0, // user_id
+            1, 0, b'x', // board
+            3,    // view
+            5, 0, 0, 0, // start
+            25, 0, // count
+        ]
+    );
+    let page = Message::BoardPage(BoardPage {
+        result: BoardResult::Done,
+        total: 9,
+        me_rank: 2,
+        me_score: 7,
+        entries: vec![BoardRow {
+            rank: 1,
+            account_id: 0x0102,
+            handle: "ab".into(),
+            score: 5,
+            achieved: 6,
+        }],
+    });
+    assert_eq!(
+        page.payload().unwrap(),
+        [
+            0, // result
+            9, 0, 0, 0, // total
+            2, 0, 0, 0, // me_rank
+            7, 0, 0, 0, 0, 0, 0, 0, // me_score
+            1, 0, // entry count
+            1, 0, 0, 0, // rank
+            2, 1, 0, 0, 0, 0, 0, 0, // account_id
+            2, 0, b'a', b'b', // handle
+            5, 0, 0, 0, 0, 0, 0, 0, // score
+            6, 0, 0, 0, 0, 0, 0, 0, // achieved
+        ]
+    );
+}
+
+#[test]
+fn a_board_page_cut_short_is_truncated_and_a_huge_count_costs_nothing() {
+    let page = Message::BoardPage(BoardPage {
+        result: BoardResult::Done,
+        total: 1,
+        me_rank: 0,
+        me_score: 0,
+        entries: vec![BoardRow {
+            rank: 1,
+            account_id: 1,
+            handle: "ab".into(),
+            score: 1,
+            achieved: 1,
+        }],
+    });
+    let payload = page.payload().unwrap();
+    for cut in 0..payload.len() {
+        assert_eq!(
+            Message::parse(Kind::BOARD_READ.reply(), &payload[..cut]),
+            Err(Error::Truncated),
+            "cut at {cut}"
+        );
+    }
+    // A count of 65,535 rows with none behind it is refused without a large allocation.
+    let mut lying = payload[..17].to_vec();
+    lying.extend_from_slice(&u16::MAX.to_le_bytes());
+    assert_eq!(
+        Message::parse(Kind::BOARD_READ.reply(), &lying),
+        Err(Error::Truncated)
+    );
+}
+
+#[test]
+fn unknown_leaderboard_values_are_tolerated() {
+    let Ok(Some(Message::ScoreRecorded(m))) = Message::parse(
+        Kind::SCORE_RECORD.reply(),
+        &[77, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    ) else {
+        panic!("not read");
+    };
+    assert_eq!(m.result, ScoreResult::Unknown);
+    let Ok(Some(Message::BoardRead(m))) =
+        Message::parse(Kind::BOARD_READ, &[0, 0, 0, 0, 0, 0, 9, 0, 0, 0, 0, 1, 0])
+    else {
+        panic!("not read");
+    };
+    assert_eq!(m.view, BoardView::Unknown);
 }
 
 #[test]
@@ -741,4 +936,75 @@ fn random_bytes_on_the_connection_are_framed_or_refused() {
         frames > 5_000 && read > 1_000,
         "{frames} frames, {read} read"
     );
+}
+
+#[test]
+fn handshake_kinds_and_layouts_are_the_ones_in_the_spec() {
+    assert_eq!(VERSION, 1);
+    assert_eq!([Kind::CHALLENGE.0, Kind::AUTH.0], [0x0004, 0x0005]);
+
+    // The hello frame of the specification's test vectors.
+    let nonce: Vec<u8> = (0x20..0x40).collect();
+    let hello = Frame::event(&Message::Hello(Hello {
+        version: VERSION,
+        nonce: nonce.clone(),
+    }))
+    .unwrap();
+    let mut expected = vec![34, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0];
+    expected.extend_from_slice(&nonce);
+    assert_eq!(bytes(&hello), expected);
+
+    let challenge = Message::Challenge(Challenge {
+        version: 1,
+        nonce: [2; NONCE_LEN],
+        proof: [3; PROOF_LEN],
+    });
+    let mut payload = vec![1, 0];
+    payload.extend_from_slice(&[2; NONCE_LEN]);
+    payload.extend_from_slice(&[3; PROOF_LEN]);
+    assert_eq!(challenge.payload().unwrap(), payload);
+    assert_eq!(payload.len(), 66);
+
+    let auth = Message::Auth(Auth {
+        proof: [4; PROOF_LEN],
+    });
+    assert_eq!(auth.payload().unwrap(), vec![4; PROOF_LEN]);
+}
+
+#[test]
+fn a_short_challenge_or_auth_is_truncated() {
+    assert_eq!(
+        Message::parse(Kind::CHALLENGE, &[1, 0, 0]),
+        Err(Error::Truncated)
+    );
+    assert_eq!(
+        Message::parse(Kind::AUTH, &[0; PROOF_LEN - 1]),
+        Err(Error::Truncated)
+    );
+    // Bytes after the fields are ignored, as for every message.
+    let mut longer = vec![9; PROOF_LEN + 5];
+    longer[PROOF_LEN..].fill(0);
+    assert_eq!(
+        Message::parse(Kind::AUTH, &longer),
+        Ok(Some(Message::Auth(Auth {
+            proof: [9; PROOF_LEN]
+        })))
+    );
+}
+
+#[test]
+fn the_handshake_is_read_with_the_small_limit_until_it_is_done() {
+    let mut header = ((MAX_HELLO_PAYLOAD + 1) as u32).to_le_bytes().to_vec();
+    header.extend_from_slice(&[5, 0, 0, 0, 0, 0, 0, 0]);
+    let mut decoder = Decoder::with_max_payload(MAX_HELLO_PAYLOAD);
+    decoder.push(&header);
+    assert_eq!(
+        decoder.next_frame(),
+        Err(Error::TooLarge(MAX_HELLO_PAYLOAD + 1))
+    );
+    // The same header is fine once the limit is raised.
+    let mut decoder = Decoder::with_max_payload(MAX_HELLO_PAYLOAD);
+    decoder.set_max_payload(MAX_PAYLOAD);
+    decoder.push(&header);
+    assert_eq!(decoder.next_frame(), Ok(None));
 }

@@ -45,11 +45,13 @@
 //!
 //! # Echo
 //!
-//! There is no acoustic echo cancellation. Push-to-talk is the default, and with headphones that
-//! is all a party needs. With the open microphone ([`TalkMode::VoiceActivity`]) and speakers, the
-//! members hear themselves back. See `docs/adr/` for the decision and what would replace it.
+//! Echo cancellation is on by default ([`Config::echo_cancellation`]). The engine writes what the
+//! speakers play, so it hands that to the canceller as the reference, delayed until the device has
+//! taken it off its queue, and runs the microphone through the canceller before anything else
+//! (ADR 0040). With headphones there is no echo and the canceller does nothing audible.
 
 mod device;
+mod echo;
 mod gate;
 mod jitter;
 mod mix;
@@ -66,6 +68,7 @@ use std::fmt;
 use std::time::Instant;
 
 pub use device::{AudioIo, MemoryDevice, MemoryHandle};
+pub use echo::EchoCanceller;
 pub use gate::VadConfig;
 pub use jitter::PeerStats;
 
@@ -109,6 +112,9 @@ pub struct Config {
     pub mode: TalkMode,
     /// RNNoise noise suppression on the microphone.
     pub noise_suppression: bool,
+    /// Acoustic echo cancellation: what the speakers play is taken out of the microphone, so
+    /// the party does not hear itself back without headphones.
+    pub echo_cancellation: bool,
     /// Opus bitrate in bits per second, 16000 to 64000.
     pub bitrate: u32,
     /// What the encoder should expect to lose, in percent, which sets how much redundancy it adds.
@@ -124,6 +130,7 @@ impl Default for Config {
         Config {
             mode: TalkMode::PushToTalk,
             noise_suppression: true,
+            echo_cancellation: true,
             bitrate: 28_000,
             expected_loss_percent: 10,
             dtx: true,
@@ -265,6 +272,11 @@ impl Engine {
         self.sender.set_noise_suppression(enabled);
     }
 
+    /// Switches the echo cancellation on or off while the engine runs.
+    pub fn set_echo_cancellation(&mut self, enabled: bool) {
+        self.sender.set_echo_cancellation(enabled);
+    }
+
     /// How loud one member is heard, 0.0 (silent) to 2.0 (double). Applies to members not yet
     /// heard from too.
     pub fn set_peer_volume(&mut self, peer: PeerId, volume: f32) {
@@ -326,6 +338,10 @@ impl Engine {
     /// Move audio: take what the microphone captured, and fill the speakers' queue. Call every
     /// 5 to 10 ms. Datagrams to send are then in [`outgoing`](Engine::outgoing).
     pub fn pump(&mut self) {
+        // What the device took off its queue since the last call has reached the speakers.
+        let queued = self.device.playback_queued();
+        self.sender
+            .release_reference((queued as u64 * 48_000 / u64::from(self.playback_rate)) as usize);
         self.scratch.clear();
         self.device.read_capture(&mut self.scratch);
         self.sender.push(&self.scratch);
@@ -342,6 +358,7 @@ impl Engine {
                 break;
             }
             let frame = self.mix_frame();
+            self.sender.reference(&frame);
             self.scratch.clear();
             self.playback.process(&frame, &mut self.scratch);
             self.device.write_playback(&self.scratch);

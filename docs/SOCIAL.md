@@ -79,6 +79,6 @@ A queue of reports with the reported content attached, actions with a stated rea
 | S5 Share play | streaming a game to a friend, taking over a pad | a friend without the game plays a level of it; the [plan](share-play-plan.md) splits it into watch, hand over and play together, each with numbers |
 | S6 Web and sign-in | web profiles, passkeys, Apple, Google and Discord sign-in, moderation queue | a public profile opens in a browser; a player signs in with a passkey |
 
-Where it stands (26 October 2026): S1 to S4 and S6 are nearly done and live in the launcher, with parties, voice, messages, the feed and web profiles. Of S5, share screen is built (on Windows with game sound); handing a pad to a friend is not. The numbers in each phase's "done when" are not all measured on real networks yet.
+Where it stands (27 October 2026): S1 to S4 and S6 are nearly done and live in the launcher, with parties, voice, messages, the feed and web profiles. Of S5, share screen is built (for the streamer on Windows, Linux and macOS, with game sound on Windows and macOS), and share play is built in the net service and the cloud and tested with fakes; it waits for the engine side and for a launcher window. The numbers in each phase's "done when" are not all measured on real networks yet.
 
 The infrastructure work in [anyplaynet/cloud](https://github.com/anyplaynet/cloud/blob/main/docs/ARCHITECTURE.md) runs beside these phases; every feature here is built for the cluster from its first line.

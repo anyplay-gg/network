@@ -133,6 +133,7 @@ When the cloud retires this launcher's version ([cloud API](cloud-api.md#convent
 | `deafen` | `deafened` | `{}`: nobody is heard, and the microphone is silenced too |
 | `push_to_talk` | `talking` | `{}` |
 | `voice_noise` | `enabled` | `{}`: noise suppression (RNNoise) on the microphone; on in a new service |
+| `voice_echo` | `enabled` | `{}`: echo cancellation (WebRTC AEC3) on the microphone, so the speakers are not heard back; on in a new service |
 | `voice_mode` | `mode`: `push_to_talk` or `voice_activity` | `{}` |
 | `peer_volume` | `account`, `percent` (0 to 200) | `{}`; `bad_request` above 200 |
 | `peer_mute` | `account`, `muted` | `{}` |

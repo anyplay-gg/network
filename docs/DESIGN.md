@@ -27,7 +27,7 @@ These hold for every line of code and every public statement. [ADR 0021](adr/002
 The bridge is small on purpose. It forwards; it does not translate.
 
 - **Switched on by the launcher.** The launcher sets `ANYPS5_NET_ENDPOINT` (a loopback port) and `ANYPS5_NET_TOKEN` (a secret for one game start). Without them every library behaves as it does today: offline and signed out.
-- **One connection** to the net service, speaking the [bridge protocol](../spec/bridge-protocol.md). Request bodies pass through as opaque bytes, so the engine needs no JSON, WebSocket or ICE code.
+- **One connection** to the net service, speaking the [bridge protocol](../spec/bridge-protocol.md) (version 1: both sides prove the game start's token with an HMAC challenge instead of sending it, [ADR 0039](adr/0039-the-bridge-proves-the-token-instead-of-sending-it.md)). Request bodies pass through as opaque bytes, so the engine needs no JSON, WebSocket or ICE code.
 - **What it forwards:**
   - sign-in state and its changes, reachability, the handle and account ID;
   - the online-permission check. The target is the network's own rule: signed in and not banned, for play on the AnyPlay network only ([ADR 0021](adr/0021-the-line-is-drawn-at-the-law.md)). The bridge answers it by this rule;
@@ -43,15 +43,15 @@ A separate process that the launcher starts and watches ([ADR 0004](adr/0004-net
 
 - **Account and device.** The refresh token is kept in the operating system's credential store, with the key of the device that it is bound to. The player signs in and manages the account on the cloud's web pages in their browser ([ADR 0016](adr/0016-accounts-are-managed-on-the-web.md)).
 - **A lasting connection to the cloud** for presence, invitations, friend requests and session events.
-- **Translation.** It turns the platform-shaped web API requests from the bridge into the cloud's own API, with one handler per API group. `userProfile` and `communicationRestrictionStatus` are answered today ([spec/web-api](../spec/web-api/README.md)); sessions, matchmaking and the profanity filter come next, leaderboards and title storage later. Anything unknown is refused and written to the observation log ([ADR 0001](adr/0001-bridge-forwards-net-service-translates.md)).
+- **Translation.** It turns the platform-shaped web API requests from the bridge into the cloud's own API, with one handler per API group. `userProfile` and `communicationRestrictionStatus` are answered today ([spec/web-api](../spec/web-api/README.md)); sessions, matchmaking and the profanity filter come next, leaderboards ([below](#leaderboards)) and title storage later. Anything unknown is refused and written to the observation log ([ADR 0001](adr/0001-bridge-forwards-net-service-translates.md)).
 - **Tunnels** on [iroh](https://www.iroh.computer/) 1.0: QUIC, hole punching, relays as the fallback, encrypted end to end ([ADR 0002](adr/0002-tunnels-on-iroh.md)). Each time a tunnel settles on a direct or a relayed path, the service logs one line on standard error with target `anyplay::path`, the kind of path and running totals (`direct`, `relay`, `upgrades`). The line names no one and nothing leaves the PC: it measures our own test machines and probes. Measuring real players needs a report to the cloud, which the specification does not have yet.
 - **Party voice** ([`voice.rs`](../crates/net/src/voice.rs), [spec](../spec/voice.md), [ADR 0010](adr/0010-voice-and-shared-play-go-through-the-tunnels.md), [ADR 0014](adr/0014-voice-is-an-engine-without-a-transport.md), [ADR 0017](adr/0017-voice-has-a-connection-of-its-own.md)). When the player has switched voice on and is in a party, one task, the **hub**, owns the voice engine and with it the microphone and speakers; with voice off or no party nothing is opened. For each other member who takes part it holds a second QUIC connection on the tunnels' own iroh endpoint, with the ALPN `anyplay/voice/0`, because game datagrams carry no tag byte to tell them from voice. It is a connection of its own but not a path of its own: relay-only clears the endpoint's direct addresses, so voice goes through the relay whenever the tunnels do, and a restart of the tunnels (relay-only changed, new tickets) hangs voice up and joins it again on the new endpoint. The hub pumps the engine every 5 ms, sends each frame it produces as a datagram to every member, and gives each member's datagrams to the engine under that member's account.
   - **Who may connect** is the party's member list and nothing else. The cloud's `Party` carries each member's tunnel key, relay and a `voice` flag, which each net service announces with `PUT /v1/party/endpoint` ([cloud API](../spec/cloud-api.md#parties)); sessions do the same with `Member`. A connection stays only if the key the handshake proves is a current member's key; anything else is closed at once and never reaches the engine. A key that two members name belongs to neither. As for tunnels, the smaller key of a pair dials and the larger accepts.
   - **Membership follows the party's revision.** Every accepted copy of the party goes to the hub, which closes connections to members who left or changed their key, forgets them in the engine, and dials new ones; a copy with an older revision never gets there. A dial that fails is repeated with a pause of 0.5 s growing to 30 s.
   - **Sound devices** sit behind the `devices` feature of `anyplay-net` (cpal). Release builds on Windows and Linux are built with `--features devices`; on Linux that needs the ALSA headers (`libasound2-dev`). Without the feature, which is what `cargo build` and the usual CI jobs use, the service builds and runs and voice answers that this build has no sound devices. A CI job builds and lints the feature on both systems.
   - The launcher gets a `voice` event with the state, who is speaking and each link, at most ten a second, and sets push-to-talk, mode, volume, mute and the devices with the commands in the [control protocol](../spec/control-protocol.md). The launcher never sees tunnel keys.
-- **Share screen** ([spec](../spec/screen-share.md), [ADR 0023](adr/0023-share-screen-is-watch-only-and-asks-the-cloud-for-nothing.md)). The watch-only part of share play: a player streams their game to the party, whose members choose to watch. A connection with the ALPN `anyplay/screen/0`, dialed by the streamer to each party member, carries share play's datagrams; no cloud state, no `share.enabled`. Built, with game sound on Windows; the share worker also publishes the picture live over RTMP for broadcasts.
-- **Share play** ([spec](../spec/share-play.md), [ADR 0019](adr/0019-share-play-streams-through-a-worker.md); designed; built so far: the part that share screen uses, the bridge's `0x05xx` kinds with the frame ring and the guest pad on both sides of the bridge, and the host's pad rules. Not built: the invitation, the cloud's `Share` and the share connection). A third connection on the tunnels' endpoint, with the ALPN `anyplay/share/0`, carries a game's picture and sound to one party member and that member's pad states back. A separate share worker encodes and decodes; the net service checks who connects, validates and rate-limits pad states, and forwards datagrams.
+- **Share screen** ([spec](../spec/screen-share.md), [ADR 0023](adr/0023-share-screen-is-watch-only-and-asks-the-cloud-for-nothing.md)). The watch-only part of share play: a player streams their game to the party, whose members choose to watch. A connection with the ALPN `anyplay/screen/0`, dialed by the streamer to each party member, carries share play's datagrams; no cloud state, no `share.enabled`. Built, with game sound on Windows and macOS (the streamer on macOS too, the viewer not yet); the share worker also publishes the picture live over RTMP for broadcasts, and keeps the last seconds of a game for [clips](../spec/clips.md).
+- **Share play** ([spec](../spec/share-play.md), [ADR 0019](adr/0019-share-play-streams-through-a-worker.md); built here and tested with fakes: the part that share screen uses, the bridge's `0x05xx` kinds with the frame ring and the guest pad, the host's pad rules, the invitation, the cloud's `Share` and the share connection. Open: the engine side in the fork and the launcher's share window). A third connection on the tunnels' endpoint, with the ALPN `anyplay/share/0`, carries a game's picture and sound to one party member and that member's pad states back. A separate share worker encodes and decodes; the net service checks who connects, validates and rate-limits pad states, and forwards datagrams.
 - **Version guard** before every join.
 
 ### Cloud ([anyplaynet/cloud](https://github.com/anyplaynet/cloud))
@@ -91,6 +91,43 @@ A link such as `anyps5://v1/join/…` never starts a game by itself; it opens th
 | Friends, presence, profiles, block list | From the cloud. |
 | Connect to another player | A tunnel with a virtual address. |
 | Invite friends | A friend picker in the launcher; the invitation goes through the cloud. |
+| Record a score, read a ranking | A board of the cloud, keyed by the title and what the game passes ([Leaderboards](#leaderboards)). |
+
+## Leaderboards
+
+A game that ranks its players records a score for a board and reads a range of it. The network answers both for AnyPlay accounts, from the cloud, for every title the same way ([ADR 0041](adr/0041-leaderboards-are-boards-of-best-scores-named-by-the-game.md)).
+
+**Domain.**
+
+| Term | Meaning |
+|---|---|
+| Board | A title ID plus a board ID, the text the game passes. Has an order (`high` or `low` is better), bounds for plausible scores and a status (`open` or `closed`). |
+| Entry | One account's best score on one board and when it was reached. No history. |
+| Range | Which lines a read returns: `top` (the best the viewer may see), `around` (the lines around the viewer's own), `friends` (the viewer and their friends). |
+| Rank | The place among the entries the viewer may see in that range; equal scores share a rank. |
+| Audience | Who sees an account's entries: friends (default), everyone or nobody. A block hides both ways. |
+
+**Flow.**
+
+```text
+game ──record score / read range──▶ bridge ──0x0601 / 0x0602──▶ net service ──PUT /v1/me/scores, GET /v1/boards──▶ cloud
+                                                                                                                      │
+launcher (later), web page ◀──────────────────────────────── reads ─────────────────────────────────────────────────────┘
+```
+
+- The bridge forwards a call as one request and waits for its reply, like a web request. It sends no title: the net service knows the title of the game start and puts it into the cloud path. The board ID is the game's own number or name as text.
+- The net service checks nothing about a score beyond its shape. The cloud applies bounds, limits and privacy and answers with the result codes of the [bridge protocol](../spec/bridge-protocol.md#leaderboards-0x06xx).
+- The web shows a read-only page per board at `/boards/{title}/{board}`, from the [portal API](../spec/portal-api.md#leaderboards). A visitor who is not signed in sees only the entries whose owners chose `everyone`.
+- The net service does not handle the two requests yet and answers `unsupported`; the cloud side is built and tested on its own.
+- Everything is behind the cloud's `ANYPLAY_CLOUD_LEADERBOARDS_ENABLED` (off by default). A bridge that talks to a cloud with the flag off gets `refused` in the replies and the game sees its ranking service as not available.
+
+**What the engine will need later** (a note for the engine owners, not engine code):
+
+1. Find, by observation of games we own, which library calls a game uses to record a score and to read a ranking, and what the game does with the replies. Write what is found into `spec/web-api/` or a new file under `spec/`, from observation only ([OBSERVING.md](OBSERVING.md)); no names, formats or documents from the platform's own material.
+2. Map each call to `0x0601` (record) or `0x0602` (read) and fill the reply in the shape the game accepts. A game that reads "by account IDs" has no view for it yet: that is a new `view` value (additive), asked for when a game needs it.
+3. Turn the board the game names (a number or a name) into the text board ID and pass it as it is; a game that has a communication ID or a service label per title set needs no extra field, since the title is the game start's.
+4. Report `unsupported` and `refused` replies to the game as it reports a ranking service that is down. Never invent a rank locally.
+5. Then the net service needs a handler for the two requests (calls to `PUT /v1/me/scores/{title}/{board}` and `GET /v1/boards/...`, mapping the cloud's error codes to the result codes). It is small and waits for step 1 so that it is built against a real game.
 
 ## Limits
 
@@ -111,10 +148,10 @@ A link such as `anyps5://v1/join/…` never starts a game by itself; it opens th
 | 5 More | matchmaking, leaderboards, save backups | by choice |
 | S1–S6 Social | profiles and trophies, parties and messages, voice, feed and boards, share play, web profiles and sign-in ([SOCIAL.md](SOCIAL.md)) | each phase as SOCIAL.md says |
 
-Where it stands (26 October 2026):
+Where it stands (27 October 2026):
 
-- **Phase 1 is done and live.** The cloud runs at anyplaynet.com as one node, and the launcher's online area uses it: accounts, friends, presence, messages, parties, voice and share screen. The social phases S1 to S6 are nearly done: share screen, the watch-only part of S5, is built, and handing a pad to a friend is open.
-- **Phase 2 is nearly done.** In the AnyPS5 fork, sign-in, identity, NAT type, web API forwarding, push events, the online-permission check and the frame tests are merged (anyplaynet/AnyPS5#7, #10, #24). The end-to-end CI that runs the bridge against the net service is in review (#9). The net service measures the NAT type from iroh's net report and answers `userProfile` and `communicationRestrictionStatus`.
+- **Phase 1 is done and live.** The cloud runs at anyplaynet.com as one node, and the launcher's online area uses it: accounts, friends, presence, messages, parties, voice and share screen. The social phases S1 to S6 are nearly done: share screen, the watch-only part of S5, is live, and share play (handing a pad to a friend) is built in the net service and the cloud but waits for the engine side.
+- **Phase 2 is nearly done.** In the AnyPS5 fork, sign-in, identity, NAT type, web API forwarding, push events, the online-permission check and the frame tests are merged (anyplaynet/AnyPS5#7, #10, #24), and so is bridge protocol 1 (#31, network#125). The end-to-end CI that runs the bridge against the net service is in review (#9). The net service measures the NAT type from iroh's net report and answers `userProfile` and `communicationRestrictionStatus`.
 - **Phase 3 is mostly done.** The fork carries peer-to-peer datagrams, session signaling and streams (#11, #12); fake games exchange packets through tunnels in CI.
 - **Phase 4 is open.** The first game played together over the internet is not there yet. The current target is a game that reaches its title screen.
 - **Phase 0 waits.** The probe is ready; a measurement between two real networks needs a second network.

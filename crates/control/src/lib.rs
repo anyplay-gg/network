@@ -288,6 +288,10 @@ pub enum Command {
     VoiceNoise {
         enabled: bool,
     },
+    /// Echo cancellation on the microphone: on (the default of a new service) or off.
+    VoiceEcho {
+        enabled: bool,
+    },
     VoiceMode {
         mode: VoiceMode,
     },
@@ -1763,6 +1767,10 @@ mod tests {
         assert_eq!(
             parse_command(r#"{"id":7,"do":"voice_noise","enabled":false}"#),
             Ok((7, Command::VoiceNoise { enabled: false }))
+        );
+        assert_eq!(
+            parse_command(r#"{"id":8,"do":"voice_echo","enabled":false}"#),
+            Ok((8, Command::VoiceEcho { enabled: false }))
         );
         assert_eq!(
             parse_command(r#"{"id":2,"do":"push_to_talk","talking":false}"#),

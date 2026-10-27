@@ -81,7 +81,7 @@ Counted by the cloud's settings (`docs/configuration.md` of the cloud), per wind
 - Asking for a code (`sign-in/email`, `sign-in/code/resend`, `step-up/email`, `account/email`): per address and per client address, as for `/v1/auth/email`. Typing a code and `passkey/*`: per client address, as for `/v1/auth/code`.
 - A new browser session (`GET /session` without a live cookie): 300 per 15 minutes per client address, a bucket of its own, so many page loads behind one address (a shared network) cannot lock out signing in. A request that has its session is not counted. Every new session is a row in the store, because the CSRF token lives in it; the row ends with the session's idle time.
 - Every other request of a signed-in session: per account, shared with `/v1` (120 per minute).
-- Public profiles (`users/{name}...`), `compatibility` and join pages (`join/{code}`): 120 per minute per client address.
+- Public profiles (`users/{name}...`), `compatibility`, boards (`boards/...`, `titles/{title_id}/boards`) and join pages (`join/{code}`): 120 per minute per client address.
 - Avatar uploads: 5 per hour per account.
 - Starting a connection (`me/links/{provider}/start`): 10 per hour per account.
 - Notifications (`push`, `push/subscription`) count with every other request of a signed-in session. The cloud itself sends at most 16 requests at a time to push services from one node, and drops a notification when 2000 wait.
@@ -428,6 +428,25 @@ CompatTitle { titleId, verdict, reports, counts, versions }
 ```
 
 A title with fewer than 3 players is not listed. The cloud knows no titles, so there is no `title`; the web page adds names from its own list. Counted per client address with the public profiles.
+
+## Leaderboards
+
+Read-only pages of the boards of [Leaderboards](cloud-api.md#leaderboards). Both routes need no session; a signed-in browser sees more (its friends, its own line), a visitor sees only the entries whose owners show their scores to everyone. Off, like the whole feature, both answer `not_found`. They count with the public profiles (120 per minute per client address).
+
+| Request | Answer |
+|---|---|
+| `GET /titles/{title_id}/boards` | `{titleId, boards: [{board, order, status, entries}]}`: the boards of the title with at least one entry the viewer may see, by ID, at most 64. |
+| `GET /boards/{title_id}/{board}?view=&start=&count=` | `BoardPage`. `view` is `top` (default), `around` or `friends`; the last two need a session and answer `unauthorized` without one. `start` and `count` as in the cloud API (`count` 25 by default, at most 100). |
+
+```text
+BoardPage { titleId, board, order, status, view, total, start, entries, me }
+  order    "high" or "low": which end is better
+  status   "open" or "closed"
+  entries  [{rank, handle, score, achieved}], in rank order; equal scores share a rank
+  me       the viewer's own line {rank, handle, score, achieved}, absent without a session or an entry
+```
+
+Entries name a player by handle only, as the public profile does; the page links the handle to `/u/{handle}`, which answers `not_found` for a player who has no public page. The portal shows a board as `Board {board}` and a score as a plain number: the cloud holds no names, units or art of a game ([ADR 0041](../docs/adr/0041-leaderboards-are-boards-of-best-scores-named-by-the-game.md)).
 
 ## Serving the portal
 
