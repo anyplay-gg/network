@@ -336,6 +336,46 @@ mod system {
         Button::Select,
     ];
 
+    /// A snapshot from what gilrs says about one pad: whether a button is held, the value of an
+    /// axis (sticks and d-pad axes from -1 to 1, y up-positive: gilrs flips the reversed y of
+    /// evdev and of WGI) and the value of a button that has one (`None` for a digital button).
+    /// Pure, so that the table in the tests can stand in for the pads gilrs knows.
+    pub fn raw_from_gilrs(
+        pressed: impl Fn(Button) -> bool,
+        axis: impl Fn(Axis) -> f32,
+        value: impl Fn(Button) -> Option<f32>,
+    ) -> RawPad {
+        let mut raw = RawPad::new();
+        for button in MAPPED {
+            if let Some(which) = map_button(button)
+                && pressed(button)
+            {
+                raw.set(which, true);
+            }
+        }
+        // Some pads report the d-pad as two axes.
+        let (dx, dy) = (axis(Axis::DPadX), axis(Axis::DPadY));
+        for (held, which) in [
+            (dx < -0.5, PadButton::DpadLeft),
+            (dx > 0.5, PadButton::DpadRight),
+            (dy > 0.5, PadButton::DpadUp),
+            (dy < -0.5, PadButton::DpadDown),
+        ] {
+            if held {
+                raw.set(which, true);
+            }
+        }
+        raw.left = (axis(Axis::LeftStickX), axis(Axis::LeftStickY));
+        raw.right = (axis(Axis::RightStickX), axis(Axis::RightStickY));
+        // A trigger is a button with a value; a digital one reads 0 or 1. `LeftZ` and `RightZ`
+        // are not triggers (SDL's "leftz" is a third stick axis), so they are not read.
+        let trigger =
+            |button: Button| value(button).unwrap_or(if pressed(button) { 1.0 } else { 0.0 });
+        raw.l2 = trigger(Button::LeftTrigger2);
+        raw.r2 = trigger(Button::RightTrigger2);
+        raw
+    }
+
     impl GamepadSource for GilrsSource {
         fn poll(&mut self) -> Option<RawPad> {
             if matches!(self.backend, Backend::NotStarted)
@@ -365,43 +405,198 @@ mod system {
                     .map(|(id, _)| id);
             }
             let pad = gilrs.connected_gamepad(self.active?)?;
-            let mut raw = RawPad::new();
-            for button in MAPPED {
-                if let Some(which) = map_button(button)
-                    && pad.is_pressed(button)
-                {
-                    raw.set(which, true);
-                }
-            }
-            // Some pads report the d-pad as two axes.
-            let (dx, dy) = (pad.value(Axis::DPadX), pad.value(Axis::DPadY));
-            for (held, which) in [
-                (dx < -0.5, PadButton::DpadLeft),
-                (dx > 0.5, PadButton::DpadRight),
-                (dy > 0.5, PadButton::DpadUp),
-                (dy < -0.5, PadButton::DpadDown),
-            ] {
-                if held {
-                    raw.set(which, true);
-                }
-            }
-            raw.left = (pad.value(Axis::LeftStickX), pad.value(Axis::LeftStickY));
-            raw.right = (pad.value(Axis::RightStickX), pad.value(Axis::RightStickY));
-            // A trigger is a button with a value; a digital one reads 0 or 1.
-            let trigger = |button: Button| {
-                pad.button_data(button)
-                    .map(|d| d.value())
-                    .unwrap_or(if pad.is_pressed(button) { 1.0 } else { 0.0 })
-            };
-            raw.l2 = trigger(Button::LeftTrigger2);
-            raw.r2 = trigger(Button::RightTrigger2);
-            Some(raw)
+            Some(raw_from_gilrs(
+                |button| pad.is_pressed(button),
+                |axis| pad.value(axis),
+                |button| pad.button_data(button).map(|d| d.value()),
+            ))
         }
     }
 
     #[cfg(test)]
     mod tests {
+        use anyplay_share::pad::{PadState, button as bit};
+
+        use super::super::pad_from_raw;
         use super::*;
+
+        /// What gilrs reports for one pad, as the three questions `raw_from_gilrs` asks.
+        #[derive(Default)]
+        struct FakePad {
+            pressed: Vec<Button>,
+            axes: Vec<(Axis, f32)>,
+            values: Vec<(Button, f32)>,
+        }
+
+        impl FakePad {
+            fn with_axes(axes: &[(Axis, f32)]) -> FakePad {
+                FakePad {
+                    axes: axes.to_vec(),
+                    ..FakePad::default()
+                }
+            }
+
+            fn with_trigger(value: f32) -> FakePad {
+                FakePad {
+                    values: vec![(Button::LeftTrigger2, value)],
+                    ..FakePad::default()
+                }
+            }
+
+            fn state(&self) -> PadState {
+                pad_from_raw(&raw_from_gilrs(
+                    |b| self.pressed.contains(&b),
+                    |a| {
+                        let found = self.axes.iter().find(|(x, _)| *x == a);
+                        found.map_or(0.0, |(_, v)| *v)
+                    },
+                    |b| self.values.iter().find(|(x, _)| *x == b).map(|(_, v)| *v),
+                ))
+            }
+        }
+
+        /// How a family of pads reaches gilrs. gilrs maps every pad onto one standard layout by
+        /// position through SDL mappings (`South` is the bottom face button, whatever it is
+        /// printed: A on an Xbox pad, Cross on a DualShock 4 or DualSense, B on a Switch Pro
+        /// pad), so the names are the same everywhere. What differs is how a pad delivers the
+        /// d-pad and the second triggers.
+        #[derive(Clone, Copy, Debug)]
+        enum Family {
+            /// WGI: d-pad as buttons, analog triggers with a value.
+            Xbox,
+            /// d-pad as a hat (axes), analog triggers with a value.
+            DualSense,
+            /// d-pad as buttons, digital second triggers (no value).
+            SwitchPro,
+        }
+
+        const FAMILIES: [Family; 3] = [Family::Xbox, Family::DualSense, Family::SwitchPro];
+
+        impl Family {
+            /// The pad with the button at `position` held down.
+            fn press(self, position: Button) -> FakePad {
+                let mut pad = FakePad::default();
+                match (self, position) {
+                    (Family::DualSense, Button::DPadUp) => pad.axes.push((Axis::DPadY, 1.0)),
+                    (Family::DualSense, Button::DPadDown) => pad.axes.push((Axis::DPadY, -1.0)),
+                    (Family::DualSense, Button::DPadLeft) => pad.axes.push((Axis::DPadX, -1.0)),
+                    (Family::DualSense, Button::DPadRight) => pad.axes.push((Axis::DPadX, 1.0)),
+                    (_, Button::LeftTrigger2 | Button::RightTrigger2) => {
+                        pad.pressed.push(position);
+                        if !matches!(self, Family::SwitchPro) {
+                            pad.values.push((position, 1.0));
+                        }
+                    }
+                    _ => pad.pressed.push(position),
+                }
+                pad
+            }
+        }
+
+        #[test]
+        fn equal_positions_on_every_pad_make_the_same_bits() {
+            // Position on gilrs's standard layout, and the bit it must make.
+            let table = [
+                (Button::South, bit::SOUTH),
+                (Button::East, bit::EAST),
+                (Button::West, bit::WEST),
+                (Button::North, bit::NORTH),
+                (Button::LeftTrigger, bit::L1),
+                (Button::RightTrigger, bit::R1),
+                (Button::LeftThumb, bit::L3),
+                (Button::RightThumb, bit::R3),
+                (Button::Start, bit::START),
+                (Button::Select, bit::SELECT),
+                (Button::DPadUp, bit::DPAD_UP),
+                (Button::DPadDown, bit::DPAD_DOWN),
+                (Button::DPadLeft, bit::DPAD_LEFT),
+                (Button::DPadRight, bit::DPAD_RIGHT),
+                // The second triggers are values, not buttons.
+                (Button::LeftTrigger2, 0),
+                (Button::RightTrigger2, 0),
+                // Home and the extra buttons are no part of a pad state.
+                (Button::Mode, 0),
+                (Button::C, 0),
+                (Button::Z, 0),
+            ];
+            for family in FAMILIES {
+                for (position, want) in table {
+                    let got = family.press(position).state();
+                    assert_eq!(got.buttons, want, "{family:?} {position:?}");
+                    assert!(got.is_valid());
+                }
+            }
+        }
+
+        #[test]
+        fn equal_triggers_on_every_pad_make_the_same_values() {
+            for family in FAMILIES {
+                let left = family.press(Button::LeftTrigger2).state();
+                let right = family.press(Button::RightTrigger2).state();
+                assert_eq!((left.l2, left.r2), (255, 0), "{family:?}");
+                assert_eq!((right.l2, right.r2), (0, 255), "{family:?}");
+            }
+            // An analog trigger runs through its range; a released one is zero.
+            assert_eq!(FakePad::with_trigger(0.0).state().l2, 0);
+            assert_eq!(FakePad::with_trigger(0.04).state().l2, 0);
+            assert!((115..=135).contains(&FakePad::with_trigger(0.5).state().l2));
+            assert_eq!(FakePad::with_trigger(1.0).state().l2, 255);
+            // `LeftZ` and `RightZ` are not triggers.
+            let z = FakePad::with_axes(&[(Axis::LeftZ, 1.0), (Axis::RightZ, 1.0)]);
+            assert_eq!(z.state(), PadState::NEUTRAL);
+        }
+
+        #[test]
+        fn sticks_read_the_same_on_every_pad() {
+            // gilrs gives y up-positive on every backend; a pad state has up at the low end.
+            let stick = |lx: f32, ly: f32, rx: f32, ry: f32| {
+                let pad = FakePad::with_axes(&[
+                    (Axis::LeftStickX, lx),
+                    (Axis::LeftStickY, ly),
+                    (Axis::RightStickX, rx),
+                    (Axis::RightStickY, ry),
+                ]);
+                let s = pad.state();
+                assert_eq!(s.buttons, 0);
+                (s.lx, s.ly, s.rx, s.ry)
+            };
+            assert_eq!(stick(0.0, 0.0, 0.0, 0.0), (128, 128, 128, 128), "rest");
+            assert_eq!(stick(0.0, 1.0, 0.0, 0.0), (128, 0, 128, 128), "left up");
+            assert_eq!(
+                stick(1.0, 0.0, 0.0, 0.0),
+                (255, 128, 128, 128),
+                "left right"
+            );
+            assert_eq!(
+                stick(0.0, 0.0, 0.0, -1.0),
+                (128, 128, 128, 255),
+                "right down"
+            );
+            assert_eq!(stick(0.0, 0.0, -1.0, 0.0), (128, 128, 0, 128), "right left");
+            assert_eq!(
+                stick(0.1, -0.1, 0.1, 0.1),
+                (128, 128, 128, 128),
+                "dead zone"
+            );
+        }
+
+        #[test]
+        fn the_dpad_as_axes_and_as_buttons_agree() {
+            let hat = |x: f32, y: f32| {
+                FakePad::with_axes(&[(Axis::DPadX, x), (Axis::DPadY, y)])
+                    .state()
+                    .buttons
+            };
+            assert_eq!(hat(0.0, 0.0), 0);
+            assert_eq!(hat(0.0, 0.4), 0, "half a hat is rest");
+            // Up is positive on the hat, as on a stick.
+            assert_eq!(hat(0.0, 1.0), bit::DPAD_UP);
+            assert_eq!(hat(-1.0, -1.0), bit::DPAD_LEFT | bit::DPAD_DOWN);
+            // Buttons and axes from one pad at once still make one bit.
+            let mut both = FakePad::with_axes(&[(Axis::DPadY, 1.0)]);
+            both.pressed.push(Button::DPadUp);
+            assert_eq!(both.state().buttons, bit::DPAD_UP);
+        }
 
         #[test]
         fn every_pad_button_has_one_gilrs_button_and_home_has_none() {
