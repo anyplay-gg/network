@@ -20,11 +20,13 @@ anyplay-share --clips SECONDS [--clips-dir DIR] [--title TITLE] [--window HWND] 
 | | |
 |---|---|
 | Picture | the game's window, scaled to fit 1280 by 720 with black bars, 30 pictures a second (the hardware encoder may lower it) |
-| Encoder | H.264 from the first **hardware** encoder Media Foundation lists (on macOS the media engine through VideoToolbox, [ADR 0036](../docs/adr/0036-macos-captures-with-screencapturekit-and-encodes-with-videotoolbox.md)); never the software encoder. Constant bit rate 6000 kbit/s, no B-frames, [as ADR 0027](../docs/adr/0027-video-is-h264-from-the-system.md) |
+| Encoder | H.264 from the first **hardware** encoder Media Foundation lists (on macOS the media engine through VideoToolbox, [ADR 0036](../docs/adr/0036-macos-captures-with-screencapturekit-and-encodes-with-videotoolbox.md); on Linux the GPU hardware backends, VA-API or NVENC, [ADR 0037](../docs/adr/0037-linux-encodes-on-the-gpu-through-vaapi-and-nvenc.md)); never the software encoder. Constant bit rate 6000 kbit/s, no B-frames, [as ADR 0027](../docs/adr/0027-video-is-h264-from-the-system.md) |
 | Key frames | one every 2 seconds, with the SPS and PPS in front |
 | Ring | whole groups of pictures (a key frame and what follows it). The oldest group is dropped as soon as the groups after it cover `SECONDS`, so a clip is at least `SECONDS` long and at most 2 seconds longer, and starts on a key frame. A limit of 160 MiB drops older groups too, down to the newest one |
 | Sound | none (version 0); the file has one track |
 | A window that does not change | gives its last picture again, so a still scene is still a clip |
+
+On Linux, clips are recorded with the same hardware backends (VA-API and NVENC, [ADR 0037](../docs/adr/0037-linux-encodes-on-the-gpu-through-vaapi-and-nvenc.md)). The desktop portal asks the player to pick the game's window each time a game starts with Clips on, and without a hardware backend the worker ends with `no_encoder`.
 
 Memory is the only storage: nothing is written until a `save`, and the ring ends with the worker.
 
@@ -57,6 +59,5 @@ MP4 (`isom`, `iso2`, `avc1`, `mp41`), one H.264 video track, samples timed in 1/
 ## Not in version 0
 
 - Sound: the game's sound by process loopback capture and a second track (see [Not in version 0](screen-share.md#not-in-version-0) of share screen, which needs the same).
-- Linux: the portal's window picker needs the player's confirmation each time, which does not suit a background recorder; the worker answers `ended` with `no_encoder`.
 - Software encoding, 1080p, HDR, a recorder that runs without a game.
 - The engine tap as a source (ADR 0023).
