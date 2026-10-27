@@ -121,6 +121,7 @@ pub fn open_h264(
 /// Held while a GPU driver starts: one at a time in a process. NVIDIA's VA-API driver calls
 /// `cuInit` while the loader loads it, and `cuInit` loads libraries itself, so NVENC and VA-API
 /// starting at once wait on each other's lock (CUDA's and the loader's) for good.
+#[cfg(target_os = "linux")]
 pub(crate) fn starting_a_driver() -> std::sync::MutexGuard<'static, ()> {
     static STARTING: std::sync::Mutex<()> = std::sync::Mutex::new(());
     STARTING
