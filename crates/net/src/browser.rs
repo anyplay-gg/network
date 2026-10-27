@@ -9,9 +9,10 @@
 use std::time::Duration;
 
 use anyplay_proof::pkce;
+use std::sync::Arc;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::oneshot;
+use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 
 /// How long the player has to finish in the browser.
@@ -110,21 +111,32 @@ fn encode(text: &str) -> String {
 }
 
 async fn serve(listener: TcpListener, port: u16, state: &str) -> Callback {
+    let state: Arc<str> = Arc::from(state);
+    let (done_tx, mut done_rx) = mpsc::channel::<Callback>(1);
     loop {
-        let Ok((stream, peer)) = listener.accept().await else {
-            // A failing accept repeats at once: do not spin on it.
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-            continue;
-        };
-        if !peer.ip().is_loopback() {
-            continue;
-        }
-        let answer = tokio::time::timeout(Duration::from_secs(5), handle(stream, port, state))
-            .await
-            .ok()
-            .flatten();
-        if let Some(callback) = answer {
-            return callback;
+        tokio::select! {
+            Some(callback) = done_rx.recv() => return callback,
+            accepted = listener.accept() => {
+                let Ok((stream, peer)) = accepted else {
+                    // A failing accept repeats at once: do not spin on it.
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                    continue;
+                };
+                if !peer.ip().is_loopback() {
+                    continue;
+                }
+                let state = state.clone();
+                let done_tx = done_tx.clone();
+                tokio::spawn(async move {
+                    let answer = tokio::time::timeout(Duration::from_secs(5), handle(stream, port, &state))
+                        .await
+                        .ok()
+                        .flatten();
+                    if let Some(callback) = answer {
+                        let _ = done_tx.send(callback).await;
+                    }
+                });
+            }
         }
     }
 }
@@ -435,6 +447,62 @@ mod tests {
         .unwrap();
         assert!(started.url.contains("intent=create"));
         assert_eq!(started.result.await.unwrap(), Callback::TimedOut);
+    }
+
+    #[tokio::test]
+    async fn a_stalled_connection_does_not_block_the_callback() {
+        let started = start_with(
+            "https://cloud.example/",
+            false,
+            "PC",
+            Duration::from_secs(20),
+        )
+        .await
+        .unwrap();
+
+        let redirect = started
+            .url
+            .split("redirect_uri=")
+            .nth(1)
+            .unwrap()
+            .split('&')
+            .next()
+            .unwrap()
+            .replace("%3A", ":")
+            .replace("%2F", "/");
+        let port: u16 = redirect
+            .strip_prefix("http://127.0.0.1:")
+            .unwrap()
+            .split('/')
+            .next()
+            .unwrap()
+            .parse()
+            .unwrap();
+        let state = started
+            .url
+            .split("state=")
+            .nth(1)
+            .unwrap()
+            .split('&')
+            .next()
+            .unwrap()
+            .to_owned();
+
+        // Connection 1: opens and sends nothing (stalled).
+        let _stalled = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+
+        // Connection 2: sends the valid callback immediately.
+        let mut stream = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        let request = format!(
+            "GET /callback?code={CODE}&state={state} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
+        );
+        stream.write_all(request.as_bytes()).await.unwrap();
+        let mut answer = String::new();
+        stream.read_to_string(&mut answer).await.unwrap();
+        assert!(answer.starts_with("HTTP/1.1 200"), "{answer}");
+
+        // Result arrives immediately despite the stalled connection.
+        assert_eq!(started.result.await.unwrap(), Callback::Code(CODE.into()));
     }
 }
 
