@@ -164,6 +164,8 @@ pub struct Settings {
     pub talking: bool,
     /// Noise suppression on the microphone; `None` leaves what the engine was opened with.
     pub noise_suppression: Option<bool>,
+    /// Echo cancellation on the microphone; `None` leaves what the engine was opened with.
+    pub echo_cancellation: Option<bool>,
     /// Volume per account, 0.0 to 2.0; missing is 1.0.
     pub volumes: HashMap<u64, f32>,
     pub muted: HashSet<u64>,
@@ -197,6 +199,7 @@ enum Ctl {
     Talking(bool),
     Mode(TalkMode),
     Noise(bool),
+    Echo(bool),
     Volume(u64, f32),
     Muted(u64, bool),
     MicMuted(bool),
@@ -269,6 +272,10 @@ impl Hub {
         let _ = self.ctl.send(Ctl::Noise(enabled));
     }
 
+    pub fn set_echo_cancellation(&self, enabled: bool) {
+        let _ = self.ctl.send(Ctl::Echo(enabled));
+    }
+
     /// 0.0 (silent) to 2.0.
     pub fn set_volume(&self, account: u64, volume: f32) {
         let _ = self.ctl.send(Ctl::Volume(account, volume));
@@ -335,6 +342,9 @@ impl Task {
         if let Some(enabled) = self.settings.noise_suppression {
             self.engine.set_noise_suppression(enabled);
         }
+        if let Some(enabled) = self.settings.echo_cancellation {
+            self.engine.set_echo_cancellation(enabled);
+        }
         self.engine.set_talking(self.settings.talking);
         self.engine.set_mic_muted(self.settings.mic_muted);
         self.engine.set_deafened(self.settings.deafened);
@@ -386,6 +396,10 @@ impl Task {
             Ctl::Noise(enabled) => {
                 self.settings.noise_suppression = Some(enabled);
                 self.engine.set_noise_suppression(enabled);
+            }
+            Ctl::Echo(enabled) => {
+                self.settings.echo_cancellation = Some(enabled);
+                self.engine.set_echo_cancellation(enabled);
             }
             Ctl::MicMuted(muted) => {
                 self.settings.mic_muted = muted;
