@@ -1036,6 +1036,13 @@ impl Task {
             }
             // The viewer's side
             (Side::In, Message::Config(config)) => {
+                // Only a codec this PC offered to decode may reach the worker; the streamer
+                // chose it from that list, so anything else is not what was agreed.
+                let decodes = self.workers.capabilities().unwrap_or_default().decode;
+                if !decodes_codec(&decodes, &config.codec) {
+                    self.end_peer(key, code::PROTOCOL, None);
+                    return;
+                }
                 let epoch = config.epoch;
                 if let Some(watching) = self.watching.as_ref().filter(|w| w.key == key) {
                     let _ = watching.to.send(ToWorker::Start(Start {
@@ -1557,6 +1564,11 @@ fn config_message(start: &Start) -> Message {
     })
 }
 
+/// Whether `codec` is one of the decoders this PC can run.
+fn decodes_codec(decode: &[CodecCaps], codec: &str) -> bool {
+    decode.iter().any(|c| c.codec == codec)
+}
+
 /// AV1, then H.264, then whatever else both have, in the streamer's order.
 /// The codec a stream uses: AV1, else H.264, else (only for the test pattern) the test codec.
 /// The test codec is lossless and huge; it is never what a player's game is streamed with.
@@ -1668,6 +1680,22 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::*;
+
+    #[test]
+    fn a_viewer_takes_only_a_codec_it_can_decode() {
+        let caps = |codec: &str| CodecCaps {
+            codec: codec.to_owned(),
+            hardware: false,
+            max_width: 1920,
+            max_height: 1080,
+            max_fps: 60,
+        };
+        let decode = vec![caps("h264")];
+        assert!(decodes_codec(&decode, "h264"));
+        assert!(!decodes_codec(&decode, "av1"));
+        assert!(!decodes_codec(&decode, "../../evil"));
+        assert!(!decodes_codec(&[], "h264"));
+    }
 
     #[test]
     fn a_peer_that_stops_reading_ends_its_connection_instead_of_growing_the_queue() {
