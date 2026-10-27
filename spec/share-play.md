@@ -1,6 +1,6 @@
 # Share play
 
-How a player streams the game they are running to a friend in their party, who watches, takes over their pad, or plays beside them. Version 0, a draft: it changes without notice until version 1. Built so far: the part that [share screen](screen-share.md) uses (a watch-only stream to the whole party that needs no invitation and no cloud record, [ADR 0023](../docs/adr/0023-share-screen-is-watch-only-and-asks-the-cloud-for-nothing.md)), and the game's side of share play: the [bridge kinds](bridge-protocol.md#share-play-0x05xx), the [frame ring](#frame-ring), the [pad state](#pad-state) with the host's rules, and the host's [override](#the-hosts-override). Not built: the invitation, the cloud's `Share`, and the share connection that carries the stream and the guest's pad between two PCs.
+How a player streams the game they are running to a friend in their party, who watches, takes over their pad, or plays beside them. Version 0, a draft: it changes without notice until version 1. Built so far: the part that [share screen](screen-share.md) uses (a watch-only stream to the whole party that needs no invitation and no cloud record, [ADR 0023](../docs/adr/0023-share-screen-is-watch-only-and-asks-the-cloud-for-nothing.md)), and the game's side of share play: the [bridge kinds](bridge-protocol.md#share-play-0x05xx), the [frame ring](#frame-ring), the [pad state](#pad-state) with the host's rules, and the host's [override](#the-hosts-override). Also built, tested with fakes (no game, no real network): the invitation and the cloud's `Share` in the net service, the share connection (`anyplay/share/0`) that carries the stream and the guest's pad between two PCs (`anyplay_net::play`), the control commands and events below, and the cloud's side (records, events, limits). Not built: the launcher's share window, the viewer's size changes (the picture keeps the size of the frame ring), `share_quality`, and the engine-side proof with a real title.
 
 The decisions are in [ADR 0019](../docs/adr/0019-share-play-streams-through-a-worker.md), the order of work in the [plan](../docs/share-play-plan.md), and the prior art with its sources in the [research notes](../docs/share-play-research.md). The terms are in [CONTEXT.md](../CONTEXT.md). Share play goes through the tunnels like voice ([ADR 0010](../docs/adr/0010-voice-and-shared-play-go-through-the-tunnels.md), [ADR 0017](../docs/adr/0017-voice-has-a-connection-of-its-own.md), [voice spec](voice.md)).
 
@@ -410,23 +410,24 @@ For the [control protocol](control-protocol.md).
 
 | `do` | Fields | `ok` |
 |---|---|---|
-| `share_start` | `account`, `mode` | `{share}`: the invitation went out |
-| `share_answer` | `id`, `accept` | `{share}` when accepted, else `{}` |
+| `share_start` | `account`, `mode` | `{}`: the invitation went out |
+| `share_answer` | `invitation`, `accept` | `{}` (the `share` event follows) |
 | `share_mode` | `mode` | `{}` (host) |
 | `share_request` | `mode` | `{}` (guest asks) |
 | `share_stop` | | `{}` |
-| `share_quality` | `max_kbps`, `max_height` | `{}` (host) |
-| `share_worker` | `path` | `{encoders, decoders}`: where the launcher put the verified worker |
+| `share_quality` | `max_kbps`, `max_height` | `{}` (host); not built yet |
+| `screen_worker` | `path` | `{encoders, decoders, capture, libraries}`: where the launcher put the verified worker; share play uses the worker that share screen uses, so there is no `share_worker` command |
 
 | `event` | Fields | When |
 |---|---|---|
-| `share` | `share`, `role`, `state`, `link`, `stats` | the share began, changed or ended; stats at most twice a second |
+| `share` | `can_start`, `share` | the share began, changed or ended (`share` is null when the player is in none); the numbers at most twice a second |
 | `share_invitation` | `invitation` | a party member invited the player |
 | `share_invitation_gone` | `id` | expired, answered or ended |
 | `share_request` | `mode` | the guest asked for a mode |
-| `share_worker` | `state` | `missing`, `downloading`, `ready` or `failed`, and what it can encode |
+| `screen` | | the worker's state is in the `screen` event (`can_share`, `can_watch`) |
 
-- `share.stats` has `codec`, `width`, `height`, `fps`, `kbps`, `loss_percent`, `stream_delay_ms` (`p50`, `p95`) and `input_delay_ms` (`p50`, `p95`). `link` is `connecting`, `direct` or `relay`.
+- `share.share` has `id`, `role` (`host` or `guest`), `peer` (the other account), `title`, `mode`, `phase` (`invited`, `connecting`, `live` or `stalled`), `link` (`connecting`, `direct` or `relay`), `codec`, `width`, `height`, `fps`, `kbps`, `rtt_ms`, `loss_percent`, and for the host `requested`, the mode the guest asked for. `stream_delay_ms` and `input_delay_ms` (`p50`, `p95`) are not reported yet. The invitation travels as `share_invitation` and the command field that answers it is named `invitation`, because `id` is the command's number.
+- Only the host's `share_mode` changes a mode, and only for a share that is `active`; the guest's `share_request` goes to the host and changes nothing. A share is bound to its connection only while the other side is a member of the player's party; a share whose other side leaves the party ends at once on both PCs.
 - New error codes: `no_encoder`, `no_game` (no game runs), `not_in_party`, `busy` (a share exists already), `not_allowed` (the cloud has share play off).
 - The launcher never sees tunnel keys, rings or datagrams.
 

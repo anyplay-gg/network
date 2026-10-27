@@ -14,6 +14,7 @@ pub mod cloud;
 pub mod credentials;
 pub mod events;
 pub mod observe;
+pub mod play;
 pub mod screen;
 pub mod service;
 pub mod shareplay;
