@@ -168,3 +168,204 @@ mod encoder {
         let _ = std::fs::remove_dir(&folder);
     }
 }
+
+/// Capture of a real window, on a Mac where the player (or the CI runner) has allowed Screen
+/// Recording. It opens Calculator, so it runs only when `ANYPLAY_MAC_CAPTURE_TEST=1`.
+#[cfg(target_os = "macos")]
+mod real_window {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+
+    use anyplay_share_worker::capture::{self, WindowTarget};
+    use anyplay_share_worker::mac::sck::SckSound;
+    use anyplay_share_worker::sound::SoundSource;
+
+    use super::{WORKER, screen_access};
+
+    /// One test at a time has Calculator: the next one starts it again after this one closed it.
+    static ONE_AT_A_TIME: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Calculator, started for the test and closed after it.
+    struct Calculator {
+        pid: u32,
+        started_here: bool,
+        _turn: std::sync::MutexGuard<'static, ()>,
+    }
+
+    fn pid_of_calculator() -> Option<u32> {
+        let out = Command::new("pgrep")
+            .args(["-x", "Calculator"])
+            .output()
+            .ok()?;
+        String::from_utf8(out.stdout)
+            .ok()?
+            .lines()
+            .next()?
+            .trim()
+            .parse()
+            .ok()
+    }
+
+    impl Calculator {
+        /// `None` when this run is not asked to capture a window, or capture is not allowed.
+        fn open() -> Option<Calculator> {
+            if !std::env::var("ANYPLAY_MAC_CAPTURE_TEST").is_ok_and(|v| v == "1") {
+                eprintln!("skipped: ANYPLAY_MAC_CAPTURE_TEST is not 1");
+                return None;
+            }
+            assert_eq!(
+                screen_access(),
+                "granted",
+                "the CI runner is expected to allow Screen Recording"
+            );
+            let turn = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+            let started_here = pid_of_calculator().is_none();
+            Command::new("open")
+                .args(["-a", "Calculator"])
+                .status()
+                .ok()?;
+            let deadline = Instant::now() + Duration::from_secs(20);
+            while Instant::now() < deadline {
+                if let Some(pid) = pid_of_calculator() {
+                    // The window needs a moment to be drawn.
+                    std::thread::sleep(Duration::from_secs(3));
+                    return Some(Calculator {
+                        pid,
+                        started_here,
+                        _turn: turn,
+                    });
+                }
+                std::thread::sleep(Duration::from_millis(250));
+            }
+            panic!("Calculator did not start");
+        }
+    }
+
+    impl Drop for Calculator {
+        fn drop(&mut self) {
+            if self.started_here {
+                let _ = Command::new("osascript")
+                    .args(["-e", "quit app \"Calculator\""])
+                    .status();
+                // The next test starts it again: wait until it is really gone.
+                let deadline = Instant::now() + Duration::from_secs(15);
+                while pid_of_calculator().is_some() && Instant::now() < deadline {
+                    std::thread::sleep(Duration::from_millis(200));
+                }
+            }
+        }
+    }
+
+    /// The window of another program is found by its process, captured by ScreenCaptureKit and
+    /// the pictures are real (not one flat colour).
+    #[test]
+    fn a_real_window_is_found_and_its_pictures_have_content() {
+        let Some(calculator) = Calculator::open() else {
+            return;
+        };
+        let target = WindowTarget {
+            window: None,
+            pids: vec![calculator.pid],
+            title_contains: String::new(),
+        };
+        let mut source = capture::open(&target).expect("the window is captured");
+        let frame = source
+            .wait_frame(Duration::from_secs(15))
+            .expect("a picture arrives");
+        assert!(frame.is_well_formed());
+        assert!(
+            frame.width >= 200 && frame.height >= 150,
+            "{}x{}",
+            frame.width,
+            frame.height
+        );
+        let first = &frame.bgra[..4];
+        assert!(
+            frame.bgra.as_chunks::<4>().0.iter().any(|p| p != first),
+            "the picture is one flat colour"
+        );
+        // A window that does not change gives its last picture again.
+        let again = source.wait_frame(Duration::from_secs(5));
+        assert!(again.is_some());
+    }
+
+    /// The worker program records a real window and saves a clip.
+    #[test]
+    fn the_worker_saves_a_clip_of_a_real_window() {
+        let Some(calculator) = Calculator::open() else {
+            return;
+        };
+        let folder = std::env::temp_dir().join(format!("anyplay-mac-real-{}", std::process::id()));
+        let path = folder.join("real.mp4");
+        let mut child = Command::new(WORKER)
+            .args(["--clips", "2", "--pid", &calculator.pid.to_string()])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit())
+            .spawn()
+            .expect("the worker runs");
+        let mut input = child.stdin.take().unwrap();
+        let output = child.stdout.take().unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            use std::io::BufRead;
+            for line in std::io::BufReader::new(output)
+                .lines()
+                .map_while(Result::ok)
+            {
+                let _ = tx.send(line);
+            }
+        });
+        let wait = |event: &str| {
+            let deadline = Instant::now() + Duration::from_secs(40);
+            loop {
+                let left = deadline.saturating_duration_since(Instant::now());
+                let line = rx.recv_timeout(left).expect("an event in time");
+                let value: serde_json::Value = serde_json::from_str(&line).unwrap();
+                if value["event"] == event {
+                    return value;
+                }
+                assert_ne!(value["event"], "ended", "{value}");
+            }
+        };
+        wait("ready");
+        std::thread::sleep(Duration::from_millis(4500));
+        writeln!(
+            input,
+            "{}",
+            serde_json::json!({"do": "save", "path": path.to_string_lossy()})
+        )
+        .unwrap();
+        let saved = wait("saved");
+        assert!(saved["seconds"].as_f64().unwrap() >= 1.5, "{saved}");
+        let data = std::fs::read(&path).expect("the clip exists");
+        let size = data.len() as u64;
+        let mut reader =
+            mp4::Mp4Reader::read_header(std::io::Cursor::new(data), size).expect("a valid file");
+        assert!(reader.tracks().get(&1).unwrap().sample_count() >= 30);
+        assert!(reader.read_sample(1, 1).unwrap().unwrap().is_sync);
+        let _ = writeln!(input, r#"{{"do":"quit"}}"#);
+        drop(input);
+        let _ = child.wait();
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir(&folder);
+    }
+
+    /// The game's sound: the application is listened to, and the stream stays up. (Calculator
+    /// is silent; what arrives is silence or nothing, which is what the source must handle.)
+    #[test]
+    fn an_application_can_be_listened_to() {
+        let Some(calculator) = Calculator::open() else {
+            return;
+        };
+        let mut sound = SckSound::open(&[calculator.pid]).expect("the sound stream starts");
+        let mut samples = Vec::new();
+        for _ in 0..50 {
+            assert!(sound.read(&mut samples).expect("reads"), "the stream ended");
+        }
+        // Whatever arrived is whole stereo frames of finite numbers.
+        assert_eq!(samples.len() % 2, 0);
+        assert!(samples.iter().all(|s| s.is_finite()));
+    }
+}

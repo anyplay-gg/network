@@ -75,11 +75,22 @@ pub fn is_permission_error(error: &str) -> bool {
     error.starts_with(DECLINED)
 }
 
+/// ScreenCaptureKit and CoreGraphics need the connection to the window server, which a program
+/// without an application object does not make by itself (the first call would abort with
+/// "CGS_REQUIRE_INIT"). Asking for the main display makes it. Once per process.
+fn connect_to_window_server() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let _ = objc2_core_graphics::CGMainDisplayID();
+    });
+}
+
 /// Asks the system for what can be shared, and reads it with `read` inside its callback.
 fn shareable<T: 'static>(
     on_screen_only: bool,
     read: impl Fn(&SCShareableContent) -> T + 'static,
 ) -> Result<T, String> {
+    connect_to_window_server();
     let (tx, rx) = mpsc::channel::<Result<T, String>>();
     let block = RcBlock::new(
         move |content: *mut SCShareableContent, error: *mut NSError| {
@@ -159,6 +170,7 @@ pub fn find_window(target: &WindowTarget) -> Result<Retained<SCWindow>, String> 
 
 /// Starts a stream and waits until the system says it runs.
 fn start(stream: &SCStream) -> Result<(), String> {
+    connect_to_window_server();
     let (tx, rx) = mpsc::channel::<Option<String>>();
     let block = RcBlock::new(move |error: *mut NSError| {
         let reason = (!error.is_null()).then(|| {
