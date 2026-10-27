@@ -440,9 +440,13 @@ async fn without_an_answer_to_the_probes_the_relay_still_makes_it_type_2() {
     assert!(!reach.udp, "{reach:?}");
     assert!(side.tunnels.relay_connected());
     assert_eq!(tunnel::nat_type(Some(&reach), true), 2);
-    // The relay goes away: nothing answers any more.
+    // The relay goes away: nothing answers any more. A relay that closes its connection says
+    // so at once (about 60 ms on an idle machine). When that close does not reach the endpoint
+    // (the server is torn down while it is being sent, which a loaded macOS runner does
+    // sometimes), the endpoint finds out from its QUIC connection, which gives up after the
+    // relay client's idle timeout of 35 s (iroh-relay, quic.rs). Wait for that, not for 10 s.
     relay.stop().await;
-    let gone = tokio::time::timeout(Duration::from_secs(10), async {
+    let gone = tokio::time::timeout(Duration::from_secs(45), async {
         while side.tunnels.relay_connected() {
             tokio::time::sleep(Duration::from_millis(50)).await;
         }

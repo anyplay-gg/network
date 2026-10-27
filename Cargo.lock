@@ -278,6 +278,7 @@ dependencies = [
  "iroh",
  "iroh-relay",
  "libc",
+ "libloading 0.8.9",
  "minifb",
  "mp4",
  "objc2",
