@@ -170,12 +170,7 @@ async fn handshake(
     let challenge = Message::Challenge(Challenge {
         version: VERSION,
         nonce: service_nonce,
-        proof: anyplay_bridge_protocol::proof(
-            &token,
-            Role::Service,
-            &bridge_nonce,
-            &service_nonce,
-        ),
+        proof: anyplay_bridge_protocol::proof(&token, Role::Service, &bridge_nonce, &service_nonce),
     });
     if !send(write, &challenge).await {
         return Err(None);
@@ -185,13 +180,8 @@ async fn handshake(
     let Ok(Some(Message::Auth(Auth { proof }))) = Message::parse(frame.kind, &frame.payload) else {
         return Err(None);
     };
-    if !anyplay_bridge_protocol::verify(
-        &token,
-        Role::Bridge,
-        &bridge_nonce,
-        &service_nonce,
-        &proof,
-    ) {
+    if !anyplay_bridge_protocol::verify(&token, Role::Bridge, &bridge_nonce, &service_nonce, &proof)
+    {
         return Err(refuse("the proof does not match this game start"));
     }
     // The game may have ended, or another may have started, while the bridge answered.
