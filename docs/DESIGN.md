@@ -158,4 +158,6 @@ Where it stands (27 October 2026):
 
 What each part still lacks is in [docs/gaps.md](gaps.md).
 
+**Order of the work since 28 October 2026** ([ADR 0042](adr/0042-friends-play-what-runs-share-play-first.md)): share play first, then the virtual LAN with a LAN title, engine compatibility where a game stops early, and platform sessions once a class A game runs far enough. Games that need a publisher's account or servers are out of scope.
+
 Until AnyPS5 decides otherwise, the bridge ships in an AnyPlay build of AnyPS5 that the launcher offers as a toolkit channel. Players who don't pick it stay offline as before. For AnyPS5 itself we will propose only the neutral part: one variable and an openly documented protocol between its network libraries and an outside service, with today's offline behaviour when the variable is unset.
