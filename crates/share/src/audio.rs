@@ -137,6 +137,8 @@ pub struct AudioJitter {
     concealed: u32,
     calm: u32,
     stats: AudioStats,
+    /// What the latest `pop` dropped to catch up, oldest first.
+    dropped: Vec<Vec<u8>>,
 }
 
 impl Default for AudioJitter {
@@ -159,6 +161,7 @@ impl AudioJitter {
             concealed: 0,
             calm: 0,
             stats: AudioStats::default(),
+            dropped: Vec::new(),
         }
     }
 
@@ -218,6 +221,7 @@ impl AudioJitter {
 
     /// What to play for the next 10 ms.
     pub fn pop(&mut self) -> Playout {
+        self.dropped.clear();
         let Some(next) = self.next else {
             // Waiting until the buffer is as deep as it should be.
             let Some((&first, _)) = self.packets.first_key_value() else {
@@ -232,7 +236,8 @@ impl AudioJitter {
         // Too far behind the newest packet: drop the oldest, back to the depth.
         if self.packets.len() > self.depth + SLACK {
             while self.packets.len() > self.depth {
-                if let Some((sequence, _)) = self.packets.pop_first() {
+                if let Some((sequence, payload)) = self.packets.pop_first() {
+                    self.dropped.push(payload);
                     self.stats.skipped += 1;
                     self.next = Some(sequence + 1);
                 }
@@ -264,6 +269,14 @@ impl AudioJitter {
             Some(following) => Playout::Recover(following.clone()),
             None => Playout::Conceal,
         }
+    }
+
+    /// The packets the latest [`pop`](Self::pop) dropped to catch up, oldest first. They go
+    /// through the decoder before what `pop` answered, unheard: a decoder that never saw them
+    /// joins two stretches of sound that were not next to each other, and the join overshoots
+    /// (a click, up to half again as loud as the sound).
+    pub fn take_dropped(&mut self) -> Vec<Vec<u8>> {
+        std::mem::take(&mut self.dropped)
     }
 
     /// The packet due is not here: it is counted lost, and remembered in case it comes late.
@@ -532,6 +545,10 @@ mod tests {
             "played {first} of 40: the delay was kept"
         );
         assert!(jitter.stats().skipped > 0);
+        let dropped = jitter.take_dropped();
+        assert_eq!(dropped.len() as u64, jitter.stats().skipped);
+        assert_eq!(dropped, (0..first).map(payload).collect::<Vec<_>>());
+        assert!(jitter.take_dropped().is_empty());
     }
 
     #[test]
