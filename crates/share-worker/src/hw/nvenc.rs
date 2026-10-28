@@ -850,6 +850,7 @@ unsafe impl Send for NvEncoder {}
 impl NvEncoder {
     /// Opens an encoder for `setup`, on the first GPU that has one.
     pub fn open(setup: EncoderSetup) -> Result<NvEncoder, String> {
+        let _one_at_a_time = super::starting_a_driver();
         let count = Cuda::load()?.device_count()?;
         if count == 0 {
             return Err("no CUDA device".into());

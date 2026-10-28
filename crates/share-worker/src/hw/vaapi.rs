@@ -984,6 +984,7 @@ impl VaEncoder {
     /// Opens an encoder for `setup` (already lowered to the hardware limits) on the first render
     /// node and profile that works.
     pub fn open(setup: EncoderSetup) -> Result<VaEncoder, String> {
+        let _one_at_a_time = super::starting_a_driver();
         let api = Arc::new(Api::load()?);
         let mut nodes = render_nodes();
         if nodes.is_empty() {

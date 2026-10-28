@@ -118,6 +118,17 @@ pub fn open_h264(
     Ok((encoder, "software"))
 }
 
+/// Held while a GPU driver starts: one at a time in a process. NVIDIA's VA-API driver calls
+/// `cuInit` while the loader loads it, and `cuInit` loads libraries itself, so NVENC and VA-API
+/// starting at once wait on each other's lock (CUDA's and the loader's) for good.
+#[cfg(target_os = "linux")]
+pub(crate) fn starting_a_driver() -> std::sync::MutexGuard<'static, ()> {
+    static STARTING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    STARTING
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 /// A small setup that every hardware encoder opens, for the start-up probe.
 pub const PROBE: EncoderSetup = EncoderSetup {
     width: 640,
@@ -304,5 +315,50 @@ mod tests {
         let why = open_first(&list, PROBE).err().unwrap();
         assert_eq!(why, "nvenc: no driver; vaapi: no render node");
         assert!(open_first(&[], PROBE).is_err());
+    }
+
+    /// Set in the child process of `nvenc_and_vaapi_open_at_the_same_time`.
+    #[cfg(target_os = "linux")]
+    const RACE_CHILD: &str = "ANYPLAY_HW_RACE_CHILD";
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn nvenc_and_vaapi_open_at_the_same_time() {
+        use std::time::{Duration, Instant};
+        if std::env::var_os(RACE_CHILD).is_some() {
+            // Both drivers start at once, as two streams or two tests would start them.
+            let start = std::sync::Arc::new(std::sync::Barrier::new(2));
+            let va = start.clone();
+            let vaapi = std::thread::spawn(move || {
+                va.wait();
+                let _ = vaapi::VaEncoder::open(PROBE);
+            });
+            start.wait();
+            let _ = nvenc::NvEncoder::open(PROBE);
+            vaapi.join().unwrap();
+            return;
+        }
+        // In a child process: a deadlock there can be ended, here it would hang every test.
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "hw::tests::nvenc_and_vaapi_open_at_the_same_time",
+            ])
+            .env(RACE_CHILD, "1")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while Instant::now() < deadline {
+            if let Some(status) = child.try_wait().unwrap() {
+                assert!(status.success(), "{status}");
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let _ = child.kill();
+        let _ = child.wait();
+        panic!("opening NVENC and VA-API at the same time never ended");
     }
 }
