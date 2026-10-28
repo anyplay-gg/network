@@ -1703,6 +1703,7 @@ impl Service {
                     .key
                     .as_deref()
                     .and_then(anyplay_proof::DeviceKey::from_secret);
+                tracing::info!("resuming the saved sign-in of device {}", saved.device);
                 cloud.resume(saved.device, saved.refresh, key);
                 service.link = control::Cloud::Connecting;
                 service.state_changed();
