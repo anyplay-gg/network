@@ -4,20 +4,29 @@
 //! Verifies the invariants from docs/gaps.md and spec/control-protocol.md:
 //! 1. Crash and panic freedom: arbitrary byte sequences (valid or invalid JSON, corrupted framing,
 //!    unexpected commands, missing arguments) never crash or panic the service.
-//! 2. Bounded line buffering: lines exceeding `control::MAX_LINE` (1 MiB) are discarded without
-//!    unbounded memory growth.
+//! 2. Bounded line buffering: an oversized line (> 1 MiB) does not stop the service loop or
+//!    prevent reading subsequent commands.
 //! 3. Clean termination on EOF: when the launcher's stream ends, the service loop terminates cleanly.
-//! 4. Protocol output validity: every output emitted by the service is within `MAX_LINE`, ends with
-//!    `\n`, is valid UTF-8 and valid JSON, and parses as a control `Output` (either `Answer` or `Event`).
-//! 5. Request-reply correspondence: for unique command IDs, at most one answer is returned.
+//! 4. Protocol output validity: every line emitted by the service fits within `control::MAX_LINE`,
+//!    parses as valid JSON, and deserializes into a control `Output` (either `Answer` or `Event`).
+//! 5. Request-reply correspondence: the number of answers returned for an id never exceeds the
+//!    number of lines in the input that carried that command id.
+//!
+//! Note on hermeticity and test environment:
+//! - To keep the fuzzer hermetic, deterministic, and isolated from external networks or browser
+//!   invocations, `hello` commands are filtered out before being streamed to the service. This
+//!   exercises the entire pre-`hello` dispatch surface, unrecognized commands, oversized lines,
+//!   and error responses without attempting cloud connections.
+//! - `bind: 127.0.0.1:0`, the bridge listener, and `Traffic::start` allocate loopback sockets per
+//!   iteration.
 
 #![no_main]
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::sync::LazyLock;
 use std::time::Duration;
 
-use anyplay_control::{MAX_LINE, Output, parse_output};
+use anyplay_control::{Command, MAX_LINE, Output, parse_command, parse_output};
 use anyplay_net::{Config, install_crypto, run};
 use libfuzzer_sys::fuzz_target;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -61,7 +70,7 @@ fuzz_target!(|data: &[u8]| {
 
         let reader = tokio::spawn(async move {
             let mut lines = BufReader::new(client_reader).lines();
-            let mut answer_ids = HashSet::new();
+            let mut answer_counts: HashMap<u64, usize> = HashMap::new();
 
             while let Ok(Some(line)) = lines.next_line().await {
                 assert!(line.len() <= MAX_LINE, "output line exceeds MAX_LINE");
@@ -69,13 +78,10 @@ fuzz_target!(|data: &[u8]| {
                     .unwrap_or_else(|| panic!("output line failed to parse: {line:?}"));
 
                 if let Output::Answer(ref answer) = output {
-                    assert!(
-                        answer_ids.insert(answer.id),
-                        "duplicate answer received for command id {}",
-                        answer.id
-                    );
+                    *answer_counts.entry(answer.id).or_default() += 1;
                 }
             }
+            answer_counts
         });
 
         let (chunk_size, wire) = match data.split_first() {
@@ -91,7 +97,45 @@ fuzz_target!(|data: &[u8]| {
             wire
         };
 
-        for chunk in wire.chunks(chunk_size) {
+        // Track how many times each command id appears in the input wire, and filter out
+        // `hello` to preserve hermeticity (preventing arbitrary network or browser requests).
+        let mut sent_id_counts: HashMap<u64, usize> = HashMap::new();
+        let mut sanitized_wire = Vec::with_capacity(wire.len());
+
+        let mut pos = 0;
+        while pos < wire.len() {
+            let newline = wire[pos..].iter().position(|&b| b == b'\n');
+            let end = match newline {
+                Some(idx) => pos + idx + 1,
+                None => wire.len(),
+            };
+            let slice = &wire[pos..end];
+            pos = end;
+
+            // Check if this line is a command or has an id
+            if let Ok(text) = std::str::from_utf8(slice) {
+                let trimmed = text.trim_end();
+                match parse_command(trimmed) {
+                    Ok((_id, Command::Hello { .. })) => {
+                        // Drop `hello` to keep the fuzzer strictly hermetic.
+                        continue;
+                    }
+                    Ok((id, _)) => {
+                        *sent_id_counts.entry(id).or_default() += 1;
+                    }
+                    Err(Some(id)) => {
+                        // Service::read_commands emits Input::BadCommand(Some(id)) for malformed commands
+                        // where an integer id was present, which generates an UNKNOWN_COMMAND answer.
+                        *sent_id_counts.entry(id).or_default() += 1;
+                    }
+                    Err(None) => {}
+                }
+            }
+
+            sanitized_wire.extend_from_slice(slice);
+        }
+
+        for chunk in sanitized_wire.chunks(chunk_size) {
             if client_writer.write_all(chunk).await.is_err() {
                 break;
             }
@@ -112,14 +156,20 @@ fuzz_target!(|data: &[u8]| {
             }
         }
 
-        // Await reader completion.
-        match tokio::time::timeout(Duration::from_secs(2), reader).await {
-            Ok(res) => {
-                res.expect("reader task panicked");
-            }
+        // Await reader completion and verify answer counts against sent commands.
+        let answer_counts = match tokio::time::timeout(Duration::from_secs(2), reader).await {
+            Ok(res) => res.expect("reader task panicked"),
             Err(_) => {
                 panic!("reader task failed to finish within timeout");
             }
+        };
+
+        for (id, count) in answer_counts {
+            let sent = sent_id_counts.get(&id).copied().unwrap_or(0);
+            assert!(
+                count <= sent,
+                "received {count} answers for command id {id}, but only {sent} were sent"
+            );
         }
     });
 });

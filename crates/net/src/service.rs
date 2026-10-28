@@ -5112,17 +5112,28 @@ mod hardening_tests {
         });
 
         use tokio::io::AsyncWriteExt as _;
+        // 1. Corrupt non-JSON bytes are dropped without answers.
         client_writer
             .write_all(b"not json\n{bad json}\n")
             .await
             .unwrap();
+        // 2. An oversized line (> MAX_LINE) is dropped piece by piece without stopping the loop.
         let mut big = vec![b'a'; control::MAX_LINE + 10];
         big.push(b'\n');
         client_writer.write_all(&big).await.unwrap();
+        // 3. Unknown command returns UNKNOWN_COMMAND with its id.
+        client_writer
+            .write_all(b"{\"id\":5,\"do\":\"nope\"}\n")
+            .await
+            .unwrap();
+        // 4. Valid command before hello returns BAD_STATE ("Say hello first.").
+        // Successfully receiving this answer also confirms that the preceding oversized
+        // line was cleanly skipped and the loop continued reading subsequent commands.
         client_writer
             .write_all(b"{\"id\":10,\"do\":\"join_code_revoke\"}\n")
             .await
             .unwrap();
+        // 5. EOF closes the control stream and terminates the service loop.
         drop(client_writer);
 
         let service_res = tokio::time::timeout(Duration::from_secs(5), service)
@@ -5135,8 +5146,22 @@ mod hardening_tests {
             .expect("reader must complete on EOF")
             .unwrap();
 
-        assert_eq!(answers.len(), 1);
-        assert_eq!(answers[0].id, 10);
+        assert_eq!(answers.len(), 2);
+        assert_eq!(answers[0].id, 5);
+        match &answers[0].outcome {
+            control::Outcome::Error(failure) => {
+                assert_eq!(failure.code, control::Failure::UNKNOWN_COMMAND);
+            }
+            control::Outcome::Ok(_) => panic!("expected unknown_command failure"),
+        }
+
+        assert_eq!(answers[1].id, 10);
+        match &answers[1].outcome {
+            control::Outcome::Error(failure) => {
+                assert_eq!(failure.code, control::Failure::BAD_STATE);
+            }
+            control::Outcome::Ok(_) => panic!("expected bad_state failure"),
+        }
     }
 
     #[test]
