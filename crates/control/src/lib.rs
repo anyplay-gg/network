@@ -190,6 +190,12 @@ pub enum Command {
     SetPublicProfile {
         on: bool,
     },
+    /// Who sees the player's scores on boards: `ScorePrivacy`.
+    ScorePrivacy,
+    /// `{scores}`: `friends`, `everyone` or `nobody`.
+    SetScorePrivacy {
+        scores: anyplay_api::Audience,
+    },
     /// The people the player played with recently: `{remember, people}`.
     PlayedWith,
     /// Empties that list.
@@ -1527,6 +1533,19 @@ mod tests {
         assert_eq!(
             parse_command(r#"{"id":8,"do":"set_public_profile","on":true}"#),
             Ok((8, Command::SetPublicProfile { on: true }))
+        );
+        assert_eq!(
+            parse_command(r#"{"id":20,"do":"score_privacy"}"#),
+            Ok((20, Command::ScorePrivacy))
+        );
+        assert_eq!(
+            parse_command(r#"{"id":21,"do":"set_score_privacy","scores":"nobody"}"#),
+            Ok((
+                21,
+                Command::SetScorePrivacy {
+                    scores: anyplay_api::Audience::Nobody
+                }
+            ))
         );
         assert_eq!(
             parse_command(r#"{"id":9,"do":"played_with"}"#),

@@ -108,6 +108,8 @@ When the cloud retires this launcher's version ([cloud API](cloud-api.md#convent
 | `played_with` | | `{remember, people}`: the people the player played with recently ([Played with recently](cloud-api.md#played-with-recently)) |
 | `clear_played_with` | | `{}`: empties that list |
 | `set_remember_played_with` | `on` | `{remember_played_with}`: the new setting |
+| `score_privacy` | | `{scores}`: who sees the player's scores on boards (`friends`, `everyone` or `nobody`; `friends` for a new account), see [Leaderboards](cloud-api.md#leaderboards); works while the leaderboard feature is off |
+| `set_score_privacy` | `scores` | `{scores}`: the new setting |
 | `privacy` | | the player's `Privacy` |
 | `set_privacy` | `privacy` | the new `Privacy` |
 | `profile` | `account` | `ProfilePage`: the `Profile` with the parts the player may see of that account, their trophy counts (null when hidden) and the connections they show (`links`) |

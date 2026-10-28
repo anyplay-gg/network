@@ -1041,6 +1041,22 @@ impl Service {
                     |_, p| p,
                 );
             }
+            Command::ScorePrivacy => {
+                let Some(cloud) = self.signed_in_cloud(id) else {
+                    return;
+                };
+                self.request(id, async move { cloud.score_privacy().await }, |_, p| p);
+            }
+            Command::SetScorePrivacy { scores } => {
+                let Some(cloud) = self.signed_in_cloud(id) else {
+                    return;
+                };
+                self.request(
+                    id,
+                    async move { cloud.set_score_privacy(scores).await },
+                    |_, p| p,
+                );
+            }
             Command::Privacy => {
                 let Some(cloud) = self.signed_in_cloud(id) else {
                     return;

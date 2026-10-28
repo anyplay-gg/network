@@ -6,15 +6,15 @@ use std::time::Duration;
 use anyplay_api::client::{CLIENT_HEADER, ClientId};
 use anyplay_api::{
     AcceptShare, AccountId, AccountLink, AccountTrophies, AddToConversation, Added, ApiError,
-    AppealRequest, AppearOffline, BrowserTokenRequest, Cards, CodeAnswer, CodeRequest,
+    AppealRequest, AppearOffline, Audience, BrowserTokenRequest, Cards, CodeAnswer, CodeRequest,
     Conversation, Conversations, CreateConversation, CreateSession, CreateShare, Device,
     DiscordCodeExchange, DiscordRefresh, DiscordTokens, EmailAnswer, EmailRequest, ErrorCode,
     FriendLists, FriendRequest, FriendRequestAnswer, Info, Invite, Invited, JoinCode, JoinSession,
     MarkRead, Me, Message, Messages, MoveParty, Party, PartyEndpoint, PartyInvitations,
     PlayedWithList, PlaytimeAdded, PlaytimeEntry, PlaytimeUpload, PresenceRequest, Privacy,
     ProfilePage, PublicProfile, Rarity, ReactionRequest, Reactions, Redeemed, RefreshRequest,
-    Relays, RememberPlayedWith, Report, RunReport, RunSummary, SecretsChanged, SendMessage,
-    Session, Share, ShareInvitations, SignedIn, SignupRequest, Statement, Statements,
+    Relays, RememberPlayedWith, Report, RunReport, RunSummary, ScorePrivacy, SecretsChanged,
+    SendMessage, Session, Share, ShareInvitations, SignedIn, SignupRequest, Statement, Statements,
     TicketRequest, Tokens, TrophiesAdded, Trophy, TrophyCompare, TrophyNumbers, TrophyUpload,
     UpdateParty, UpdateSession, UpdateShare, path,
 };
@@ -747,6 +747,17 @@ impl Cloud {
     pub async fn set_public_profile(&self, on: bool) -> Result<PublicProfile, CloudError> {
         let body = PublicProfile { public_profile: on };
         self.call(Method::PUT, path::PUBLIC_PROFILE, Some(&body))
+            .await
+    }
+
+    pub async fn score_privacy(&self) -> Result<ScorePrivacy, CloudError> {
+        self.call::<(), _>(Method::GET, path::SCORE_PRIVACY, None)
+            .await
+    }
+
+    pub async fn set_score_privacy(&self, scores: Audience) -> Result<ScorePrivacy, CloudError> {
+        let body = ScorePrivacy { scores };
+        self.call(Method::PUT, path::SCORE_PRIVACY, Some(&body))
             .await
     }
 
