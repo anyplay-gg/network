@@ -19,6 +19,10 @@ anyplay-bridge-protocol = { path = "../crates/bridge-protocol" }
 anyplay-control = { path = "../crates/control" }
 anyplay-share = { path = "../crates/share" }
 anyplay-voice = { path = "../crates/voice" }
+anyplay-discord = { path = "../crates/discord" }
+anyplay-net = { path = "../crates/net" }
+tempfile = "3"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-util", "sync", "time"] }
 
 [[bin]]
 name = "bridge_message"
@@ -93,6 +97,13 @@ bench = false
 [[bin]]
 name = "share_control_line"
 path = "fuzz_targets/share_control_line.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "service_control"
+path = "fuzz_targets/service_control.rs"
 test = false
 doc = false
 bench = false

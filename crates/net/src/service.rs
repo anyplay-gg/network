@@ -5071,6 +5071,74 @@ mod hardening_tests {
         assert!(matches!(rx.recv().await.unwrap(), Input::ControlClosed));
     }
 
+    #[tokio::test]
+    async fn control_dispatcher_handles_arbitrary_chunked_inputs_and_exits_on_eof() {
+        crate::install_crypto();
+        let dir = tempfile::tempdir().unwrap();
+        let config = Config {
+            data: dir.path().to_path_buf(),
+            file_credentials: true,
+            relay_roots: Vec::new(),
+            bind: Some("127.0.0.1:0".parse().unwrap()),
+            relay_only: false,
+            device_name: "test".into(),
+            audio: voice::Audio::system(),
+            workers: screen::WorkerSet::new(crate::worker_process::ProcessWorkers::new()),
+            discord: anyplay_discord::Backend::Off,
+        };
+
+        let (mut client_writer, service_reader) = tokio::io::duplex(64 * 1024);
+        let (service_writer, client_reader) = tokio::io::duplex(64 * 1024);
+
+        let service = tokio::spawn(run(
+            config,
+            service_reader,
+            service_writer,
+            std::future::pending(),
+        ));
+
+        let reader = tokio::spawn(async move {
+            use tokio::io::AsyncBufReadExt as _;
+            let mut lines = tokio::io::BufReader::new(client_reader).lines();
+            let mut answers = Vec::new();
+            while let Ok(Some(line)) = lines.next_line().await {
+                assert!(line.len() <= control::MAX_LINE);
+                let output = control::parse_output(&line).expect("output must parse");
+                if let control::Output::Answer(ans) = output {
+                    answers.push(ans);
+                }
+            }
+            answers
+        });
+
+        use tokio::io::AsyncWriteExt as _;
+        client_writer
+            .write_all(b"not json\n{bad json}\n")
+            .await
+            .unwrap();
+        let mut big = vec![b'a'; control::MAX_LINE + 10];
+        big.push(b'\n');
+        client_writer.write_all(&big).await.unwrap();
+        client_writer
+            .write_all(b"{\"id\":10,\"do\":\"join_code_revoke\"}\n")
+            .await
+            .unwrap();
+        drop(client_writer);
+
+        let service_res = tokio::time::timeout(Duration::from_secs(5), service)
+            .await
+            .expect("service must exit within timeout on EOF");
+        service_res.unwrap().unwrap();
+
+        let answers = tokio::time::timeout(Duration::from_secs(2), reader)
+            .await
+            .expect("reader must complete on EOF")
+            .unwrap();
+
+        assert_eq!(answers.len(), 1);
+        assert_eq!(answers[0].id, 10);
+    }
+
     #[test]
     fn the_endpoint_key_is_kept_and_read_back() {
         let dir = tempfile::tempdir().unwrap();
