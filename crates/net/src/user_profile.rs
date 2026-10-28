@@ -1,6 +1,6 @@
 //! The web API group `userProfile` ([`spec/web-api/userProfile.md`](../../../spec/web-api/userProfile.md)):
-//! the signed-in player's friends and the profiles of the player and those friends, from the
-//! AnyPlay friend list the service already holds. Nothing here asks the cloud.
+//! the signed-in player's friends and blocked accounts and the profiles of the player and those
+//! friends, from the AnyPlay friend list the service already holds. Nothing here asks the cloud.
 //!
 //! The id a game sees for an account is the AnyPlay account number itself, for the player and
 //! for every friend, so both players' PCs agree on it.
@@ -23,8 +23,9 @@ pub const MAX_LIMIT: usize = 2000;
 /// The most profiles one request is answered for; further ids are left out.
 pub const MAX_PROFILES: usize = 100;
 
-/// Override keys (see the spec): the two calls of the group.
+/// Override keys (see the spec): the calls of the group.
 const FRIENDS: &str = "friends";
+const BLOCKS: &str = "blocks";
 const PROFILES: &str = "profiles";
 
 /// How an id is written.
@@ -58,6 +59,8 @@ pub struct Shape {
     pub items: Items,
     /// The array of friends in the `friends` answer.
     pub friends_key: String,
+    /// The array of blocked accounts in the `blocks` answer.
+    pub blocks_key: String,
     /// The array of profiles in the `profiles` answer.
     pub profiles_key: String,
     /// The id of a profile or of a friend written as an object.
@@ -75,6 +78,7 @@ impl Default for Shape {
             ids: IdForm::default(),
             items: Items::default(),
             friends_key: "friends".into(),
+            blocks_key: "blocks".into(),
             profiles_key: "profiles".into(),
             id_key: "accountId".into(),
             name_key: "onlineId".into(),
@@ -122,9 +126,9 @@ pub fn answer(web: &WebRequest, ctx: &Context<'_>) -> Option<WebReply> {
     let (path, query) = web.path.split_once('?').unwrap_or((web.path.as_str(), ""));
     let parts: Vec<&str> = path.trim_matches('/').split('/').collect();
     match parts[..] {
-        ["v1", "users", user, "friends"] => {
+        ["v1", "users", user, call @ ("friends" | "blocks")] => {
             if user != "me" && user.parse::<u64>().ok() != Some(me) {
-                // Another player's friends are not ours to tell.
+                // Another player's friends and blocks are not ours to tell.
                 tracing::debug!(
                     target: "anyplay_net::webapi",
                     group = GROUP,
@@ -132,7 +136,11 @@ pub fn answer(web: &WebRequest, ctx: &Context<'_>) -> Option<WebReply> {
                 );
                 return None;
             }
-            Some(friends(me, ctx, query))
+            Some(if call == "friends" {
+                friends(me, ctx, query)
+            } else {
+                blocks(me, ctx, query)
+            })
         }
         ["v1", "users", "profiles"] => Some(profiles(me, ctx, query)),
         _ => None,
@@ -159,12 +167,37 @@ fn visible_friends(me: u64, lists: &FriendLists) -> Vec<Seen> {
     friends
 }
 
+/// The accounts the player blocked, in the same order as the friends. The player themself never
+/// appears.
+fn visible_blocks(me: u64, lists: &FriendLists) -> Vec<Seen> {
+    let mut seen = HashSet::new();
+    let mut blocks: Vec<Seen> = lists
+        .blocked
+        .iter()
+        .filter(|a| a.id.0 != me && seen.insert(a.id.0))
+        .map(|a| Seen {
+            id: a.id.0,
+            handle: a.handle.clone(),
+        })
+        .collect();
+    blocks.sort_by_cached_key(|b| (b.handle.to_lowercase(), b.id));
+    blocks
+}
+
 fn friends(me: u64, ctx: &Context<'_>, query: &str) -> WebReply {
-    let all = visible_friends(me, ctx.friends);
+    listing(me, ctx, query, FRIENDS, visible_friends(me, ctx.friends))
+}
+
+fn blocks(me: u64, ctx: &Context<'_>, query: &str) -> WebReply {
+    listing(me, ctx, query, BLOCKS, visible_blocks(me, ctx.friends))
+}
+
+/// A paged list of accounts, the answer of `friends` and of `blocks`.
+fn listing(me: u64, ctx: &Context<'_>, query: &str, call: &str, all: Vec<Seen>) -> WebReply {
     let offset = number(query, "offset").unwrap_or(0);
     let limit = number(query, "limit").map_or(MAX_LIMIT, |l| l.min(MAX_LIMIT));
     let page: Vec<&Seen> = all.iter().skip(offset).take(limit).collect();
-    let (shape, replacement) = shape_of(ctx, FRIENDS);
+    let (shape, replacement) = shape_of(ctx, call);
     let items: Vec<Value> = page
         .iter()
         .map(|f| match shape.items {
@@ -173,7 +206,12 @@ fn friends(me: u64, ctx: &Context<'_>, query: &str) -> WebReply {
         })
         .collect();
     let mut body = Map::new();
-    put(&mut body, &shape.friends_key, Value::Array(items));
+    let key = if call == BLOCKS {
+        &shape.blocks_key
+    } else {
+        &shape.friends_key
+    };
+    put(&mut body, key, Value::Array(items));
     put(&mut body, &shape.offset_key, offset.into());
     put(&mut body, &shape.limit_key, limit.into());
     put(&mut body, &shape.total_key, all.len().into());
@@ -200,7 +238,7 @@ fn friends(me: u64, ctx: &Context<'_>, query: &str) -> WebReply {
     ];
     reply(
         me,
-        FRIENDS,
+        call,
         page.len(),
         replacement,
         &Value::Object(body),
@@ -460,6 +498,86 @@ mod tests {
         assert_eq!(body(&reply)["total"], 1);
         let asked = answer(&request("/v1/users/profiles?accountIds=44"), &ctx(&l, None)).unwrap();
         assert_eq!(body(&asked)["profiles"], json!([]));
+    }
+
+    const BLOCKS_PATH: &str = "/v1/users/me/blocks?limit=2000";
+
+    #[test]
+    fn blocks_are_listed_for_me_and_for_the_own_account_id() {
+        let l = lists(&[(43, "bob")], &[(47, "Zoe"), (45, "amy"), (46, "Amy")]);
+        let want = json!({"blocks": ["45", "46", "47"], "offset": 0, "limit": 2000, "total": 3});
+        for path in [BLOCKS_PATH, "/v1/users/42/blocks?offset=0&limit=2000"] {
+            let reply = answer(&request(path), &ctx(&l, None)).unwrap();
+            assert_eq!(reply.status, 200, "{path}");
+            assert_eq!(body(&reply), want, "{path}");
+        }
+    }
+
+    #[test]
+    fn blocks_of_another_account_or_a_signed_out_player_are_not_offered() {
+        let l = lists(&[], &[(47, "zoe")]);
+        let c = ctx(&l, None);
+        assert!(answer(&request("/v1/users/43/blocks"), &c).is_none());
+        assert!(answer(&request("/v1/users/local_268435456/blocks?"), &c).is_none());
+        assert!(answer(&request("/v1/users/42/blocks/extra"), &c).is_none());
+        let mut post = request(BLOCKS_PATH);
+        post.method = "POST".into();
+        assert!(answer(&post, &c).is_none());
+        let mut out = ctx(&l, None);
+        out.account = None;
+        assert!(answer(&request(BLOCKS_PATH), &out).is_none());
+    }
+
+    #[test]
+    fn blocks_are_paged_and_without_blocks_the_list_is_empty() {
+        let l = lists(
+            &[],
+            &[(1, "a"), (2, "b"), (3, "c"), (4, "d"), (3, "c"), (42, "me")],
+        );
+        let page = |q: &str| {
+            let reply = answer(
+                &request(&format!("/v1/users/me/blocks?{q}")),
+                &ctx(&l, None),
+            );
+            body(&reply.unwrap())
+        };
+        assert_eq!(page("offset=1&limit=2")["blocks"], json!(["2", "3"]));
+        assert_eq!(page("offset=1&limit=2")["total"], 4);
+        assert_eq!(page("offset=9")["blocks"], json!([]));
+        assert_eq!(page("limit=999999")["limit"], MAX_LIMIT);
+        let none = lists(&[(43, "bob")], &[]);
+        let reply = answer(&request(BLOCKS_PATH), &ctx(&none, None)).unwrap();
+        assert_eq!(reply.status, 200);
+        assert_eq!(
+            body(&reply),
+            json!({"blocks": [], "offset": 0, "limit": 2000, "total": 0})
+        );
+    }
+
+    #[test]
+    fn a_shape_or_reply_override_applies_to_blocks_only() {
+        let (_dir, file) = overrides(
+            r#"{"userProfile": {
+                "blocks": {"shape": {"items": "objects", "ids": "number",
+                    "blocks_key": "list", "id_key": "id", "name_key": "name", "limit_key": ""}}}}"#,
+        );
+        let l = lists(&[(43, "bob")], &[(47, "zoe")]);
+        let c = ctx(&l, Some(&file));
+        let b = answer(&request(BLOCKS_PATH), &c).unwrap();
+        assert_eq!(
+            body(&b),
+            json!({"list": [{"id": 47, "name": "zoe"}], "offset": 0, "total": 1})
+        );
+        let f = answer(&request(FRIENDS_PATH), &c).unwrap();
+        assert_eq!(body(&f)["friends"], json!(["43"]));
+        let (_dir2, whole) = overrides(
+            r#"{"userProfile": {"blocks": {"status": 200, "body_text": "{\"n\":{total},\"b\":{ids}}"}}}"#,
+        );
+        let b = answer(&request(BLOCKS_PATH), &ctx(&l, Some(&whole))).unwrap();
+        assert_eq!(
+            String::from_utf8(b.body).unwrap(),
+            "{\"n\":1,\"b\":[\"47\"]}"
+        );
     }
 
     #[test]

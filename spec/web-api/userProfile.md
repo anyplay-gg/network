@@ -22,6 +22,15 @@ Status: **offered**, with body shapes that are guesses until a game we own has a
 | How often | signed out: 4 times, the first 105 s after the start, then every 5 to 10 s; signed in: once, when the player chooses to host, after `communicationRestrictionStatus` |
 | Calls | `sceNpWebApi2CreateUserContext` once, then for each request `sceNpWebApi2CreateRequest`, `sceNpWebApi2AddHttpRequestHeader`, `sceNpWebApi2SendRequest` and `sceNpWebApi2DeleteRequest` |
 
+### `GET /v1/users/{user}/blocks`
+
+| Part | Seen |
+|---|---|
+| `{user}` | `me` |
+| Query | `limit=2000` |
+| Body | none |
+| How often | once at the start of a signed-in run, next to `communicationRestrictionStatus`; while the call was not offered, `sceNpWebApi2SendRequest` returned `0x80553406` with status 0 |
+
 ### `GET /v1/users/profiles?accountIds={id}`
 
 | Part | Seen |
@@ -56,6 +65,14 @@ Offered when `{user}` is the signed-in account's ID or `me`. Another ID, and the
 { "friends": ["1002", "1005"], "offset": 0, "limit": 2000, "total": 2 }
 ```
 
+### `GET /v1/users/{user}/blocks`
+
+Offered under the same rules as `friends`: `{user}` is the signed-in account's ID or `me`, anything else stays "not offered". The answer lists the **AnyPlay accounts the player blocked** and no one else, taken from the `blocked` list of the same cloud friend list the friends come from, so nothing more is asked of the cloud. It never says who blocked the player, and it holds nothing about accounts of any platform. The player themself never appears. Order and paging are those of `friends` (`offset`, `limit`, default and maximum 2000, `total` before paging). A player with no blocks gets status 200 and an empty list. A blocked account is also left out of `friends` and `profiles`.
+
+```json
+{ "blocks": ["1007"], "offset": 0, "limit": 2000, "total": 1 }
+```
+
 ### `GET /v1/users/profiles?accountIds={id}[,{id}...]`
 
 `accountIds` may be repeated and may hold a comma-separated list (`%2C` works too); `me` stands for the player. The answer holds a profile for each requested account that is **the player or one of their accepted friends**, in the order asked, each once, at most 100 per request. Any other id is **left out**: an account that is not a friend, a blocked one, one that does not exist and a value that is not a number all look the same, so the answer never says whether an account exists. A request with nothing to show gets status 200 and an empty list.
@@ -74,7 +91,7 @@ Each answer is logged at debug level (`ANYPLAY_NET_LOG=anyplay_net::webapi=debug
 
 ## Trying other shapes (testers)
 
-Use the override file of the other groups: `ANYPLAY_NET_WEBAPI_OVERRIDES=<path>` (off when unset; for testing only). It is read on every request, so edit it while the game runs; a file that cannot be read or parsed is logged as a warning and the defaults are used. The group is `userProfile`, the two calls are `friends` and `profiles`. Each call takes a `shape` for the default answer, a whole reply, or both (the whole reply wins):
+Use the override file of the other groups: `ANYPLAY_NET_WEBAPI_OVERRIDES=<path>` (off when unset; for testing only). It is read on every request, so edit it while the game runs; a file that cannot be read or parsed is logged as a warning and the defaults are used. The group is `userProfile`, the three calls are `friends`, `blocks` and `profiles`. Each call takes a `shape` for the default answer, a whole reply, or both (the whole reply wins):
 
 ```json
 {
@@ -90,12 +107,12 @@ Use the override file of the other groups: `ANYPLAY_NET_WEBAPI_OVERRIDES=<path>`
 | Key of `shape` | Default | Meaning |
 |---|---|---|
 | `ids` | `"string"` | `"string"` writes `"1002"`, `"number"` writes `1002` |
-| `items` | `"ids"` | what a friend is in the `friends` list: `"ids"` or `"objects"` (id and name, like a profile) |
-| `friends_key`, `profiles_key` | `friends`, `profiles` | the array's name |
+| `items` | `"ids"` | what an entry is in the `friends` and `blocks` lists: `"ids"` or `"objects"` (id and name, like a profile) |
+| `friends_key`, `blocks_key`, `profiles_key` | `friends`, `blocks`, `profiles` | the array's name |
 | `id_key`, `name_key` | `accountId`, `onlineId` | the fields of a profile, and of a friend written as an object |
-| `offset_key`, `limit_key`, `total_key` | `offset`, `limit`, `total` | the paging fields of the `friends` answer |
+| `offset_key`, `limit_key`, `total_key` | `offset`, `limit`, `total` | the paging fields of the `friends` and `blocks` answers |
 
-A key set to `""` is left out. A whole reply has `status` (default 200), `headers` (default a JSON content type), `body` (any JSON value) and `body_text` (sent byte for byte, an empty string for an empty body; it wins over `body`). In `body_text` these are replaced by live values: `{account}`, `{handle}`, `{total}`, `{count}`, `{ids}` (the JSON array of the ids shown), `{profiles}` (the JSON array of the profiles shown), and for `friends` also `{offset}` and `{limit}`. They follow the `shape`. Write down in this file what the game did with each shape you tried.
+A key set to `""` is left out. A whole reply has `status` (default 200), `headers` (default a JSON content type), `body` (any JSON value) and `body_text` (sent byte for byte, an empty string for an empty body; it wins over `body`). In `body_text` these are replaced by live values: `{account}`, `{handle}`, `{total}`, `{count}`, `{ids}` (the JSON array of the ids shown), `{profiles}` (the JSON array of the profiles shown), and for `friends` and `blocks` also `{offset}` and `{limit}`. They follow the `shape`. Write down in this file what the game did with each shape you tried.
 
 ## Unknown
 
