@@ -12,6 +12,7 @@ on:
       - "crates/control/**"
       - "crates/share/**"
       - "crates/voice/**"
+      - "crates/net/**"
       - "fuzz/**"
       - ".github/workflows/fuzz.yml"
   schedule:
@@ -39,6 +40,7 @@ jobs:
           - bridge_handshake
           - traffic_header
           - control_line
+          - service_control
           - voice_frame
           - share_video_datagram
           - share_audio_datagram
