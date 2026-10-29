@@ -96,6 +96,8 @@ fn main() -> std::process::ExitCode {
         },
     ));
     runtime.shutdown_timeout(std::time::Duration::from_secs(2));
+    // A refresh that just replaced the token must reach the store before the process ends.
+    anyplay_net::credentials::wait_saved(std::time::Duration::from_secs(3));
     match result {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(error) => {

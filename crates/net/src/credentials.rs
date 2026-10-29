@@ -46,45 +46,126 @@ impl std::fmt::Debug for SavedDiscord {
 #[derive(Clone, Debug)]
 pub enum Store {
     /// The system's credential store: Credential Manager on Windows, the Secret Service on
-    /// Linux, the keychain on macOS.
+    /// Linux.
     System { user: String },
-    /// A file that only its owner may read.
-    File(PathBuf),
+    /// A file that only its owner may read. On macOS `keychain` names the keychain item that
+    /// older versions kept the sign-in in, which is read once to move it into the file.
+    File {
+        path: PathBuf,
+        keychain: Option<String>,
+    },
 }
 
 const SERVICE: &str = "AnyPlay";
 
+/// Why no sign-in was found, for `network.log`.
+#[derive(Debug, PartialEq, Eq)]
+enum Missing {
+    /// Nothing was ever kept (or a sign-out removed it).
+    Nothing,
+    /// The store could not be read: a keychain that denies this program, a locked Secret
+    /// Service, a file that cannot be opened.
+    Unreadable(String),
+    /// Something was kept, but it is not a sign-in this version understands.
+    Garbled(String),
+}
+
 impl Store {
     /// The store for the cloud at `cloud`: the system's when it works, else a file in `data`.
+    ///
+    /// On macOS it is always the file. A keychain item can be read only by the program that
+    /// made it, and the net service is a new program (a new ad-hoc signature) with every
+    /// launcher version, so the keychain would hand the sign-in to the version that saved it and
+    /// to no later one: the player would sign in again after every update.
     pub fn open(data: &std::path::Path, cloud: &str, prefer_file: bool) -> Self {
-        if !prefer_file && keyring::Entry::store_status().is_ok() {
-            return Store::System {
-                user: cloud.to_owned(),
-            };
+        let store = Self::choose(data, cloud, prefer_file);
+        match &store {
+            Store::System { .. } => tracing::info!("the sign-in is kept in the system's store"),
+            Store::File { path, .. } => {
+                tracing::info!("the sign-in is kept in {}", path.display());
+            }
+        }
+        store
+    }
+
+    fn choose(data: &std::path::Path, cloud: &str, prefer_file: bool) -> Self {
+        let macos = cfg!(target_os = "macos");
+        if !prefer_file && !macos {
+            match keyring::Entry::store_status() {
+                Ok(()) => {
+                    return Store::System {
+                        user: cloud.to_owned(),
+                    };
+                }
+                Err(error) => {
+                    tracing::warn!("no system credential store, using a file: {error}");
+                }
+            }
         }
         let name: String = cloud
             .chars()
             .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
             .take(80)
             .collect();
-        Store::File(data.join(format!("signin-{name}.json")))
+        Store::File {
+            path: data.join(format!("signin-{name}.json")),
+            keychain: (macos && !prefer_file).then(|| cloud.to_owned()),
+        }
     }
 
+    /// The kept sign-in. When there is none, `network.log` says why.
     pub fn load(&self) -> Option<Saved> {
-        serde_json::from_str(&self.read()?).ok()
+        match self.read() {
+            Ok(text) => match serde_json::from_str(&text) {
+                Ok(saved) => Some(saved),
+                Err(error) => {
+                    self.report(&Missing::Garbled(error.to_string()));
+                    None
+                }
+            },
+            Err(missing) => {
+                self.report(&missing);
+                None
+            }
+        }
     }
 
-    fn read(&self) -> Option<String> {
+    fn report(&self, missing: &Missing) {
+        let place = match self {
+            Store::System { .. } => "the system's credential store".to_owned(),
+            Store::File { path, .. } => path.display().to_string(),
+        };
+        match missing {
+            Missing::Nothing => tracing::info!("no saved sign-in in {place}"),
+            Missing::Unreadable(why) => {
+                tracing::warn!("the saved sign-in in {place} cannot be read: {why}");
+            }
+            Missing::Garbled(why) => {
+                tracing::warn!("the saved sign-in in {place} is not usable: {why}");
+            }
+        }
+    }
+
+    fn read(&self) -> Result<String, Missing> {
         match self {
-            Store::System { user } => keyring::Entry::new(SERVICE, user)
-                .and_then(|entry| entry.get_password())
-                .map_err(|error| {
-                    if !matches!(error, keyring::Error::NoEntry) {
-                        tracing::warn!("credential store: {error}");
+            Store::System { user } => read_system(user),
+            Store::File { path, keychain } => match std::fs::read_to_string(path) {
+                Ok(text) => Ok(text),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    let Some(user) = keychain else {
+                        return Err(Missing::Nothing);
+                    };
+                    // A sign-in kept by an older version sits in the keychain. It is read once,
+                    // and when this program may read it, moved to the file.
+                    let text = read_system(user)?;
+                    match write_private(path, &text) {
+                        Ok(()) => tracing::info!("moved the saved sign-in out of the keychain"),
+                        Err(error) => tracing::warn!("could not move the sign-in: {error}"),
                     }
-                })
-                .ok(),
-            Store::File(path) => std::fs::read_to_string(path).ok(),
+                    Ok(text)
+                }
+                Err(error) => Err(Missing::Unreadable(error.to_string())),
+            },
         }
     }
 
@@ -95,19 +176,29 @@ impl Store {
             Store::System { user } => Store::System {
                 user: format!("discord:{user}"),
             },
-            Store::File(path) => {
+            Store::File { path, keychain } => {
                 let name = path
                     .file_name()
                     .and_then(|n| n.to_str())
                     .unwrap_or("signin");
                 let name = name.strip_prefix("signin-").unwrap_or(name);
-                Store::File(path.with_file_name(format!("discord-{name}")))
+                Store::File {
+                    path: path.with_file_name(format!("discord-{name}")),
+                    keychain: keychain.as_ref().map(|user| format!("discord:{user}")),
+                }
             }
         }
     }
 
     pub fn load_discord(&self) -> Option<SavedDiscord> {
-        serde_json::from_str(&self.read()?).ok()
+        match self.read() {
+            Ok(text) => serde_json::from_str(&text).ok(),
+            Err(Missing::Nothing) => None,
+            Err(missing) => {
+                self.report(&missing);
+                None
+            }
+        }
     }
 
     pub fn save_discord(&self, saved: Option<&SavedDiscord>) {
@@ -124,25 +215,48 @@ impl Store {
             (Store::System { user }, Some(text)) => keyring::Entry::new(SERVICE, user)
                 .and_then(|entry| entry.set_password(&text))
                 .map_err(|e| e.to_string()),
-            (Store::System { user }, None) => keyring::Entry::new(SERVICE, user)
-                .and_then(|entry| entry.delete_credential())
-                .or_else(|error| match error {
-                    keyring::Error::NoEntry => Ok(()),
-                    other => Err(other),
-                })
-                .map_err(|e| e.to_string()),
-            (Store::File(path), Some(text)) => write_private(path, &text),
-            (Store::File(path), None) => match std::fs::remove_file(path) {
-                Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
-                    Err(error.to_string())
+            (Store::System { user }, None) => forget_system(user),
+            (Store::File { path, .. }, Some(text)) => write_private(path, &text),
+            (Store::File { path, keychain }, None) => {
+                let removed = match std::fs::remove_file(path) {
+                    Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+                        Err(error.to_string())
+                    }
+                    _ => Ok(()),
+                };
+                // A sign-out also removes what an older version left in the keychain, or the
+                // next start would move it back into the file. A keychain that denies this
+                // program is no failure here.
+                if let Some(user) = keychain
+                    && let Err(error) = forget_system(user)
+                {
+                    tracing::info!("the old keychain item stays: {error}");
                 }
-                _ => Ok(()),
-            },
+                removed
+            }
         };
         if let Err(error) = result {
             tracing::warn!("could not keep the sign-in: {error}");
         }
     }
+}
+
+fn read_system(user: &str) -> Result<String, Missing> {
+    match keyring::Entry::new(SERVICE, user).and_then(|entry| entry.get_password()) {
+        Ok(text) => Ok(text),
+        Err(keyring::Error::NoEntry) => Err(Missing::Nothing),
+        Err(error) => Err(Missing::Unreadable(error.to_string())),
+    }
+}
+
+fn forget_system(user: &str) -> Result<(), String> {
+    keyring::Entry::new(SERVICE, user)
+        .and_then(|entry| entry.delete_credential())
+        .or_else(|error| match error {
+            keyring::Error::NoEntry => Ok(()),
+            other => Err(other),
+        })
+        .map_err(|e| e.to_string())
 }
 
 /// One thread applies the saves of a sign-in in the order they were queued, so a sign-out can
@@ -158,13 +272,35 @@ enum Job {
     Flush(std::sync::mpsc::Sender<()>),
 }
 
+/// Saves queued and not yet written, in every queue of the process.
+static UNWRITTEN: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Waits until every queued save is written, at most `limit`. The service calls it before the
+/// process ends: a refresh token that the cloud already replaced but that never reached the
+/// store would sign the player out at the next start, and the launcher ends this process
+/// right before it starts the updated one. Returns whether everything was written.
+pub fn wait_saved(limit: std::time::Duration) -> bool {
+    let end = std::time::Instant::now() + limit;
+    while UNWRITTEN.load(std::sync::atomic::Ordering::SeqCst) > 0 {
+        if std::time::Instant::now() >= end {
+            tracing::warn!("a sign-in save did not finish before the service ended");
+            return false;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    true
+}
+
 impl SaveQueue {
     pub fn new(store: Store) -> Self {
         let (jobs, rx) = std::sync::mpsc::channel::<Job>();
         std::thread::spawn(move || {
             for job in rx {
                 match job {
-                    Job::Save(saved) => store.save(saved.as_ref()),
+                    Job::Save(saved) => {
+                        store.save(saved.as_ref());
+                        UNWRITTEN.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                    }
                     #[cfg(test)]
                     Job::Flush(done) => {
                         let _ = done.send(());
@@ -176,7 +312,10 @@ impl SaveQueue {
     }
 
     pub fn save(&self, saved: Option<Saved>) {
-        let _ = self.jobs.send(Job::Save(saved));
+        UNWRITTEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if self.jobs.send(Job::Save(saved)).is_err() {
+            UNWRITTEN.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+        }
     }
 
     /// Returns once everything queued before this call is written.
@@ -238,6 +377,43 @@ mod tests {
         store.save(None);
         assert_eq!(store.load(), None);
         store.save(None);
+    }
+
+    #[test]
+    fn a_sign_in_saved_by_one_version_is_found_by_the_next() {
+        let dir = tempfile::tempdir().unwrap();
+        let cloud = "http://127.0.0.1:18080";
+        // The old version refreshes right before the launcher ends it for the update.
+        let old = Store::open(dir.path(), cloud, true);
+        let queue = SaveQueue::new(old);
+        queue.save(Some(Saved {
+            device: 5,
+            refresh: "rotated".into(),
+            key: Some("k".into()),
+        }));
+        assert!(wait_saved(std::time::Duration::from_secs(5)));
+        drop(queue);
+        // The updated version opens the store again, from another program, with nothing but
+        // the data folder and the cloud address in common.
+        let new = Store::open(dir.path(), cloud, true);
+        let found = new.load().expect("the sign-in is still there");
+        assert_eq!((found.device, found.refresh.as_str()), (5, "rotated"));
+    }
+
+    #[test]
+    fn a_missing_sign_in_is_told_apart_from_an_unusable_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path(), "https://a.example", true);
+        assert_eq!(store.read().unwrap_err(), Missing::Nothing);
+        let Store::File { path, .. } = &store else {
+            panic!("a file store")
+        };
+        std::fs::write(path, "{nonsense").unwrap();
+        assert!(store.read().is_ok());
+        assert_eq!(store.load(), None);
+        std::fs::remove_file(path).unwrap();
+        std::fs::create_dir(path).unwrap();
+        assert!(matches!(store.read(), Err(Missing::Unreadable(_))));
     }
 
     #[test]
